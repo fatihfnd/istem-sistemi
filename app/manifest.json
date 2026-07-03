@@ -1,0 +1,16 @@
+{
+  "name": "İstem — Patoloji Test İstem Sistemi",
+  "short_name": "İstem",
+  "description": "Patoloji test istem ve iş kuyruğu takip uygulaması",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#e7e2d7",
+  "theme_color": "#9d4d40",
+  "orientation": "any",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-maskable.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

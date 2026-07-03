@@ -1,0 +1,470 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İş Kuyruğu — Test İstem</title>
+<style>
+  :root{
+    --bg:#f7f4ee;
+    --surface:#ffffff;
+    --surface-2:#faf8f4;
+    --ink:#221f1c;
+    --ink-2:#6b665f;
+    --ink-3:#a29c92;
+    --line:#e9e3d9;
+    --line-2:#f0ece4;
+    --wine:#82202b;
+    --wine-hover:#6c1a23;
+    --wine-soft:#f6e9ea;
+    --amber-i:#a56a12; --amber-b:#fbf1dd;
+    --blue-i:#1f6ba8;  --blue-b:#e8f1f9;
+    --green-i:#2c7a4d; --green-b:#e6f3ea;
+    --red-i:#b2372c;   --red-b:#fbe9e6;
+    --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,'Times New Roman',serif;
+    --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,sans-serif;
+    --mono:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:var(--sans); color:var(--ink); background:var(--bg); -webkit-font-smoothing:antialiased}
+
+  /* top nav */
+  .nav{
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; gap:16px;
+    padding:11px 24px; background:rgba(250,248,244,.85); backdrop-filter:saturate(1.6) blur(10px);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex; align-items:center; gap:10px; font-weight:640; font-size:14.5px}
+  .brand .mark{width:28px;height:28px;border-radius:8px;background:var(--wine);display:grid;place-items:center;color:#fff;font-family:var(--serif);font-style:italic;font-weight:700;font-size:16px}
+  .search{
+    flex:1; max-width:520px; margin:0 auto; position:relative;
+  }
+  .search input{
+    width:100%; border:1px solid var(--line); background:var(--surface); border-radius:10px;
+    padding:9px 12px 9px 34px; font-size:13.5px; font-family:var(--sans); outline:0; color:var(--ink);
+  }
+  .search input:focus{border-color:var(--wine); box-shadow:0 0 0 3px var(--wine-soft)}
+  .search svg{position:absolute; left:11px; top:50%; transform:translateY(-50%); opacity:.4}
+  .search .kbd{position:absolute; right:9px; top:50%; transform:translateY(-50%); font-size:11px; color:var(--ink-3); border:1px solid var(--line); border-radius:5px; padding:2px 6px; background:var(--surface-2)}
+  .nav-right{display:flex; align-items:center; gap:14px; margin-left:auto}
+  .icon-btn{width:34px;height:34px;border:0;background:transparent;border-radius:9px;display:grid;place-items:center;cursor:pointer;color:var(--ink-2)}
+  .icon-btn:hover{background:var(--line-2)}
+  .user{display:flex; align-items:center; gap:9px}
+  .user .av{width:32px;height:32px;border-radius:50%;background:var(--wine);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:640}
+  .user .nm{font-size:13px;font-weight:600;line-height:1.15}
+  .user .rl{font-size:11px;color:var(--ink-2)}
+
+  /* page */
+  .page{max-width:1180px; margin:0 auto; padding:28px 24px 60px}
+  .head{display:flex; align-items:flex-end; gap:16px; margin-bottom:22px}
+  .head h1{font-family:var(--serif); font-style:italic; font-weight:700; font-size:34px; margin:0; letter-spacing:-.01em}
+  .head .sub{font-size:13.5px; color:var(--ink-2); margin-top:6px}
+  .head .sub b{color:var(--wine); font-weight:600}
+  .head .spacer{flex:1}
+  .btn-primary{
+    border:0; background:var(--wine); color:#fff; font-family:var(--sans); font-weight:600; font-size:14px;
+    padding:11px 18px; border-radius:11px; cursor:pointer; display:inline-flex; align-items:center; gap:8px;
+    box-shadow:0 2px 8px rgba(130,32,43,.25);
+  }
+  .btn-primary:hover{background:var(--wine-hover)}
+  .btn-primary:active{transform:translateY(1px)}
+
+  /* toolbar */
+  .panel{background:var(--surface); border:1px solid var(--line); border-radius:16px; overflow:hidden}
+  .toolbar{display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line-2)}
+  .tabs{display:flex; gap:2px; background:var(--surface-2); padding:3px; border-radius:11px; border:1px solid var(--line-2)}
+  .tabs button{
+    border:0; background:transparent; cursor:pointer; font-family:var(--sans); font-size:13px; font-weight:540; color:var(--ink-2);
+    padding:7px 13px; border-radius:8px; display:flex; align-items:center; gap:7px;
+  }
+  .tabs button.on{background:var(--surface); color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.1); font-weight:640}
+  .tabs .count{font-size:11.5px; background:var(--line-2); color:var(--ink-2); border-radius:20px; padding:1px 7px; font-weight:600}
+  .tabs button.on .count{background:var(--wine-soft); color:var(--wine)}
+  .toolbar .grow{flex:1}
+  .mini-search{position:relative}
+  .mini-search input{border:1px solid var(--line); border-radius:9px; padding:7px 10px 7px 30px; font-size:13px; width:220px; outline:0; font-family:var(--sans)}
+  .mini-search input:focus{border-color:var(--wine)}
+  .mini-search svg{position:absolute; left:9px; top:50%; transform:translateY(-50%); opacity:.4}
+
+  /* table */
+  table{width:100%; border-collapse:collapse}
+  thead th{
+    text-align:left; font-size:10.5px; font-weight:640; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3);
+    padding:12px 14px; border-bottom:1px solid var(--line-2); white-space:nowrap;
+  }
+  tbody td{padding:13px 14px; border-bottom:1px solid var(--line-2); font-size:13.5px; vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--surface-2)}
+  .c-blok{font-family:var(--mono); font-size:12.5px; color:var(--wine); font-weight:600; white-space:nowrap}
+  .c-pat{font-family:var(--mono); font-size:12.5px; color:var(--ink-2)}
+  .c-test{font-weight:600}
+  .c-test small{display:block; font-weight:400; color:var(--ink-3); font-family:var(--mono); font-size:11px; margin-top:1px}
+  .c-dr{white-space:nowrap}
+  .c-dr small{display:block;color:var(--ink-3);font-size:11px;margin-top:1px}
+  .c-time{color:var(--ink-3); font-size:12.5px; white-space:nowrap}
+
+  .tag{display:inline-block; font-size:11.5px; font-weight:560; padding:3px 9px; border-radius:7px; background:var(--surface-2); border:1px solid var(--line); color:var(--ink-2); white-space:nowrap}
+
+  .pill{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:4px 10px; border-radius:20px; white-space:nowrap}
+  .pill::before{content:""; width:7px; height:7px; border-radius:50%}
+  .st-bekleyen{background:var(--amber-b); color:var(--amber-i)} .st-bekleyen::before{background:var(--amber-i)}
+  .st-cihazda{background:var(--blue-b); color:var(--blue-i)} .st-cihazda::before{background:var(--blue-i)}
+  .st-tamamlandi{background:var(--green-b); color:var(--green-i)} .st-tamamlandi::before{background:var(--green-i)}
+
+  .prio{font-size:12px; font-weight:600; padding:3px 10px; border-radius:7px; white-space:nowrap}
+  .p-rutin{background:var(--surface-2); color:var(--ink-2); border:1px solid var(--line)}
+  .p-acil{background:var(--amber-b); color:var(--amber-i)}
+  .p-stat{background:var(--red-b); color:var(--red-i)}
+
+  .act{
+    border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:8px; padding:6px 12px;
+    font-size:12.5px; font-weight:560; cursor:pointer; font-family:var(--sans); white-space:nowrap;
+  }
+  .act:hover{border-color:var(--wine); color:var(--wine); background:var(--wine-soft)}
+  .act.done:hover{border-color:var(--green-i); color:var(--green-i); background:var(--green-b)}
+
+  /* ---- modal ---- */
+  .overlay{position:fixed; inset:0; background:rgba(30,24,22,.34); backdrop-filter:blur(2px); display:none; align-items:flex-start; justify-content:center; z-index:50; padding:40px 20px; overflow-y:auto}
+  .overlay.show{display:flex}
+  .modal{width:100%; max-width:720px; background:var(--surface); border-radius:18px; box-shadow:0 30px 80px rgba(20,16,14,.4); overflow:hidden}
+  .modal-head{display:flex; align-items:center; gap:12px; padding:18px 22px; border-bottom:1px solid var(--line-2)}
+  .modal-head .ic{width:34px;height:34px;border-radius:10px;background:var(--wine-soft);color:var(--wine);display:grid;place-items:center}
+  .modal-head h2{font-family:var(--serif); font-style:italic; font-weight:700; font-size:22px; margin:0}
+  .modal-head .mh-sub{font-size:12px; color:var(--ink-2); margin-top:2px; font-family:var(--mono)}
+  .modal-head .x{margin-left:auto; border:0; background:transparent; font-size:22px; color:var(--ink-3); cursor:pointer; width:32px;height:32px;border-radius:8px}
+  .modal-head .x:hover{background:var(--line-2); color:var(--ink)}
+  .modal-body{padding:20px 22px; max-height:65vh; overflow-y:auto}
+  .m-label{font-size:10.5px; font-weight:640; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin:0 0 9px}
+  .m-sec{margin-bottom:22px}
+
+  /* patoloji no + scan */
+  .patrow{display:flex; gap:10px}
+  .patrow input{flex:1; font-family:var(--mono); font-size:16px; font-weight:600; border:1px solid var(--line); border-radius:11px; padding:11px 13px; outline:0}
+  .patrow input:focus{border-color:var(--wine); box-shadow:0 0 0 3px var(--wine-soft)}
+  .scan{border:1px solid var(--line); background:var(--surface-2); border-radius:11px; width:46px; display:grid; place-items:center; cursor:pointer; color:var(--ink-2)}
+  .scan:hover{border-color:var(--wine); color:var(--wine)}
+
+  /* group tabs */
+  .groups{display:flex; flex-wrap:wrap; gap:7px; margin-bottom:20px}
+  .groups button{border:1px solid var(--line); background:var(--surface); color:var(--ink-2); border-radius:20px; padding:8px 15px; font-size:13px; font-weight:540; cursor:pointer; font-family:var(--sans)}
+  .groups button.on{background:var(--wine); border-color:var(--wine); color:#fff; font-weight:600}
+
+  .setrow{display:flex; align-items:center; gap:8px; margin-bottom:9px}
+  .newset{border:1px dashed var(--line); background:transparent; color:var(--ink-2); border-radius:9px; padding:6px 11px; font-size:12.5px; cursor:pointer; font-family:var(--sans)}
+  .sets{display:flex; flex-wrap:wrap; gap:7px}
+  .set{border:1px solid var(--line); background:var(--surface); border-radius:9px; padding:8px 12px; font-size:13px; cursor:pointer; font-family:var(--sans); font-weight:540}
+  .set:hover{border-color:var(--wine); background:var(--wine-soft)}
+  .set.hot{background:var(--wine-soft); border-color:var(--wine); color:var(--wine)}
+
+  .antisearch{position:relative; margin-bottom:12px}
+  .antisearch input{width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 12px 10px 34px; font-size:13.5px; outline:0; font-family:var(--sans)}
+  .antisearch input:focus{border-color:var(--wine)}
+  .antisearch svg{position:absolute; left:11px; top:50%; transform:translateY(-50%); opacity:.4}
+  .antis{display:flex; flex-wrap:wrap; gap:8px}
+  .anti{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line); background:var(--surface); border-radius:10px; padding:8px 11px; font-size:13px; cursor:pointer; font-family:var(--sans); user-select:none}
+  .anti small{color:var(--ink-3); font-family:var(--mono); font-size:11px}
+  .anti.sel{background:var(--wine-soft); border-color:var(--wine); color:var(--wine); font-weight:600}
+  .anti.sel small{color:var(--wine); opacity:.7}
+  .anti.sel::before{content:"✓"; font-size:11px; font-weight:700}
+
+  .otherbox{display:none; gap:8px; margin-top:4px}
+  .otherbox.show{display:flex}
+  .otherbox input{flex:1; border:1px solid var(--line); border-radius:10px; padding:9px 12px; font-size:13.5px; outline:0; font-family:var(--sans)}
+  .otherbox .add{border:0; background:var(--wine); color:#fff; border-radius:10px; padding:0 15px; font-size:18px; cursor:pointer}
+
+  /* blocks manual */
+  .blocks{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+  .bchip{display:inline-flex; align-items:center; gap:8px; background:var(--wine-soft); border:1px solid #eccdd0; color:var(--wine); border-radius:9px; padding:8px 12px; font-family:var(--mono); font-size:13px; font-weight:600}
+  .bchip .x{cursor:pointer; opacity:.6; font-size:15px}
+  .bin{font-family:var(--mono); font-size:13px; border:1px dashed var(--line); background:transparent; border-radius:9px; padding:8px 11px; width:150px; outline:0}
+  .bin:focus{border-style:solid; border-color:var(--wine)}
+
+  /* priority */
+  .prios{display:flex; gap:8px}
+  .prios button{border:1px solid var(--line); background:var(--surface); border-radius:10px; padding:9px 16px; font-size:13.5px; font-weight:560; cursor:pointer; font-family:var(--sans); display:flex; align-items:center; gap:7px}
+  .prios button[data-p=rutin].on{background:var(--wine); border-color:var(--wine); color:#fff}
+  .prios button[data-p=acil].on{background:var(--amber-i); border-color:var(--amber-i); color:#fff}
+  .prios button[data-p=stat].on{background:var(--red-i); border-color:var(--red-i); color:#fff}
+
+  .modal textarea{width:100%; min-height:56px; resize:vertical; border:1px solid var(--line); border-radius:11px; padding:10px 12px; font-size:13.5px; font-family:var(--sans); outline:0}
+  .modal textarea:focus{border-color:var(--wine)}
+
+  .modal-foot{display:flex; align-items:center; gap:10px; padding:14px 22px; border-top:1px solid var(--line-2); background:var(--surface-2)}
+  .selcount{font-size:12.5px; color:var(--ink-2); margin-right:auto}
+  .selcount b{color:var(--wine)}
+  .btn-ghost{border:1px solid var(--line); background:var(--surface); border-radius:10px; padding:10px 18px; font-size:13.5px; font-weight:560; cursor:pointer; font-family:var(--sans)}
+  .btn-ghost:hover{background:var(--line-2)}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="nav">
+  <div class="brand"><span class="mark">İ</span> İstem</div>
+  <div class="search">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#221f1c" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+    <input placeholder="Patoloji no, blok, şablon ara…">
+    <span class="kbd">⌘K</span>
+  </div>
+  <div class="nav-right">
+    <button class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg></button>
+    <button class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <div class="user">
+      <div class="av">FD</div>
+      <div><div class="nm">Fatih Demir</div><div class="rl">Tıbbi Patoloji</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="page">
+  <div class="head">
+    <div>
+      <h1>İş Kuyruğu</h1>
+      <div class="sub"><b id="totalN">8</b> istek · IHC, histokimya, moleküler</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn-primary" id="openModal">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+      İstek Ver
+    </button>
+  </div>
+
+  <div class="panel">
+    <div class="toolbar">
+      <div class="tabs" id="tabs">
+        <button class="on" data-f="all">Tümü <span class="count" data-c="all">0</span></button>
+        <button data-f="bekleyen">Bekleyen <span class="count" data-c="bekleyen">0</span></button>
+        <button data-f="cihazda">Cihazda <span class="count" data-c="cihazda">0</span></button>
+        <button data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
+      </div>
+      <div class="grow"></div>
+      <div class="mini-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#221f1c" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input placeholder="Blok, patoloji no…">
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Blok</th><th>Patoloji No</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Zaman</th><th>Öncelik</th><th>Durum</th><th>Aksiyon</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2M9 2h6M7 14h10"/></svg></div>
+      <div><h2>İstek Ver</h2><div class="mh-sub" id="mhsub">Yeni istek · iş kuyruğuna ekle</div></div>
+      <button class="x" id="closeModal">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="m-sec">
+        <p class="m-label">Patoloji No</p>
+        <div class="patrow">
+          <input id="mPat" value="11240/26" placeholder="ör. 11240/26">
+          <button class="scan" title="Kamera ile tara"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button>
+        </div>
+      </div>
+
+      <div class="groups" id="groups">
+        <button class="on" data-g="ihc">IHC</button>
+        <button data-g="hk">Histokimya</button>
+        <button data-g="mol">Moleküler</button>
+        <button data-g="kesit">Yeni Kesit</button>
+        <button data-g="hucre">Hücre Bloğu</button>
+        <button data-g="yayma">Yeniden Yayma</button>
+        <button data-g="diger">Diğer</button>
+      </div>
+
+      <div class="m-sec" id="setsSec">
+        <div class="setrow">
+          <span class="m-label" style="margin:0">Hazır Setler</span>
+          <button class="newset">+ Yeni Set</button>
+        </div>
+        <div class="sets" id="sets"></div>
+      </div>
+
+      <div class="m-sec" id="antiSec">
+        <p class="m-label">Tek Tek Seç</p>
+        <div class="antisearch">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#221f1c" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <input id="antiSearch" placeholder="Antikor ara… ER, HER2, CK7…">
+        </div>
+        <div class="antis" id="antis"></div>
+        <div class="otherbox" id="otherbox">
+          <input id="otherin" placeholder="Katalogda olmayan istek…">
+          <button class="add" onclick="addOther()">+</button>
+        </div>
+      </div>
+
+      <div class="m-sec">
+        <p class="m-label">Blok Seçimi <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— manuel giriş</span></p>
+        <div class="blocks" id="blocks">
+          <span class="bchip">1-10 <span class="x" onclick="rmBlock(this)">×</span></span>
+          <input class="bin" id="blockin" placeholder="+ blok (1-em1…)">
+        </div>
+      </div>
+
+      <div class="m-sec">
+        <p class="m-label">Öncelik</p>
+        <div class="prios" id="prios">
+          <button class="on" data-p="rutin">● Rutin</button>
+          <button data-p="acil">▲ Acil</button>
+          <button data-p="stat">★ STAT</button>
+        </div>
+      </div>
+
+      <div class="m-sec" style="margin-bottom:4px">
+        <p class="m-label">Not</p>
+        <textarea placeholder="Teknisyene not…"></textarea>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="selcount" id="selcount">Test seçilmedi</span>
+      <button class="btn-ghost" id="cancel">İptal</button>
+      <button class="btn-primary" id="submit">✓ İstek Ver</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ---- catalog (klon = clone) ----
+  const CAT = {
+    ihc:[["ER","SP1"],["PR","BSB-2"],["HER2","4B5"],["Ki-67","30-9"],["E-Cadherin","EP700Y"],["p120","EP66"],["CK5/6","D5/16B4"],["p63","4A4"],["CD20","L26"],["CD3","SP7"],["BCL2","EP36"],["BCL6","EP29"],["CD10","SP67"],["AMACR","13H4"],["TTF-1","8G7G3/1"],["p40","BC28"],["CK7","OV-TL"],["CK20","SP33"],["GATA3","L50-823"]],
+    hk:[["PAS",""],["PAS-D",""],["Giemsa",""],["Retikülin",""],["Masson Trikrom",""],["Kongo Kırmızısı",""]],
+    mol:[["BRAF",""],["EGFR",""],["KRAS",""],["MSI",""],["ALK",""]],
+    kesit:[["Yeni kesit (H&E)",""],["Seri kesit",""],["Derin kesit",""]],
+    hucre:[["Hücre bloğu hazırlama",""]],
+    yayma:[["Yeniden yayma",""]],
+    diger:[]
+  };
+  const SETS = {
+    ihc:[["Meme IHC Temel",["ER","PR","HER2","Ki-67"]],["Meme · Lobüler",["E-Cadherin","p120","CK5/6"]],["Lenfoma · B Hücre",["CD20","CD3","BCL2","BCL6","CD10"]],["Prostat · PIN/Ca",["CK5/6","p63","AMACR"]],["Akciğer · Adeno",["TTF-1","CK7","p40","CK20"]]],
+    hk:[], mol:[], kesit:[], hucre:[], yayma:[], diger:[]
+  };
+  const TIP = {ihc:"IHC",hk:"Histokimya",mol:"Moleküler",kesit:"Yeni Kesit",hucre:"Hücre Bloğu",yayma:"Yeniden Yayma",diger:"Diğer"};
+  const DRS = ["Dr. A. Yılmaz","Dr. B. Kaya","Dr. M. Urgancı","Dr. C. Demir"];
+  const clone = (g,name)=>{ const f=(CAT[g]||[]).find(x=>x[0]===name); return f?f[1]:""; };
+
+  // ---- worklist state ----
+  let rows = [
+    row("B-34306/1","11240/26","ER","SP1","ihc","Dr. F. Demir","Dr. A. Yılmaz","2 sa önce","rutin","cihazda"),
+    row("B-34306/1","11240/26","PR","BSB-2","ihc","Dr. F. Demir","Dr. A. Yılmaz","2 sa önce","rutin","bekleyen"),
+    row("B-34306/1","11240/26","HER2","4B5","ihc","Dr. F. Demir","Dr. A. Yılmaz","2 sa önce","acil","bekleyen"),
+    row("B-34318/2","11318/26","CD20","L26","ihc","Dr. M. Urgancı","Dr. B. Kaya","5 sa önce","stat","cihazda"),
+    row("B-34301/1","11301/26","Yeni kesit (H&E)","","kesit","Dr. C. Demir","Dr. C. Demir","1 gün önce","rutin","bekleyen"),
+    row("B-34295/2","11295/26","BRAF","","mol","Dr. B. Kaya","Dr. B. Kaya","1 gün önce","rutin","cihazda"),
+    row("B-34290/1","11290/26","HER2 FISH","","mol","Dr. A. Yılmaz","Dr. A. Yılmaz","2 gün önce","acil","tamamlandi"),
+    row("B-34277/3","11277/26","TTF-1","8G7G3/1","ihc","Dr. C. Demir","Dr. C. Demir","2 gün önce","rutin","tamamlandi"),
+  ];
+  let uid=100;
+  function row(blok,pat,test,klon,tip,isteyen,uzman,zaman,oncelik,durum){return {id:++uid,blok,pat,test,klon,tip,isteyen,uzman,zaman,oncelik,durum};}
+
+  const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+  let filter="all";
+
+  const PILL={bekleyen:["st-bekleyen","Bekleyen"],cihazda:["st-cihazda","Cihazda"],tamamlandi:["st-tamamlandi","Tamamlandı"]};
+  const PRIO={rutin:["p-rutin","Rutin"],acil:["p-acil","Acil"],stat:["p-stat","STAT"]};
+
+  function render(){
+    const tb=$("#rows"); tb.innerHTML="";
+    const list = filter==="all"?rows:rows.filter(r=>r.durum===filter);
+    list.forEach(r=>{
+      const tr=document.createElement("tr");
+      let action;
+      if(r.durum==="bekleyen") action=`<button class="act" onclick="adv(${r.id},'cihazda')">Cihaza al</button>`;
+      else if(r.durum==="cihazda") action=`<button class="act done" onclick="adv(${r.id},'tamamlandi')">Tamamla</button>`;
+      else action=`<span class="c-time">${r.zaman}</span>`;
+      tr.innerHTML=`
+        <td class="c-blok">${r.blok}</td>
+        <td class="c-pat">${r.pat}</td>
+        <td class="c-test">${r.test}${r.klon?`<small>${r.klon}</small>`:""}</td>
+        <td><span class="tag">${TIP[r.tip]}</span></td>
+        <td class="c-dr">${r.isteyen}<small>${r.uzman}</small></td>
+        <td class="c-time">${r.zaman}</td>
+        <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></td>
+        <td><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></td>
+        <td>${action}</td>`;
+      tb.appendChild(tr);
+    });
+    $("#totalN").textContent=rows.length;
+    ["all","bekleyen","cihazda","tamamlandi"].forEach(f=>{
+      const n = f==="all"?rows.length:rows.filter(r=>r.durum===f).length;
+      $(`[data-c="${f}"]`).textContent=n;
+    });
+  }
+  window.adv=(id,to)=>{ const r=rows.find(x=>x.id===id); if(r){r.durum=to; r.zaman="şimdi";} render(); };
+
+  $("#tabs").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+    $$("#tabs button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); filter=b.dataset.f; render(); });
+
+  // ---- modal ----
+  const overlay=$("#overlay");
+  let grp="ihc"; const selected=new Set(); const custom=[]; let prio="rutin";
+  const open=()=>{overlay.classList.add("show")};
+  const close=()=>{overlay.classList.remove("show")};
+  $("#openModal").onclick=open; $("#closeModal").onclick=close; $("#cancel").onclick=close;
+  overlay.onclick=e=>{ if(e.target===overlay) close(); };
+
+  function renderSets(){
+    const s=$("#sets"); const list=SETS[grp]||[];
+    $("#setsSec").style.display = list.length?"":"none";
+    s.innerHTML="";
+    list.forEach(([name,tests])=>{
+      const el=document.createElement("button"); el.className="set"; el.textContent=name;
+      el.onclick=()=>{ tests.forEach(t=>selected.add(t)); el.classList.add("hot"); renderAntis(); renderCount(); };
+      s.appendChild(el);
+    });
+  }
+  function renderAntis(q=""){
+    const wrap=$("#antis"); const list=grp==="diger"?custom.map(c=>[c,""]):CAT[grp];
+    $("#otherbox").classList.toggle("show", grp==="diger");
+    $("#antiSec").querySelector(".antisearch").style.display = grp==="diger"?"none":"";
+    wrap.innerHTML="";
+    list.filter(([n])=>n.toLowerCase().includes(q.toLowerCase())).forEach(([n,c])=>{
+      const el=document.createElement("span"); el.className="anti"+(selected.has(n)?" sel":"");
+      el.innerHTML=`${n}${c?`<small>${c}</small>`:""}`;
+      el.onclick=()=>{ selected.has(n)?selected.delete(n):selected.add(n); el.classList.toggle("sel"); renderCount(); };
+      wrap.appendChild(el);
+    });
+  }
+  window.addOther=()=>{ const v=$("#otherin").value.trim(); if(!v)return; if(!custom.includes(v))custom.push(v); selected.add(v); $("#otherin").value=""; renderAntis(); renderCount(); };
+  function renderCount(){ const n=selected.size; const b=$$("#blocks .bchip").length;
+    $("#selcount").innerHTML = n?`<b>${n}</b> test × <b>${b}</b> blok seçili`:"Test seçilmedi"; }
+
+  $("#groups").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+    $$("#groups button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); grp=b.dataset.g;
+    $$(".set").forEach(x=>x.classList.remove("hot")); renderSets(); renderAntis(); });
+  $("#antiSearch").addEventListener("input",e=>renderAntis(e.target.value));
+
+  // blocks
+  $("#blockin").addEventListener("keydown",e=>{ if(e.key==="Enter"&&e.target.value.trim()){
+    const v=e.target.value.trim(); const c=document.createElement("span"); c.className="bchip";
+    c.innerHTML=v+' <span class="x">×</span>'; c.querySelector(".x").onclick=()=>{c.remove();renderCount();};
+    $("#blocks").insertBefore(c,e.target); e.target.value=""; renderCount(); } });
+  window.rmBlock=el=>{ el.closest(".bchip").remove(); renderCount(); };
+
+  // priority
+  $("#prios").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+    $$("#prios button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); prio=b.dataset.p; });
+
+  // submit -> add rows to worklist
+  $("#submit").onclick=()=>{
+    if(selected.size===0){ $("#selcount").innerHTML='<b style="color:var(--red-i)">En az bir test seç</b>'; return; }
+    const pat=$("#mPat").value.trim()||"—";
+    const blocks=[...$$("#blocks .bchip")].map(c=>c.textContent.replace("×","").trim());
+    const bl = blocks.length?blocks:["—"];
+    bl.forEach(b=>{
+      selected.forEach(t=>{
+        rows.unshift(row("B-"+pat.replace("/","-")+"/"+b.split("-")[0], pat, t, clone(grp,t), grp, "Dr. F. Demir", "Dr. A. Yılmaz", "şimdi", prio, "bekleyen"));
+      });
+    });
+    selected.clear(); custom.length=0; $$(".set").forEach(x=>x.classList.remove("hot"));
+    render(); renderCount(); renderAntis(); close();
+    filter="all"; $$("#tabs button").forEach(x=>x.classList.toggle("on",x.dataset.f==="all")); render();
+  };
+
+  renderSets(); renderAntis(); renderCount(); render();
+</script>

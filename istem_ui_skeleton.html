@@ -1,0 +1,419 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test İstemi</title>
+<style>
+  :root{
+    --bg:#e9ebef;
+    --panel:#ffffff;
+    --panel-2:#f6f7f9;
+    --ink:#1c1c1e;
+    --ink-2:#6b6f76;
+    --ink-3:#9a9ea6;
+    --line:rgba(0,0,0,.09);
+    --line-2:rgba(0,0,0,.06);
+    --accent:#3d6df0;
+    --accent-ink:#ffffff;
+    --acil:#e5484d;
+    --ok:#30a46c;
+    --chip:#f0f2f5;
+    --shadow:0 20px 60px rgba(20,24,40,.22), 0 2px 8px rgba(20,24,40,.10);
+    --r-win:22px;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:var(--sans);
+    color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 80% -10%, #f3ede9 0%, transparent 60%),
+      radial-gradient(1000px 700px at -10% 110%, #e7edf6 0%, transparent 55%),
+      var(--bg);
+    display:flex; align-items:center; justify-content:center;
+    padding:24px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .win{
+    width:100%; max-width:440px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:var(--r-win);
+    box-shadow:var(--shadow);
+    overflow:hidden;
+    display:flex; flex-direction:column;
+    max-height:min(860px,94vh);
+  }
+
+  /* titlebar */
+  .titlebar{
+    display:flex; align-items:center; gap:8px;
+    padding:12px 16px;
+    background:linear-gradient(#fbfbfd,#f3f4f7);
+    border-bottom:1px solid var(--line-2);
+  }
+  .dots{display:flex; gap:7px}
+  .dot{width:11px;height:11px;border-radius:50%;border:0}
+  .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+  .titlebar h1{
+    margin:0 auto; font-size:13px; font-weight:590; letter-spacing:.01em;
+    color:var(--ink-2); transform:translateX(-16px);
+  }
+
+  .body{overflow-y:auto; padding:16px 16px 6px; -webkit-overflow-scrolling:touch}
+
+  /* session */
+  .who{display:flex; align-items:center; gap:11px; margin-bottom:16px}
+  .avatar{
+    width:38px;height:38px;border-radius:50%;flex:none;
+    background:conic-gradient(from 210deg,#5b8def,#8a63e6,#5b8def);
+    color:#fff; display:grid; place-items:center; font-weight:640; font-size:14px;
+  }
+  .who .name{font-size:14.5px; font-weight:600; line-height:1.2}
+  .who .sub{font-size:12px; color:var(--ink-2); margin-top:2px}
+  .onbehalf{margin-left:auto}
+  select,.selectlike{
+    font-family:var(--sans); font-size:12.5px; color:var(--ink);
+    background:var(--panel-2); border:1px solid var(--line);
+    border-radius:9px; padding:7px 26px 7px 10px; appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236b6f76' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 9px center;
+  }
+
+  .label{font-size:11.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-3); margin:0 0 8px 2px}
+  .field{margin-bottom:18px}
+
+  /* slide / patoloji no */
+  .slide{
+    display:flex; align-items:stretch;
+    border:1px solid var(--line); border-radius:14px; overflow:hidden;
+    background:linear-gradient(180deg,#fff, #fcfcfd);
+  }
+  .slide .frost{
+    flex:1; padding:11px 13px;
+    background:
+      repeating-linear-gradient(115deg,rgba(0,0,0,.015) 0 2px,transparent 2px 5px),
+      #fdfdfe;
+    border-right:1px solid var(--line-2);
+  }
+  .slide .frost .cap{font-size:10.5px; color:var(--ink-3); letter-spacing:.04em; margin-bottom:3px}
+  .slide input{
+    border:0; outline:0; background:transparent; width:100%;
+    font-family:var(--mono); font-size:20px; font-weight:600; letter-spacing:.02em; color:var(--ink);
+  }
+  .slide .tools{display:flex; align-items:center; gap:8px; padding:0 10px; background:#fafbfc}
+  .dm{width:26px;height:26px;opacity:.55}
+  .scan{
+    border:0; width:38px;height:38px;border-radius:11px;
+    background:var(--accent); color:#fff; display:grid; place-items:center; cursor:pointer;
+    box-shadow:0 2px 6px rgba(61,109,240,.35);
+  }
+  .scan:active{transform:translateY(1px)}
+
+  /* chips */
+  .chips{display:flex; flex-wrap:wrap; gap:8px}
+  .chip{
+    display:inline-flex; align-items:center; gap:7px;
+    font-size:13px; padding:8px 12px; border-radius:11px;
+    background:var(--chip); border:1px solid transparent; color:var(--ink);
+    cursor:pointer; user-select:none; transition:transform .06s, background .15s, border-color .15s;
+  }
+  .chip:active{transform:scale(.96)}
+  .chip.sel{background:#eaf0ff; border-color:#c9d8ff; color:#2853c8; font-weight:590}
+  .chip.sel::before{content:"✓"; font-weight:700; font-size:11px}
+  .chip .x{color:var(--ink-3); font-size:15px; line-height:1; margin-left:1px}
+  .chip.add{background:transparent; border:1px dashed var(--line); color:var(--ink-2)}
+  .chip.tpl{background:#fff; border:1px solid var(--line)}
+  .chip.tpl.hot{background:#f0ebff;border-color:#d9ccff;color:#6b46d9}
+
+  .blockinput{
+    font-family:var(--mono); font-size:13px; border:1px dashed var(--line);
+    background:transparent; border-radius:11px; padding:8px 11px; width:120px; outline:0;
+  }
+  .blockinput:focus{border-style:solid;border-color:var(--accent)}
+
+  /* segmented control */
+  .seg{
+    display:flex; gap:2px; padding:3px; margin-bottom:12px;
+    background:var(--panel-2); border:1px solid var(--line-2); border-radius:12px;
+    overflow-x:auto; -ms-overflow-style:none; scrollbar-width:none;
+  }
+  .seg::-webkit-scrollbar{display:none}
+  .seg button{
+    flex:1 0 auto; border:0; background:transparent; cursor:pointer;
+    font-family:var(--sans); font-size:12.5px; font-weight:560; color:var(--ink-2);
+    padding:7px 12px; border-radius:9px; white-space:nowrap; transition:.15s;
+  }
+  .seg button.on{background:#fff; color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.12); font-weight:640}
+
+  .tests{min-height:44px}
+  .otherwrap{display:none; gap:8px}
+  .otherwrap.show{display:flex}
+  .otherwrap input{
+    flex:1; font-family:var(--sans); font-size:13px; border:1px solid var(--line);
+    border-radius:11px; padding:9px 12px; outline:0;
+  }
+  .otherwrap input:focus{border-color:var(--accent)}
+  .otherwrap .go{border:0;background:var(--accent);color:#fff;border-radius:11px;padding:0 14px;font-size:18px;cursor:pointer}
+
+  /* summary */
+  .summary{
+    background:linear-gradient(180deg,#f7f9ff,#f4f6fc);
+    border:1px solid #e3e9f7; border-radius:14px; padding:12px 13px; margin-bottom:18px;
+  }
+  .summary .top{display:flex; align-items:baseline; gap:8px; margin-bottom:8px}
+  .summary .n{font-size:13.5px; font-weight:650}
+  .summary .muted{font-size:12px; color:var(--ink-2)}
+  .summary .list{display:flex;flex-wrap:wrap;gap:6px}
+  .tag{font-size:12px; padding:4px 9px; border-radius:8px; background:#fff; border:1px solid #dfe6f5; color:#3355a8}
+  .summary .empty{font-size:12.5px;color:var(--ink-3)}
+
+  textarea{
+    width:100%; min-height:64px; resize:vertical; font-family:var(--sans); font-size:13.5px;
+    border:1px solid var(--line); border-radius:12px; padding:11px 12px; outline:0; color:var(--ink);
+  }
+  textarea:focus{border-color:var(--accent)}
+
+  /* acil toggle */
+  .acil{
+    display:flex; align-items:center; gap:12px; margin:16px 0 8px;
+    padding:12px 14px; border:1px solid var(--line); border-radius:14px; background:var(--panel-2);
+    transition:.2s;
+  }
+  .acil.on{background:#fdecec; border-color:#f7c9ca}
+  .acil .t{font-size:14px; font-weight:600}
+  .acil .d{font-size:11.5px; color:var(--ink-2); margin-top:1px}
+  .switch{margin-left:auto; width:46px; height:28px; border-radius:20px; background:#d3d6dc; position:relative; cursor:pointer; transition:.2s; flex:none}
+  .switch .knob{position:absolute; top:2px; left:2px; width:24px; height:24px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3); transition:.2s}
+  .acil.on .switch{background:var(--acil)}
+  .acil.on .switch .knob{transform:translateX(18px)}
+
+  /* footer button */
+  .foot{padding:12px 16px calc(14px + env(safe-area-inset-bottom)); border-top:1px solid var(--line-2); background:linear-gradient(#fff,#fafbfd)}
+  .submit{
+    width:100%; border:0; border-radius:14px; padding:15px; cursor:pointer;
+    font-family:var(--sans); font-size:15.5px; font-weight:640; color:#fff;
+    background:linear-gradient(180deg,#4a78f5,#3d6df0);
+    box-shadow:0 6px 18px rgba(61,109,240,.4);
+    display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .submit:active{transform:translateY(1px)}
+  .submit.acil{background:linear-gradient(180deg,#ec5a5e,#e5484d); box-shadow:0 6px 18px rgba(229,72,77,.4)}
+  .toast{
+    text-align:center; font-size:12.5px; color:var(--ok); font-weight:600;
+    height:0; opacity:0; overflow:hidden; transition:.25s;
+  }
+  .toast.show{height:18px; opacity:1; margin-bottom:6px}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="win">
+  <div class="titlebar">
+    <div class="dots"><button class="dot r"></button><button class="dot y"></button><button class="dot g"></button></div>
+    <h1>Test İstemi</h1>
+  </div>
+
+  <div class="body">
+    <!-- session -->
+    <div class="who">
+      <div class="avatar">FD</div>
+      <div>
+        <div class="name">Dr. Fatih Demir</div>
+        <div class="sub">Asistan</div>
+      </div>
+      <div class="onbehalf">
+        <select aria-label="Uzman adına">
+          <option>Uzman adına: Dr. A. Yılmaz</option>
+          <option>Uzman adına: Dr. B. Kaya</option>
+          <option>Uzman adına: Dr. C. Demir</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- patoloji no (slide look) -->
+    <div class="field">
+      <div class="slide">
+        <div class="frost">
+          <div class="cap">PATOLOJİ NO</div>
+          <input value="11240/26" inputmode="numeric" aria-label="Patoloji numarası">
+        </div>
+        <div class="tools">
+          <svg class="dm" viewBox="0 0 10 10" fill="#1c1c1e"><path d="M0 0h1v10H0zM0 9h10v1H0zM2 0h1v1H2zM4 0h1v1H4zM6 0h1v1H6zM8 0h1v1H8zM2 2h1v1H2zM3 3h1v1H3zM5 2h1v1H5zM7 3h1v1H7zM9 1h1v1H9zM4 4h1v1H4zM6 5h1v1H6zM2 5h1v1H2zM8 4h1v1H8zM3 6h1v1H3zM5 6h1v1H5zM7 7h1v1H7zM9 6h1v1H9zM4 7h1v1H4zM2 8h1v1H2zM6 8h1v1H6zM8 8h1v1H8z"/></svg>
+          <button class="scan" id="scan" title="Kamera ile tara">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- blocks -->
+    <div class="field">
+      <div class="label">Bloklar</div>
+      <div class="chips" id="blocks">
+        <span class="chip sel" data-block>1-10 <span class="x" onclick="rmBlock(this)">×</span></span>
+        <input class="blockinput" id="blockin" placeholder="+ blok  (1-em1…)" aria-label="Blok ekle">
+      </div>
+    </div>
+
+    <!-- templates -->
+    <div class="field">
+      <div class="label">Şablonlar</div>
+      <div class="chips">
+        <span class="chip tpl" data-tpl="ER,PR,CerbB2,Ki67,p63" data-grp="ihk">fd meme 1</span>
+        <span class="chip tpl" data-tpl="ER,PR,CerbB2,Ki67,E-cadherin" data-grp="ihk">fd meme 2</span>
+        <span class="chip tpl" data-tpl="TTF-1,p40,CK7" data-grp="ihk">fd akciğer</span>
+        <span class="chip add">+ Yeni şablon</span>
+      </div>
+    </div>
+
+    <!-- test groups -->
+    <div class="field">
+      <div class="label">Test grubu</div>
+      <div class="seg" id="seg">
+        <button class="on" data-grp="ihk">İHK</button>
+        <button data-grp="hk">Histokimya</button>
+        <button data-grp="fish">FISH</button>
+        <button data-grp="kesit">Kesit</button>
+        <button data-grp="mol">Moleküler</button>
+        <button data-grp="diger">Diğer</button>
+      </div>
+      <div class="tests chips" id="tests"></div>
+      <div class="otherwrap" id="otherwrap">
+        <input id="otherin" placeholder="Katalogda olmayan test…">
+        <button class="go" onclick="addOther()">+</button>
+      </div>
+    </div>
+
+    <!-- summary -->
+    <div class="summary">
+      <div class="top">
+        <span class="n" id="sumN">Seçilenler</span>
+        <span class="muted" id="sumMeta"></span>
+      </div>
+      <div class="list" id="sumList"><span class="empty">Henüz test seçilmedi.</span></div>
+    </div>
+
+    <!-- note -->
+    <div class="field">
+      <div class="label">Not</div>
+      <textarea placeholder="Teknisyene iletmek istediğin not…"></textarea>
+    </div>
+
+    <!-- acil -->
+    <div class="acil" id="acil">
+      <div>
+        <div class="t">Acil</div>
+        <div class="d">Öncelikli işaretlenir, listede üste taşınır</div>
+      </div>
+      <div class="switch" id="switch"><div class="knob"></div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="toast" id="toast">İstem hazır (önizleme) — Claude Code'da backend'e bağlanacak</div>
+    <button class="submit" id="submit">İstemi Oluştur</button>
+  </div>
+</div>
+
+<script>
+  const CATALOG = {
+    ihk:["ER","PR","CerbB2","Ki67","p63","E-cadherin","GATA3","CK7","p40","TTF-1"],
+    hk:["PAS","PAS-D","Giemsa","Retikülin","Masson Trikrom","Kongo Kırmızısı"],
+    fish:["HER2 FISH","ALK FISH","ROS1 FISH"],
+    kesit:["Yeni kesit (H&E)","Seri kesit","Derin kesit"],
+    mol:["BRAF","EGFR","KRAS","MSI","ALK"],
+    diger:[]
+  };
+  const selected = new Set();     // seçili test adları
+  const custom = [];              // "diğer" ile eklenenler
+  let grp = "ihk";
+  let acil = false;
+
+  const $ = s => document.querySelector(s);
+  const testsEl = $("#tests");
+
+  function renderTests(){
+    const list = grp==="diger" ? custom : CATALOG[grp];
+    testsEl.innerHTML = "";
+    $("#otherwrap").classList.toggle("show", grp==="diger");
+    if(grp==="diger" && custom.length===0 && selected.size===0){
+      testsEl.innerHTML = '<span class="empty" style="font-size:12.5px;color:var(--ink-3)">Aşağıdan serbest test ekle.</span>';
+    }
+    list.forEach(t=>{
+      const c = document.createElement("span");
+      c.className = "chip" + (selected.has(t)?" sel":"");
+      c.textContent = t;
+      c.onclick = ()=>{ selected.has(t)?selected.delete(t):selected.add(t); c.classList.toggle("sel"); renderSummary(); };
+      testsEl.appendChild(c);
+    });
+  }
+
+  function renderSummary(){
+    const arr=[...selected];
+    const blocks=document.querySelectorAll("[data-block]").length;
+    $("#sumMeta").textContent = arr.length ? `${blocks} blok × ${arr.length} test` : "";
+    const list=$("#sumList");
+    if(!arr.length){ list.innerHTML='<span class="empty">Henüz test seçilmedi.</span>'; return; }
+    list.innerHTML="";
+    arr.forEach(t=>{ const s=document.createElement("span"); s.className="tag"; s.textContent=t; list.appendChild(s); });
+  }
+
+  // segmented control
+  $("#seg").addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b) return;
+    [...$("#seg").children].forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); grp=b.dataset.grp; renderTests();
+  });
+
+  // templates
+  document.querySelectorAll("[data-tpl]").forEach(tpl=>{
+    tpl.onclick=()=>{
+      tpl.dataset.tpl.split(",").forEach(t=>selected.add(t.trim()));
+      grp = tpl.dataset.grp;
+      [...$("#seg").children].forEach(x=>x.classList.toggle("on", x.dataset.grp===grp));
+      document.querySelectorAll(".tpl").forEach(x=>x.classList.remove("hot"));
+      tpl.classList.add("hot");
+      renderTests(); renderSummary();
+    };
+  });
+
+  // blocks
+  $("#blockin").addEventListener("keydown",e=>{
+    if(e.key==="Enter" && e.target.value.trim()){
+      const v=e.target.value.trim();
+      const c=document.createElement("span");
+      c.className="chip sel"; c.setAttribute("data-block","");
+      c.innerHTML = v+' <span class="x">×</span>';
+      c.querySelector(".x").onclick=()=>{c.remove();renderSummary();};
+      $("#blocks").insertBefore(c,e.target);
+      e.target.value=""; renderSummary();
+    }
+  });
+  window.rmBlock=el=>{ el.closest("[data-block]").remove(); renderSummary(); };
+
+  // other / custom test
+  window.addOther=()=>{
+    const v=$("#otherin").value.trim(); if(!v) return;
+    if(!custom.includes(v)) custom.push(v);
+    selected.add(v); $("#otherin").value="";
+    renderTests(); renderSummary();
+  };
+
+  // acil toggle
+  function toggleAcil(){ acil=!acil; $("#acil").classList.toggle("on",acil); $("#submit").classList.toggle("acil",acil); }
+  $("#switch").onclick=toggleAcil;
+  $("#acil").onclick=e=>{ if(!e.target.closest(".switch")) toggleAcil(); };
+
+  // scan (honest placeholder)
+  $("#scan").onclick=()=>{ $("#scan").animate([{transform:"scale(.9)"},{transform:"scale(1)"}],{duration:150}); };
+
+  // submit
+  $("#submit").onclick=()=>{
+    const t=$("#toast"); t.classList.add("show");
+    setTimeout(()=>t.classList.remove("show"),2600);
+  };
+
+  renderTests(); renderSummary();
+</script>

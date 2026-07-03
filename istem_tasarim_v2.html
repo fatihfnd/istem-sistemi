@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İstem — Tasarım v2</title>
+<style>
+  :root{
+    --paper:#f6f7f6;
+    --side:#eef0ee;
+    --card:#ffffff;
+    --ink:#171a19;
+    --ink-2:#5c625f;
+    --ink-3:#9aa09c;
+    --line:#e2e6e3;
+    --line-2:#edf0ee;
+    --accent:#1f4d47;        /* deep ink-teal */
+    --accent-h:#163a35;
+    --accent-soft:#e3ece9;
+    --amber-i:#916a1a; --amber-b:#f5eedd;
+    --blue-i:#2a5f8f;  --blue-b:#e7eef5;
+    --green-i:#2c7a4d; --green-b:#e7f2ea;
+    --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,sans-serif;
+    --mono:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:var(--sans); color:var(--ink); background:#e4e6e2; display:flex; align-items:center; justify-content:center; padding:22px; height:100%; -webkit-font-smoothing:antialiased}
+
+  .app{width:100%; max-width:1320px; height:min(860px,94vh); background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:0 30px 70px rgba(20,25,22,.22); display:flex; overflow:hidden}
+
+  .side{width:224px; flex:none; background:var(--side); border-right:1px solid var(--line); display:flex; flex-direction:column; padding:18px 12px}
+  .wordmark{padding:4px 8px 18px; font-weight:700; font-size:19px; letter-spacing:-.01em}
+  .wordmark span{font-size:10px; font-weight:700; color:var(--ink-3); border:1px solid var(--line); border-radius:20px; padding:1px 7px; margin-left:8px; letter-spacing:.04em; vertical-align:middle}
+  .new{display:flex; align-items:center; gap:9px; width:100%; margin-bottom:14px; border:0; background:var(--accent); color:#fff; border-radius:8px; padding:10px 12px; font-size:13.5px; font-weight:600; cursor:pointer; font-family:var(--sans)}
+  .new:hover{background:var(--accent-h)}
+  .nav a{display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; cursor:pointer; font-size:13.5px; color:var(--ink-2); font-weight:500; text-decoration:none; margin-bottom:1px}
+  .nav a:hover{background:rgba(0,0,0,.04); color:var(--ink)}
+  .nav a.on{background:var(--card); color:var(--ink); font-weight:600; border:1px solid var(--line)}
+  .nav a.on svg{color:var(--accent)}
+  .side .spacer{flex:1}
+  .sideuser{display:flex; align-items:center; gap:9px; padding:9px 8px; border-top:1px solid var(--line)}
+  .sideuser .av{width:29px;height:29px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700}
+  .sideuser .nm{font-size:13px;font-weight:600;line-height:1.15}
+  .sideuser .rl{font-size:11px;color:var(--ink-2)}
+
+  .main{flex:1; min-width:0; display:flex; flex-direction:column}
+  .main-head{padding:26px 28px 14px}
+  .main-head h1{font-size:24px; font-weight:700; margin:0; letter-spacing:-.01em}
+  .main-head .sub{font-size:13px; color:var(--ink-2); margin-top:5px}
+  .main-head .sub b{color:var(--accent); font-weight:700}
+
+  .barrow{display:flex; align-items:center; gap:10px; padding:0 28px 14px}
+  .tabs{display:flex; gap:2px; background:var(--card); padding:3px; border-radius:8px; border:1px solid var(--line)}
+  .tabs button{border:0;background:transparent;cursor:pointer;font-family:var(--sans);font-size:12.5px;font-weight:560;color:var(--ink-2);padding:7px 13px;border-radius:6px;display:flex;align-items:center;gap:6px}
+  .tabs button.on{background:var(--accent-soft);color:var(--accent);font-weight:700}
+  .tabs .count{font-size:11px;background:var(--line-2);color:var(--ink-2);border-radius:20px;padding:1px 6px;font-weight:700}
+  .tabs button.on .count{background:var(--accent);color:#fff}
+  .grow{flex:1}
+  .msearch{position:relative}
+  .msearch input{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:8px 11px 8px 32px;font-size:12.5px;width:200px;outline:0;font-family:var(--sans)}
+  .msearch input:focus{border-color:var(--accent)}
+  .msearch svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.4}
+
+  .tablewrap{flex:1; overflow-y:auto; padding:0 20px 20px}
+  table{width:100%; border-collapse:collapse}
+  thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:11px 10px;border-bottom:1px solid var(--line)}
+  tbody td{padding:12px 10px;border-bottom:1px solid var(--line-2);font-size:13px}
+  tbody tr:hover{background:#fff}
+  .c-blok{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:700}
+  .c-pat{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+  .c-test{font-weight:600}
+  .c-test small{display:block;font-weight:400;color:var(--ink-3);font-family:var(--mono);font-size:10.5px;margin-top:1px}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink-2)}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:6px}
+  .pill::before{content:"";width:6px;height:6px;border-radius:50%}
+  .st-bekleyen{background:var(--amber-b);color:var(--amber-i)} .st-bekleyen::before{background:var(--amber-i)}
+  .st-cihazda{background:var(--blue-b);color:var(--blue-i)} .st-cihazda::before{background:var(--blue-i)}
+  .st-tamamlandi{background:var(--green-b);color:var(--green-i)} .st-tamamlandi::before{background:var(--green-i)}
+  .prio{font-size:11px;font-weight:700;padding:3px 9px;border-radius:6px}
+  .p-rutin{background:var(--card);color:var(--ink-2);border:1px solid var(--line)}
+  .p-acil{background:var(--amber-b);color:var(--amber-i)}
+  .p-stat{background:var(--accent-soft);color:var(--accent)}
+
+  /* flat, borderless action button — no shadow, no gradient */
+  .act{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans)}
+  .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .btn-primary{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:11px 16px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:var(--sans)}
+  .btn-primary:hover{background:var(--accent-h)}
+</style>
+
+<div class="app">
+  <aside class="side">
+    <div class="wordmark">İstem <span>PATOLOJİ</span></div>
+    <button class="new">+ Yeni İstek</button>
+    <nav class="nav">
+      <a class="on">İş Kuyruğu</a>
+      <a>İstek Setleri</a>
+      <a>Şablonlar</a>
+      <a>Cihazlar</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="sideuser"><div class="av">FD</div><div><div class="nm">Dr. F. Demir</div><div class="rl">Asistan</div></div></div>
+  </aside>
+  <main class="main">
+    <div class="main-head"><h1>İş Kuyruğu</h1><div class="sub"><b>14</b> istek · IHC, histokimya, moleküler</div></div>
+    <div class="barrow">
+      <div class="tabs"><button class="on">Tümü <span class="count">14</span></button><button>Bekleyen <span class="count">6</span></button><button>Cihazda <span class="count">7</span></button><button>Tamamlandı <span class="count">1</span></button></div>
+      <div class="grow"></div>
+      <div class="msearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#171a19" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input placeholder="Blok, patoloji no…"></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Blok</th><th>Patoloji No</th><th>İstek</th><th>Tip</th><th>Öncelik</th><th>Durum</th><th>Aksiyon</th></tr></thead>
+        <tbody>
+          <tr><td class="c-blok">1-2</td><td class="c-pat">10738/26</td><td class="c-test">AMACR<small>13H4</small></td><td><span class="tag">IHC</span></td><td><span class="prio p-rutin">Rutin</span></td><td><span class="pill st-bekleyen">Bekleyen</span></td><td><button class="act">Cihaza al</button></td></tr>
+          <tr><td class="c-blok">1-3</td><td class="c-pat">11222/26</td><td class="c-test">TTF-1<small>8G7G3/1</small></td><td><span class="tag">IHC</span></td><td><span class="prio p-acil">Acil</span></td><td><span class="pill st-cihazda">Cihazda</span></td><td><button class="act">Tamamla</button></td></tr>
+          <tr><td class="c-blok">1-1</td><td class="c-pat">11222/26</td><td class="c-test">CK20<small>SP33</small></td><td><span class="tag">IHC</span></td><td><span class="prio p-acil">Acil</span></td><td><span class="pill st-tamamlandi">Tamamlandı</span></td><td style="color:var(--ink-3);font-size:12px">1 sa önce</td></tr>
+          <tr><td class="c-blok">1-2</td><td class="c-pat">10738/26</td><td class="c-test">CD20<small>L26</small></td><td><span class="tag">IHC</span></td><td><span class="prio p-stat">STAT</span></td><td><span class="pill st-bekleyen">Bekleyen</span></td><td><button class="act">Cihaza al</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>

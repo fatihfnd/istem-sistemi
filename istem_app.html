@@ -1,0 +1,414 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İstem</title>
+<style>
+  :root{
+    --paper:#faf8f3;         /* main canvas */
+    --side:#f3f1ea;          /* sidebar */
+    --card:#ffffff;
+    --ink:#26221d;
+    --ink-2:#6c665c;
+    --ink-3:#a49d90;
+    --line:#e8e3d8;
+    --line-2:#f0ece2;
+    --accent:#9d4d40;        /* rosewood/clay */
+    --accent-h:#864034;
+    --accent-soft:#f4e9e5;
+    --amber-i:#9a6410; --amber-b:#f7eeda;
+    --teal-i:#2b7d76;  --teal-b:#e5f1ef;
+    --green-i:#33794f; --green-b:#e7f2ea;
+    --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,'Times New Roman',serif;
+    --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,sans-serif;
+    --mono:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:var(--sans); color:var(--ink);
+    background:radial-gradient(1400px 800px at 50% -20%,#efe9df,transparent 60%),#e7e2d7;
+    display:flex; align-items:center; justify-content:center; padding:22px; height:100%;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* window */
+  .app{
+    width:100%; max-width:1320px; height:min(880px,94vh);
+    background:var(--paper); border:1px solid rgba(0,0,0,.08); border-radius:16px;
+    box-shadow:0 40px 90px rgba(40,30,22,.28), 0 4px 12px rgba(40,30,22,.12);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  .titlebar{display:flex; align-items:center; gap:8px; padding:11px 14px; border-bottom:1px solid var(--line-2); background:linear-gradient(#fbf9f4,#f6f3ec)}
+  .dots{display:flex; gap:7px}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+
+  .shell{flex:1; display:flex; min-height:0}
+
+  /* sidebar */
+  .side{width:232px; flex:none; background:var(--side); border-right:1px solid var(--line); display:flex; flex-direction:column; padding:16px 12px}
+  .wordmark{padding:6px 8px 16px; display:flex; align-items:baseline; gap:8px}
+  .wordmark .logo{font-family:var(--serif); font-style:italic; font-weight:700; font-size:23px; letter-spacing:-.01em}
+  .wordmark .beta{font-size:10px; color:var(--ink-3); border:1px solid var(--line); border-radius:20px; padding:1px 7px; font-weight:600; letter-spacing:.04em}
+  .new{
+    display:flex; align-items:center; gap:9px; width:100%; margin-bottom:12px;
+    border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:11px;
+    padding:10px 12px; font-size:13.5px; font-weight:600; cursor:pointer; font-family:var(--sans);
+  }
+  .new:hover{background:var(--accent-h)}
+  .navsec{font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); padding:12px 10px 6px}
+  .nav a{
+    display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:9px; cursor:pointer;
+    font-size:13.5px; color:var(--ink-2); font-weight:500; text-decoration:none; margin-bottom:1px;
+  }
+  .nav a svg{opacity:.6}
+  .nav a:hover{background:rgba(0,0,0,.045); color:var(--ink)}
+  .nav a.on{background:var(--card); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  .nav a.on svg{opacity:.9; color:var(--accent)}
+  .side .spacer{flex:1}
+  .sideuser{display:flex; align-items:center; gap:9px; padding:9px 8px; border-top:1px solid var(--line); margin-top:8px}
+  .sideuser .av{width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11.5px;font-weight:640}
+  .sideuser .nm{font-size:13px;font-weight:600;line-height:1.15}
+  .sideuser .rl{font-size:11px;color:var(--ink-2)}
+  .sideuser .gear{margin-left:auto;color:var(--ink-3);cursor:pointer}
+
+  /* main */
+  .main{flex:1; min-width:0; display:flex; flex-direction:column; background:var(--paper)}
+  .main-head{padding:24px 26px 14px}
+  .main-head h1{font-family:var(--serif); font-style:italic; font-weight:700; font-size:30px; margin:0; letter-spacing:-.01em}
+  .main-head .sub{font-size:13px; color:var(--ink-2); margin-top:5px}
+  .main-head .sub b{color:var(--accent); font-weight:600}
+  .barrow{display:flex; align-items:center; gap:10px; padding:0 26px 12px}
+  .tabs{display:flex; gap:2px; background:#efece4; padding:3px; border-radius:10px; border:1px solid var(--line-2)}
+  .tabs button{border:0;background:transparent;cursor:pointer;font-family:var(--sans);font-size:12.5px;font-weight:540;color:var(--ink-2);padding:6px 12px;border-radius:8px;display:flex;align-items:center;gap:6px}
+  .tabs button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:640}
+  .tabs .count{font-size:11px;background:#e6e1d6;color:var(--ink-2);border-radius:20px;padding:1px 6px;font-weight:600}
+  .tabs button.on .count{background:var(--accent-soft);color:var(--accent)}
+  .barrow .grow{flex:1}
+  .msearch{position:relative}
+  .msearch input{border:1px solid var(--line);background:var(--card);border-radius:9px;padding:7px 10px 7px 30px;font-size:12.5px;width:190px;outline:0;font-family:var(--sans)}
+  .msearch input:focus{border-color:var(--accent)}
+  .msearch svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);opacity:.4}
+
+  .tablewrap{flex:1; overflow-y:auto; padding:0 18px 18px}
+  table{width:100%; border-collapse:collapse}
+  thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+  tbody td{padding:11px 10px;border-bottom:1px solid var(--line-2);font-size:13px;vertical-align:middle}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:#f5f2ea}
+  tbody tr.sel{background:var(--accent-soft)}
+  .c-blok{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600;white-space:nowrap}
+  .c-test{font-weight:600}
+  .c-test small{display:block;font-weight:400;color:var(--ink-3);font-family:var(--mono);font-size:10.5px;margin-top:1px}
+  .tag{display:inline-block;font-size:11px;font-weight:560;padding:2px 8px;border-radius:6px;background:#f2efe8;border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .pill::before{content:"";width:6px;height:6px;border-radius:50%}
+  .st-bekleyen{background:var(--amber-b);color:var(--amber-i)} .st-bekleyen::before{background:var(--amber-i)}
+  .st-cihazda{background:var(--teal-b);color:var(--teal-i)} .st-cihazda::before{background:var(--teal-i)}
+  .st-tamamlandi{background:var(--green-b);color:var(--green-i)} .st-tamamlandi::before{background:var(--green-i)}
+  .prio{font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .p-rutin{background:#f2efe8;color:var(--ink-2);border:1px solid var(--line)}
+  .p-acil{background:var(--amber-b);color:var(--amber-i)}
+  .p-stat{background:var(--accent-soft);color:var(--accent)}
+  .act{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:7px;padding:5px 10px;font-size:12px;font-weight:560;cursor:pointer;font-family:var(--sans);white-space:nowrap}
+  .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+
+  /* right panel */
+  .rail{width:372px; flex:none; background:var(--card); border-left:1px solid var(--line); display:flex; flex-direction:column; min-height:0}
+  .rail-head{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line-2)}
+  .rail-head h2{font-family:var(--serif);font-style:italic;font-weight:700;font-size:19px;margin:0}
+  .rail-head .rx{margin-left:auto;border:0;background:transparent;font-size:20px;color:var(--ink-3);cursor:pointer;width:30px;height:30px;border-radius:8px}
+  .rail-head .rx:hover{background:var(--line-2);color:var(--ink)}
+  .rail-body{flex:1;overflow-y:auto;padding:18px}
+
+  /* empty state */
+  .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--ink-3);padding:30px}
+  .empty svg{opacity:.35;margin-bottom:14px}
+  .empty .t{font-family:var(--serif);font-style:italic;font-size:17px;color:var(--ink-2);margin-bottom:5px}
+  .empty .d{font-size:12.5px;max-width:210px;line-height:1.5}
+
+  /* detail */
+  .d-pat{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:.01em}
+  .d-blok{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600;margin-top:2px}
+  .d-test{margin:16px 0;padding:13px 14px;background:var(--paper);border:1px solid var(--line-2);border-radius:12px}
+  .d-test .n{font-size:16px;font-weight:640}
+  .d-test .c{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:2px}
+  .d-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
+  .d-grid .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:600;margin-bottom:4px}
+  .d-grid .v{font-size:13px}
+  /* timeline */
+  .tl{margin:18px 0;padding-left:6px}
+  .tl .step{display:flex;gap:12px;position:relative;padding-bottom:16px}
+  .tl .step:not(:last-child)::before{content:"";position:absolute;left:6px;top:16px;bottom:0;width:2px;background:var(--line)}
+  .tl .step.done:not(:last-child)::before{background:var(--green-i)}
+  .tl .node{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);background:var(--card);flex:none;margin-top:1px}
+  .tl .step.done .node{background:var(--green-i);border-color:var(--green-i)}
+  .tl .step.cur .node{background:var(--accent);border-color:var(--accent)}
+  .tl .lbl{font-size:13px;font-weight:560}
+  .tl .step:not(.done):not(.cur) .lbl{color:var(--ink-3)}
+  .tl .time{font-size:11px;color:var(--ink-3);margin-top:1px}
+  .rail-foot{padding:14px 18px;border-top:1px solid var(--line-2);display:flex;gap:10px}
+  .btn-primary{flex:1;border:0;background:var(--accent);color:#fff;border-radius:10px;padding:11px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:var(--sans)}
+  .btn-primary:hover{background:var(--accent-h)}
+  .btn-ghost{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:11px 16px;font-size:13.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
+  .btn-ghost:hover{background:var(--line-2)}
+
+  /* new-request form (in rail) */
+  .m-label{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:0 0 8px}
+  .m-sec{margin-bottom:18px}
+  .patrow{display:flex;gap:8px}
+  .patrow input{flex:1;font-family:var(--mono);font-size:15px;font-weight:600;border:1px solid var(--line);border-radius:10px;padding:10px 12px;outline:0}
+  .patrow input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .scan{border:1px solid var(--line);background:var(--paper);border-radius:10px;width:44px;display:grid;place-items:center;cursor:pointer;color:var(--ink-2)}
+  .scan:hover{border-color:var(--accent);color:var(--accent)}
+  .groups{display:flex;flex-wrap:wrap;gap:6px}
+  .groups button{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:20px;padding:6px 12px;font-size:12px;font-weight:540;cursor:pointer;font-family:var(--sans)}
+  .groups button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .sets{display:flex;flex-wrap:wrap;gap:6px}
+  .set{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 10px;font-size:12.5px;cursor:pointer;font-family:var(--sans);font-weight:540}
+  .set:hover{border-color:var(--accent);background:var(--accent-soft)}
+  .set.hot{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+  .antisearch{position:relative;margin-bottom:10px}
+  .antisearch input{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px 9px 32px;font-size:13px;outline:0;font-family:var(--sans)}
+  .antisearch input:focus{border-color:var(--accent)}
+  .antisearch svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.4}
+  .antis{display:flex;flex-wrap:wrap;gap:7px}
+  .anti{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:7px 10px;font-size:12.5px;cursor:pointer;font-family:var(--sans);user-select:none}
+  .anti small{color:var(--ink-3);font-family:var(--mono);font-size:10.5px}
+  .anti.sel{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+  .anti.sel small{color:var(--accent);opacity:.7}
+  .anti.sel::before{content:"✓";font-size:10.5px;font-weight:700}
+  .otherbox{display:none;gap:7px;margin-top:6px}
+  .otherbox.show{display:flex}
+  .otherbox input{flex:1;border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:13px;outline:0;font-family:var(--sans)}
+  .otherbox .add{border:0;background:var(--accent);color:#fff;border-radius:9px;padding:0 13px;font-size:17px;cursor:pointer}
+  .blocks{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+  .bchip{display:inline-flex;align-items:center;gap:7px;background:var(--accent-soft);border:1px solid #e6cfc9;color:var(--accent);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:12.5px;font-weight:600}
+  .bchip .x{cursor:pointer;opacity:.6}
+  .bin{font-family:var(--mono);font-size:12.5px;border:1px dashed var(--line);background:transparent;border-radius:8px;padding:7px 10px;width:130px;outline:0}
+  .bin:focus{border-style:solid;border-color:var(--accent)}
+  .prios{display:flex;gap:7px}
+  .prios button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:8px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
+  .prios button[data-p=rutin].on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .prios button[data-p=acil].on{background:var(--amber-i);border-color:var(--amber-i);color:#fff}
+  .prios button[data-p=stat].on{background:var(--accent-h);border-color:var(--accent-h);color:#fff}
+  .rail textarea{width:100%;min-height:52px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:13px;font-family:var(--sans);outline:0}
+  .rail textarea:focus{border-color:var(--accent)}
+  .onbehalf{width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:9px 11px;outline:0}
+
+  @media (max-width:900px){
+    .app{height:auto;max-height:none}
+    .shell{flex-direction:column}
+    .side{width:100%;flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line)}
+    .rail{width:100%;border-left:0;border-top:1px solid var(--line)}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="app">
+  <div class="titlebar"><div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div></div>
+  <div class="shell">
+
+    <!-- SIDEBAR -->
+    <aside class="side">
+      <div class="wordmark"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+      <button class="new" id="newBtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg> Yeni İstek</button>
+      <nav class="nav">
+        <a class="on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M3 12h18M3 18h18"/></svg> İş Kuyruğu</a>
+        <a><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> İstek Setleri</a>
+        <a><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v4H4zM4 10h10v10H4zM17 10h3v10h-3z"/></svg> Şablonlar</a>
+        <a><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg> Cihazlar</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="sideuser">
+        <div class="av">FD</div>
+        <div><div class="nm">Fatih Demir</div><div class="rl">Tıbbi Patoloji</div></div>
+        <svg class="gear" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1A2 2 0 1 1 2.3 17l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 0 1 0-4h.1A1.6 1.6 0 0 0 4.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1A2 2 0 1 1 7 2.3l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V1a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1A2 2 0 1 1 21.7 5l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="main-head">
+        <h1>İş Kuyruğu</h1>
+        <div class="sub"><b id="totalN">8</b> istek · IHC, histokimya, moleküler</div>
+      </div>
+      <div class="barrow">
+        <div class="tabs" id="tabs">
+          <button class="on" data-f="all">Tümü <span class="count" data-c="all">0</span></button>
+          <button data-f="bekleyen">Bekleyen <span class="count" data-c="bekleyen">0</span></button>
+          <button data-f="cihazda">Cihazda <span class="count" data-c="cihazda">0</span></button>
+          <button data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
+        </div>
+        <div class="grow"></div>
+        <div class="msearch">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <input placeholder="Blok, patoloji no…">
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Blok</th><th>İstek</th><th>Tip</th><th>Öncelik</th><th>Durum</th><th>Aksiyon</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- RIGHT RAIL -->
+    <aside class="rail" id="rail"></aside>
+  </div>
+</div>
+
+<script>
+  const CAT={
+    ihc:[["ER","SP1"],["PR","BSB-2"],["HER2","4B5"],["Ki-67","30-9"],["E-Cadherin","EP700Y"],["p120","EP66"],["CK5/6","D5/16B4"],["p63","4A4"],["CD20","L26"],["CD3","SP7"],["BCL2","EP36"],["BCL6","EP29"],["CD10","SP67"],["AMACR","13H4"],["TTF-1","8G7G3/1"],["p40","BC28"],["CK7","OV-TL"],["CK20","SP33"],["GATA3","L50-823"]],
+    hk:[["PAS",""],["PAS-D",""],["Giemsa",""],["Retikülin",""],["Masson Trikrom",""],["Kongo Kırmızısı",""]],
+    mol:[["BRAF",""],["EGFR",""],["KRAS",""],["MSI",""],["ALK",""]],
+    kesit:[["Yeni kesit (H&E)",""],["Seri kesit",""],["Derin kesit",""]],
+    hucre:[["Hücre bloğu hazırlama",""]], yayma:[["Yeniden yayma",""]], diger:[]
+  };
+  const SETS={ihc:[["Meme IHC Temel",["ER","PR","HER2","Ki-67"]],["Meme · Lobüler",["E-Cadherin","p120","CK5/6"]],["Lenfoma · B Hücre",["CD20","CD3","BCL2","BCL6","CD10"]],["Prostat · PIN/Ca",["CK5/6","p63","AMACR"]],["Akciğer · Adeno",["TTF-1","CK7","p40","CK20"]]],hk:[],mol:[],kesit:[],hucre:[],yayma:[],diger:[]};
+  const TIP={ihc:"IHC",hk:"Histokimya",mol:"Moleküler",kesit:"Yeni Kesit",hucre:"Hücre Bloğu",yayma:"Yeniden Yayma",diger:"Diğer"};
+  const PILL={bekleyen:["st-bekleyen","Bekleyen"],cihazda:["st-cihazda","Cihazda"],tamamlandi:["st-tamamlandi","Tamamlandı"]};
+  const PRIO={rutin:["p-rutin","Rutin"],acil:["p-acil","Acil"],stat:["p-stat","STAT"]};
+  const clone=(g,n)=>{const f=(CAT[g]||[]).find(x=>x[0]===n);return f?f[1]:"";};
+  const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+
+  let uid=100;
+  function mk(blok,pat,test,klon,tip,isteyen,uzman,zaman,oncelik,durum){return{id:++uid,blok,pat,test,klon,tip,isteyen,uzman,zaman,oncelik,durum};}
+  let rows=[
+    mk("B-34306/1","11240/26","ER","SP1","ihc","Dr. F. Demir","Dr. A. Yılmaz","2 sa önce","rutin","cihazda"),
+    mk("B-34306/1","11240/26","PR","BSB-2","ihc","Dr. F. Demir","Dr. A. Yılmaz","2 sa önce","rutin","bekleyen"),
+    mk("B-34306/1","11240/26","HER2","4B5","ihc","Dr. F. Demir","Dr. A. Yılmaz","2 sa önce","acil","bekleyen"),
+    mk("B-34318/2","11318/26","CD20","L26","ihc","Dr. M. Urgancı","Dr. B. Kaya","5 sa önce","stat","cihazda"),
+    mk("B-34301/1","11301/26","Yeni kesit (H&E)","","kesit","Dr. C. Demir","Dr. C. Demir","1 gün önce","rutin","bekleyen"),
+    mk("B-34295/2","11295/26","BRAF","","mol","Dr. B. Kaya","Dr. B. Kaya","1 gün önce","rutin","cihazda"),
+    mk("B-34290/1","11290/26","HER2 FISH","","mol","Dr. A. Yılmaz","Dr. A. Yılmaz","2 gün önce","acil","tamamlandi"),
+    mk("B-34277/3","11277/26","TTF-1","8G7G3/1","ihc","Dr. C. Demir","Dr. C. Demir","2 gün önce","rutin","tamamlandi"),
+  ];
+  let filter="all", selId=null;
+
+  function renderTable(){
+    const tb=$("#rows"); tb.innerHTML="";
+    const list=filter==="all"?rows:rows.filter(r=>r.durum===filter);
+    list.forEach(r=>{
+      const tr=document.createElement("tr"); if(r.id===selId)tr.className="sel";
+      let act;
+      if(r.durum==="bekleyen")act=`<button class="act" onclick="adv(event,${r.id},'cihazda')">Cihaza al</button>`;
+      else if(r.durum==="cihazda")act=`<button class="act" onclick="adv(event,${r.id},'tamamlandi')">Tamamla</button>`;
+      else act=`<span style="color:var(--ink-3);font-size:12px">${r.zaman}</span>`;
+      tr.innerHTML=`<td class="c-blok">${r.blok}</td>
+        <td class="c-test">${r.test}${r.klon?`<small>${r.klon}</small>`:""}</td>
+        <td><span class="tag">${TIP[r.tip]}</span></td>
+        <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></td>
+        <td><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></td>
+        <td>${act}</td>`;
+      tr.onclick=()=>{selId=r.id; showDetail(r); renderTable();};
+      tb.appendChild(tr);
+    });
+    $("#totalN").textContent=rows.length;
+    ["all","bekleyen","cihazda","tamamlandi"].forEach(f=>{
+      $(`[data-c="${f}"]`).textContent = f==="all"?rows.length:rows.filter(r=>r.durum===f).length; });
+  }
+  window.adv=(e,id,to)=>{ e.stopPropagation(); const r=rows.find(x=>x.id===id); if(r){r.durum=to;r.zaman="şimdi";} renderTable(); if(selId===id)showDetail(r); };
+  $("#tabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;$$("#tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");filter=b.dataset.f;renderTable();});
+
+  // ---- right rail states ----
+  const rail=$("#rail");
+  function showEmpty(){
+    selId=null;
+    rail.innerHTML=`<div class="empty">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M9 2v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V2M9 2h6M7 14h10"/></svg>
+      <div class="t">Bir istek seç</div>
+      <div class="d">Detayını ve durum geçmişini görmek için soldan bir satıra dokun, ya da yeni istek ver.</div>
+    </div>`;
+    renderTable();
+  }
+  function showDetail(r){
+    const steps=[["İstendi","bekleyen"],["Cihaza alındı","cihazda"],["Tamamlandı","tamamlandi"]];
+    const order={bekleyen:0,cihazda:1,tamamlandi:2}[r.durum];
+    const tl=steps.map((s,i)=>{
+      const cls=i<order?"done":(i===order?"cur":"");
+      const time=i<=order?(i===order?r.zaman:"—"):"";
+      return `<div class="step ${cls}"><div class="node"></div><div><div class="lbl">${s[0]}</div>${time?`<div class="time">${time}</div>`:""}</div></div>`;
+    }).join("");
+    let foot="";
+    if(r.durum==="bekleyen")foot=`<button class="btn-primary" onclick="adv(event,${r.id},'cihazda')">Cihaza al</button>`;
+    else if(r.durum==="cihazda")foot=`<button class="btn-primary" onclick="adv(event,${r.id},'tamamlandi')">Tamamla</button>`;
+    rail.innerHTML=`
+      <div class="rail-head"><h2>İstek Detayı</h2><button class="rx" onclick="showEmpty()">×</button></div>
+      <div class="rail-body">
+        <div class="d-pat">${r.pat}</div><div class="d-blok">${r.blok}</div>
+        <div class="d-test"><div class="n">${r.test}</div>${r.klon?`<div class="c">Klon ${r.klon}</div>`:""}</div>
+        <div class="d-grid">
+          <div><div class="k">Tip</div><div class="v"><span class="tag">${TIP[r.tip]}</span></div></div>
+          <div><div class="k">Öncelik</div><div class="v"><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></div></div>
+          <div><div class="k">İsteyen</div><div class="v">${r.isteyen}</div></div>
+          <div><div class="k">Uzman adına</div><div class="v">${r.uzman}</div></div>
+        </div>
+        <div class="m-label" style="margin-bottom:10px">Durum geçmişi</div>
+        <div class="tl">${tl}</div>
+      </div>
+      ${foot?`<div class="rail-foot">${foot}</div>`:""}`;
+  }
+
+  // ---- new request form ----
+  let grp="ihc"; const selected=new Set(); const custom=[]; let prio="rutin";
+  function showForm(){
+    selId=null; renderTable();
+    grp="ihc"; selected.clear(); custom.length=0; prio="rutin";
+    rail.innerHTML=`
+      <div class="rail-head"><h2>Yeni İstek</h2><button class="rx" onclick="showEmpty()">×</button></div>
+      <div class="rail-body">
+        <div class="m-sec"><p class="m-label">Uzman adına</p>
+          <select class="onbehalf"><option>Dr. A. Yılmaz</option><option>Dr. B. Kaya</option><option>Dr. C. Demir</option></select></div>
+        <div class="m-sec"><p class="m-label">Patoloji No</p>
+          <div class="patrow"><input id="mPat" value="11240/26" placeholder="ör. 11240/26">
+            <button class="scan" title="Kamera ile tara"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button></div></div>
+        <div class="m-sec"><div class="groups" id="groups">
+          <button class="on" data-g="ihc">IHC</button><button data-g="hk">Histokimya</button><button data-g="mol">Moleküler</button>
+          <button data-g="kesit">Yeni Kesit</button><button data-g="hucre">Hücre Bloğu</button><button data-g="yayma">Yeniden Yayma</button><button data-g="diger">Diğer</button>
+        </div></div>
+        <div class="m-sec" id="setsSec"><p class="m-label">Hazır Setler</p><div class="sets" id="sets"></div></div>
+        <div class="m-sec" id="antiSec"><p class="m-label">Tek Tek Seç</p>
+          <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+            <input id="antiSearch" placeholder="Antikor ara… ER, HER2, CK7…"></div>
+          <div class="antis" id="antis"></div>
+          <div class="otherbox" id="otherbox"><input id="otherin" placeholder="Katalogda olmayan istek…"><button class="add" onclick="addOther()">+</button></div></div>
+        <div class="m-sec"><p class="m-label">Blok Seçimi <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— manuel</span></p>
+          <div class="blocks" id="blocks"><span class="bchip">1-10 <span class="x" onclick="rmBlock(this)">×</span></span><input class="bin" id="blockin" placeholder="+ blok"></div></div>
+        <div class="m-sec"><p class="m-label">Öncelik</p>
+          <div class="prios" id="prios"><button class="on" data-p="rutin">Rutin</button><button data-p="acil">Acil</button><button data-p="stat">STAT</button></div></div>
+        <div class="m-sec" style="margin-bottom:2px"><p class="m-label">Not</p><textarea placeholder="Teknisyene not…"></textarea></div>
+      </div>
+      <div class="rail-foot"><button class="btn-ghost" onclick="showEmpty()">İptal</button><button class="btn-primary" id="submit">İstek Ver</button></div>`;
+    bindForm(); renderSets(); renderAntis();
+  }
+  function renderSets(){const s=$("#sets"),list=SETS[grp]||[];$("#setsSec").style.display=list.length?"":"none";s.innerHTML="";
+    list.forEach(([name,tests])=>{const el=document.createElement("button");el.className="set";el.textContent=name;
+      el.onclick=()=>{tests.forEach(t=>selected.add(t));el.classList.add("hot");renderAntis();};s.appendChild(el);});}
+  function renderAntis(q=""){const wrap=$("#antis");if(!wrap)return;const list=grp==="diger"?custom.map(c=>[c,""]):CAT[grp];
+    $("#otherbox").classList.toggle("show",grp==="diger");$("#antiSec").querySelector(".antisearch").style.display=grp==="diger"?"none":"";
+    wrap.innerHTML="";list.filter(([n])=>n.toLowerCase().includes(q.toLowerCase())).forEach(([n,c])=>{
+      const el=document.createElement("span");el.className="anti"+(selected.has(n)?" sel":"");el.innerHTML=`${n}${c?`<small>${c}</small>`:""}`;
+      el.onclick=()=>{selected.has(n)?selected.delete(n):selected.add(n);el.classList.toggle("sel");};wrap.appendChild(el);});}
+  window.addOther=()=>{const v=$("#otherin").value.trim();if(!v)return;if(!custom.includes(v))custom.push(v);selected.add(v);$("#otherin").value="";renderAntis();};
+  window.rmBlock=el=>el.closest(".bchip").remove();
+  function bindForm(){
+    $("#groups").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;$$("#groups button").forEach(x=>x.classList.remove("on"));b.classList.add("on");grp=b.dataset.g;renderSets();renderAntis();});
+    $("#antiSearch").addEventListener("input",e=>renderAntis(e.target.value));
+    $("#blockin").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.value.trim()){const v=e.target.value.trim();const c=document.createElement("span");c.className="bchip";c.innerHTML=v+' <span class="x">×</span>';c.querySelector(".x").onclick=()=>c.remove();$("#blocks").insertBefore(c,e.target);e.target.value="";}});
+    $("#prios").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;$$("#prios button").forEach(x=>x.classList.remove("on"));b.classList.add("on");prio=b.dataset.p;});
+    $("#submit").onclick=()=>{
+      if(!selected.size)return;
+      const pat=$("#mPat").value.trim()||"—";
+      const bl=[...$$("#blocks .bchip")].map(c=>c.textContent.replace("×","").trim()); const blocks=bl.length?bl:["—"];
+      blocks.forEach(b=>selected.forEach(t=>rows.unshift(mk("B-"+pat.replace("/","-")+"/"+b.split("-")[0],pat,t,clone(grp,t),grp,"Dr. F. Demir","Dr. A. Yılmaz","şimdi",prio,"bekleyen"))));
+      filter="all";$$("#tabs button").forEach(x=>x.classList.toggle("on",x.dataset.f==="all"));
+      showEmpty();
+    };
+  }
+  $("#newBtn").onclick=showForm;
+
+  showEmpty();
+</script>

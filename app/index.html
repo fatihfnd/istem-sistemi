@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>İstem</title>
+
+<link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1f4d47">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="İstem">
+<link rel="apple-touch-icon" href="icons/icon.svg">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<!-- GİRİŞ EKRANI (ad seç + PIN) -->
+<div class="authoverlay" id="authOverlay">
+  <div class="authcard">
+    <div class="wordmark"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+    <p class="m-label">Kullanıcı</p>
+    <select id="authUser"></select>
+    <p class="m-label">PIN</p>
+    <input id="authPin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••" maxlength="6">
+    <div class="err" id="authErr"></div>
+    <button class="btn-primary" id="authSubmit" style="width:100%">Giriş yap</button>
+  </div>
+</div>
+
+<!-- UYGULAMA -->
+<div class="app hidden" id="appRoot">
+  <div class="shell">
+
+    <!-- SIDEBAR -->
+    <aside class="side">
+      <div class="wordmark"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+      <button class="new" id="newBtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg> Yeni İstek</button>
+      <nav class="nav" id="nav">
+        <a class="on" data-page="kuyruk"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M3 12h18M3 18h18"/></svg> İş Kuyruğu</a>
+        <a data-page="setler"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> İstek Setleri</a>
+        <a data-page="sablonlar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v4H4zM4 10h10v10H4zM17 10h3v10h-3z"/></svg> Şablonlar</a>
+        <a data-page="cihazlar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg> Cihazlar</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="sideuser">
+        <div class="av" id="meAv">--</div>
+        <div><div class="nm" id="meName">—</div><div class="rl" id="meRole">—</div></div>
+        <button class="gear" id="logoutBtn" title="Çıkış yap"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+      </div>
+    </aside>
+
+    <!-- MAIN (route'a göre app.js dolduruyor) -->
+    <main class="main" id="mainView"></main>
+
+    <!-- RIGHT RAIL -->
+    <aside class="rail" id="rail"></aside>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
