@@ -24,7 +24,7 @@
     <p class="m-label">Kullanıcı</p>
     <select id="authUser"></select>
     <p class="m-label">PIN</p>
-    <input id="authPin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••" maxlength="6">
+    <input id="authPin" class="pinmask" type="text" inputmode="numeric" autocomplete="off" name="fld_7k2q" placeholder="••••" maxlength="6">
     <div class="err" id="authErr"></div>
     <button class="btn-primary" id="authSubmit" style="width:100%">Giriş yap</button>
   </div>
@@ -67,6 +67,11 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="update-banner" id="updateBanner">
+  <span>Yeni sürüm mevcut</span>
+  <button class="btn-primary btn-sm" id="updateBannerBtn">Yenile</button>
+  <button class="ub-x" id="updateBannerClose" title="Kapat">×</button>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>

@@ -126,6 +126,7 @@ tbody tr.sel{background:var(--accent-soft)}
 .act{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:7px;padding:5px 10px;font-size:12px;font-weight:560;cursor:pointer;font-family:var(--sans);white-space:nowrap}
 .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .act:disabled{opacity:.5;cursor:not-allowed}
+.actrow{display:flex;gap:6px}
 /* Kuyruk aksiyon butonları — hedef durumun rozet rengiyle eşleşir */
 .act-cihaza{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b)}
 .act-cihaza:hover{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b);filter:brightness(0.96)}
@@ -311,6 +312,9 @@ tbody tr.sel{background:var(--accent-soft)}
   border-radius:9px; padding:10px 12px; outline:0;
 }
 .authcard select:focus, .authcard input:focus{border-color:var(--accent)}
+/* type=password DEĞİL — tarayıcı şifre yöneticisini tetiklemesin diye
+   type=text + görsel olarak noktalarla maskeleme (bkz. index.html #authPin). */
+.pinmask{-webkit-text-security:disc; text-security:disc; letter-spacing:2px}
 .authcard .err{color:#a3401f; font-size:12.5px; margin-top:10px; min-height:1em}
 .authcard button{margin-top:18px}
 .hidden{display:none!important}
@@ -324,3 +328,15 @@ tbody tr.sel{background:var(--accent-soft)}
 }
 .toast.show{opacity:1}
 .toast.err{background:#a3401f}
+
+/* ---------------- Yeni sürüm bandosu ---------------- */
+.update-banner{
+  position:fixed; left:50%; bottom:26px; transform:translate(-50%, 130%);
+  display:flex; align-items:center; gap:12px;
+  background:var(--ink); color:#fff; font-size:13px; font-weight:560;
+  padding:10px 12px 10px 16px; border-radius:9px; box-shadow:0 6px 20px rgba(0,0,0,.18);
+  z-index:100; opacity:0; pointer-events:none; transition:transform .25s ease, opacity .25s ease;
+}
+.update-banner.show{transform:translate(-50%, 0); opacity:1; pointer-events:auto}
+.ub-x{border:0;background:transparent;color:#fff;opacity:.6;font-size:16px;cursor:pointer;line-height:1;padding:2px 4px}
+.ub-x:hover{opacity:1}

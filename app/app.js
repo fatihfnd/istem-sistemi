@@ -424,7 +424,16 @@ function renderQueuePage() {
       return;
     }
     const btn = e.target.closest(".act[data-id]");
-    if (btn) { e.stopPropagation(); advance(btn.dataset.id, btn.dataset.to); return; }
+    if (btn) {
+      e.stopPropagation();
+      if (btn.dataset.revert) {
+        const r = rows.find((x) => x.kalem_id === btn.dataset.id);
+        if (r) revertDurum(r.kalem_id, r.durum);
+      } else {
+        advance(btn.dataset.id, btn.dataset.to);
+      }
+      return;
+    }
     const tr = e.target.closest("tr[data-kalem]");
     if (tr) { const r = rows.find((x) => x.kalem_id === tr.dataset.kalem); if (r) showDetail(r); }
   });
@@ -610,9 +619,16 @@ function renderTable() {
     tr.dataset.kalem = r.kalem_id;
     if (r.kalem_id === selId) tr.className = "sel";
     let act;
-    if (r.durum === "bekleyen") act = `<button class="act act-cihaza" data-id="${r.kalem_id}" data-to="cihazda">Cihaza al</button>`;
-    else if (r.durum === "cihazda") act = `<button class="act act-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>`;
-    else act = `<span style="color:var(--ink-3);font-size:12px">${timeAgo(r.updated_at)}</span>`;
+    if (r.durum === "bekleyen") {
+      act = `<button class="act act-cihaza" data-id="${r.kalem_id}" data-to="cihazda">Cihaza al</button>`;
+    } else if (r.durum === "cihazda") {
+      act = `<div class="actrow">
+        <button class="act act-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>
+        <button class="act" data-id="${r.kalem_id}" data-revert="1">↩ Geri al</button>
+      </div>`;
+    } else {
+      act = `<button class="act" data-id="${r.kalem_id}" data-revert="1">↩ Geri al</button>`;
+    }
     const notCell = r.not_metni
       ? `<span class="note-txt" title="${esc(r.not_metni)}">${esc(r.not_metni.length > 40 ? r.not_metni.slice(0, 40) + "…" : r.not_metni)}</span>`
       : "";
@@ -648,6 +664,23 @@ async function advance(kalemId, toDurum) {
     await loadQueue();
   } catch (e) {
     toast("Durum güncellenemedi", true);
+  }
+}
+
+// Durum geri alma — Tamamlandı→Cihazda, Cihazda→Bekleyen. Api.advanceDurum
+// yön bağımsız (sadece durum günceller + istem_log'a satır düşer), bu yüzden
+// aynı fonksiyon yeniden kullanılıyor; burada eklenen tek şey onay diyaloğu.
+const REVERT_TO = { cihazda: "bekleyen", tamamlandi: "cihazda" };
+async function revertDurum(kalemId, fromDurum) {
+  const toDurum = REVERT_TO[fromDurum];
+  if (!toDurum) return;
+  if (!confirm(`"${PILL[fromDurum][1]}" durumu geri alınsın mı?`)) return;
+  try {
+    await Api.advanceDurum(kalemId, toDurum, session.id);
+    toast(`"${PILL[fromDurum][1]}" durumu geri alındı`);
+    await loadQueue();
+  } catch (e) {
+    toast("Durum geri alınamadı", true);
   }
 }
 
@@ -699,6 +732,15 @@ async function showDetail(r) {
     return `<div class="step ${cls}"><div class="node"></div><div><div class="lbl">${lbl}</div>${t ? `<div class="time">${t}</div>` : ""}</div></div>`;
   }).join("");
 
+  // Son log kaydı bir geri alma ise (yeni_durum, eski_durum'dan geriyse)
+  // şeffaflık için ayrı, göze çarpan bir not olarak gösterilir — sessizce
+  // geçilmez.
+  const lastLog = logs[logs.length - 1];
+  const isRevert = lastLog && SORT_RANK.durum[lastLog.yeni_durum] < SORT_RANK.durum[lastLog.eski_durum];
+  const revertNote = isRevert
+    ? `<div class="revert-note">↩ ${esc(lastLog.kullanicilar?.ad_soyad || "Bilinmeyen kullanıcı")} tarafından ${formatDT(lastLog.created_at)} tarihinde "${esc(PILL[lastLog.eski_durum][1])}" durumu geri alındı.</div>`
+    : "";
+
   const aktifCihazlar = CIHAZLAR.filter((c) => c.aktif || c.id === r.cihaz_id);
 
   $("#detailBody").innerHTML = `
@@ -719,6 +761,7 @@ async function showDetail(r) {
     </div>
     <div class="m-label" style="margin-bottom:10px">Durum geçmişi</div>
     <div class="tl">${tl}</div>
+    ${revertNote}
     <div class="m-label">Not</div>
     <div class="v" style="font-size:13px">${r.not_metni ? esc(r.not_metni) : "—"}</div>`;
 
@@ -736,13 +779,16 @@ async function showDetail(r) {
   if (r.durum === "bekleyen") toDurum = "cihazda";
   else if (r.durum === "cihazda") toDurum = "tamamlandi";
   const advLabel = toDurum === "cihazda" ? "Cihaza al" : toDurum === "tamamlandi" ? "Tamamla" : null;
+  const revertTo = REVERT_TO[r.durum] || null;
   const canDelete = r.durum !== "tamamlandi"; // tamamlanmış kayıtlar kalıcıdır, silinemez
-  if (canDelete || advLabel) {
+  if (canDelete || advLabel || revertTo) {
     rail.insertAdjacentHTML("beforeend", `<div class="rail-foot">
       ${canDelete ? `<button class="btn-ghost" id="delIstemBtn">Sil</button>` : ""}
+      ${revertTo ? `<button class="btn-ghost" id="revertBtn">↩ Geri Al</button>` : ""}
       ${advLabel ? `<button class="btn-primary" id="advBtn">${advLabel}</button>` : ""}
     </div>`);
     if (toDurum) $("#advBtn").onclick = () => advance(r.kalem_id, toDurum);
+    if (revertTo) $("#revertBtn").onclick = () => revertDurum(r.kalem_id, r.durum);
     if (canDelete) {
       $("#delIstemBtn").onclick = () => confirmAndDelete(`${r.patoloji_no} — ${r.test_adi}`, () => Api.deleteIstemKalem(r.kalem_id), async () => {
         toast("Kalem silindi");
@@ -2074,10 +2120,36 @@ function wireStaticUI() {
   });
 }
 
+// sw.js zaten skipWaiting()+clients.claim() ile yeni sürümü otomatik
+// devreye alıyor (bkz. sw.js) — burada yapılan tek şey, o geçiş olduğunda
+// kullanıcıya haber vermek. "controllerchange", bu sayfa AÇIKKEN kontrolü
+// devralan bir SW değiştiğinde tetiklenir; hadController kontrolü olmadan
+// bunu dinlemek İLK KURULUMDA da (henüz hiçbir "eski sürüm" yokken) yanlışlıkla
+// banner göstermeye yol açardı.
 function registerSW() {
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
-  }
+  if (!("serviceWorker" in navigator)) return;
+  window.addEventListener("load", async () => {
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (hadController) showUpdateBanner();
+    });
+
+    const reg = await navigator.serviceWorker.register("sw.js").catch(() => null);
+    if (!reg) return;
+
+    // Sekme uzun süre açık kalabilir (SPA) — tarayıcının kendi periyodik
+    // güncelleme kontrolüne (~24 saat) ek olarak, saatte bir ve sekme tekrar
+    // görünür olduğunda da elle bir güncelleme kontrolü tetikle.
+    setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") reg.update().catch(() => {});
+    });
+  });
+}
+
+function showUpdateBanner() {
+  const el = $("#updateBanner");
+  if (el) el.classList.add("show");
 }
 
 // ================================================================
@@ -2143,6 +2215,8 @@ function renderYedekList() {
   $("#authSubmit").addEventListener("click", handleAuthSubmit);
   $("#authPin").addEventListener("keydown", (e) => { if (e.key === "Enter") handleAuthSubmit(); });
   $("#logoutBtn").addEventListener("click", handleLogout);
+  $("#updateBannerBtn").addEventListener("click", () => location.reload());
+  $("#updateBannerClose").addEventListener("click", () => $("#updateBanner").classList.remove("show"));
   registerSW();
 
   // Önce GERÇEK Supabase Auth oturumuna bak (localStorage'a körü körüne
