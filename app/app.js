@@ -217,7 +217,7 @@ const SORT_RANK = {
   oncelik: { rutin: 0, acil: 1, stat: 2 },
   durum: { bekleyen: 0, cihazda: 1, tamamlandi: 2 },
 };
-const SORT_FIELD = { blok: "blok_no", pat: "patoloji_no", test: "test_adi", tip: "grup", isteyen: "isteyen_adi", uzman: "uzman_adi", oncelik: "oncelik", durum: "durum" };
+const SORT_FIELD = { blok: "blok_no", pat: "patoloji_no", test: "test_adi", tip: "grup", isteyen: "isteyen_adi", uzman: "uzman_adi", oncelik: "oncelik", durum: "durum", tarih: "created_at" };
 function compareForSort(a, b, col) {
   if (col === "oncelik" || col === "durum") {
     const rank = SORT_RANK[col];
@@ -517,6 +517,13 @@ function thMultiFilter(key, label, options, activeSet, sortState) {
   return thHead(key, label, sortState, activeSet.size > 0, options.map((o) => `
     <label class="thcheck"><input type="checkbox" data-thcheck="${key}" value="${esc(o.value)}" ${activeSet.has(o.value) ? "checked" : ""}> ${esc(o.label)}</label>`).join(""));
 }
+// Filtresiz, sadece sıralanabilir sütun (ör. Tarih) — caret/popover yok,
+// mevcut [data-sortcol] delegasyonu (renderQueuePage/renderHizmetlerPage'de
+// zaten bağlı) bunu da kapsar.
+function thSortOnly(key, label, sortState) {
+  const arrow = sortState.active ? (sortState.dir === "asc" ? " ▲" : " ▼") : "";
+  return `<th><span class="thlabel" data-sortcol="${key}">${esc(label)}${arrow}</span></th>`;
+}
 
 function renderQHead() {
   const head = $("#qhead");
@@ -545,7 +552,7 @@ function renderQHead() {
     ${thMultiFilter("tip", "Tip", GROUPS.map(([k, l]) => ({ value: k, label: l })), colFilters.tip, sortOf("tip"))}
     ${thTextFilter("isteyen", "İsteyen", colFilters.isteyen, sortOf("isteyen"))}
     ${thTextFilter("uzman", "Uzman Adına", colFilters.uzman, sortOf("uzman"))}
-    <th>Tarih</th>
+    ${thSortOnly("tarih", "Tarih", sortOf("tarih"))}
     ${thMultiFilter("oncelik", "Öncelik", ["rutin", "acil", "stat"].map((k) => ({ value: k, label: PRIO[k][1] })), colFilters.oncelik, sortOf("oncelik"))}
     ${thMultiFilter("durum", "Durum", ["bekleyen", "cihazda", "tamamlandi"].map((k) => ({ value: k, label: PILL[k][1] })), colFilters.durum, sortOf("durum"))}
     <th>Not</th>
@@ -1440,7 +1447,7 @@ function showCihazForm(existing) {
 let hizmetlerList = [];
 let hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
 let hizSortCol = null, hizSortDir = "asc";
-const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzman_adi" };
+const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzman_adi", tarih: "created_at" };
 
 function hizOzetTxt(h) {
   return h.ozet.length ? h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") : "—";
@@ -1576,7 +1583,7 @@ function renderHizHead() {
     ${thTextFilter("isteyen", "İsteyen", hizColFilters.isteyen, sortOf("isteyen"))}
     ${thTextFilter("uzman", "Uzman Adına", hizColFilters.uzman, sortOf("uzman"))}
     ${thTextFilter("ozet", "Özet", hizColFilters.ozet, null)}
-    <th>Tarih</th>
+    ${thSortOnly("tarih", "Tarih", sortOf("tarih"))}
     <th>Aksiyon</th>
   </tr>`;
 
