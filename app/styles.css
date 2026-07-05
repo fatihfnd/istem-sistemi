@@ -259,7 +259,24 @@ tbody tr.sel{background:var(--accent-soft)}
   .app{height:auto;max-height:none}
   .shell{flex-direction:column}
   .side{width:100%;flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line)}
-  .rail{width:100%;border-left:0;border-top:1px solid var(--line)}
+
+  /* sağ ray (Yeni İstek / detay / düzenleme panelleri): dar ekranda
+     akışa gömülü değil, tam ekran overlay olarak üstten kayarak açılır */
+  .rail{
+    width:100%; border-left:0; border-top:0;
+    position:fixed; inset:0; z-index:60; margin:0; max-height:none;
+    background:var(--card);
+    transform:translateY(-100%); opacity:0; visibility:hidden; pointer-events:none;
+    transition:transform .22s ease, opacity .22s ease, visibility 0s linear .22s;
+  }
+  .rail:has(.rail-head){
+    transform:translateY(0); opacity:1; visibility:visible; pointer-events:auto;
+    transition:transform .22s ease, opacity .22s ease, visibility 0s linear 0s;
+  }
+  .rail .rail-head{position:sticky; top:0; z-index:1; background:var(--card); padding-top:max(16px, env(safe-area-inset-top))}
+  .rail .rail-body{flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch}
+  .rail .rail-foot{position:sticky; bottom:0; background:var(--card); padding-bottom:max(14px, env(safe-area-inset-bottom))}
+
   .setpage{flex-direction:column}
   .setfilter{width:100%;padding:0 26px 12px}
 }

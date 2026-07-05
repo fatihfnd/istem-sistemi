@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "istem-app",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "app", "-l", "5500"],
+      "port": 5500
+    }
+  ]
+}
