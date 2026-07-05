@@ -5,7 +5,7 @@
 // config.js İSTİSNADIR: network-first ile servis edilir. Böylece kullanıcı
 // Supabase bilgilerini güncelleyince eski (boş) kopya önbellekten dönmez;
 // çevrimdışıyken son bilinen kopyaya düşer.
-const CACHE = "istem-shell-v4";
+const CACHE = "istem-shell-v16";
 const ASSETS = [
   "./",
   "./index.html",
