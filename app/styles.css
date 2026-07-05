@@ -108,6 +108,18 @@ tbody td{padding:11px 10px;border-bottom:1px solid var(--line-2);font-size:13px;
 tbody tr{cursor:pointer}
 tbody tr:hover{background:var(--line-2)}
 tbody tr.sel{background:var(--accent-soft)}
+/* Çoklu seçim (checkbox) — tr.sel'den (detay paneli açık satırı) bilerek
+   ayrı bir görsel dil: sol kenarda ince bir şerit. Bir satır aynı anda hem
+   detayda açık hem toplu seçili olabilir, ikisi birlikte okunabilir kalsın. */
+tr.bulk-checked{box-shadow:inset 3px 0 0 var(--accent)}
+.bulkcell{width:1%; padding-right:0!important}
+.bulkcell input[type=checkbox]{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);vertical-align:middle}
+
+/* ---------------- Toplu aksiyon çubuğu ---------------- */
+.bulkbar{display:flex;align-items:center;gap:10px;padding:10px 26px;background:var(--ink);color:#fff}
+.bulkbar.hidden{display:none}
+.bulkbar #bulkCount{font-size:13px;font-weight:600}
+.bulkbar .ub-x{color:#fff}
 .c-blok{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600;white-space:nowrap}
 .c-pat{font-family:var(--mono);font-size:12px;color:var(--ink-2);font-weight:600;white-space:nowrap}
 .c-pat:hover{text-decoration:underline;color:var(--accent)}
@@ -132,6 +144,15 @@ tbody tr.sel{background:var(--accent-soft)}
 .act-cihaza:hover{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b);filter:brightness(0.96)}
 .act-tamamla{border-color:var(--green-i);color:var(--green-i);background:var(--green-b)}
 .act-tamamla:hover{border-color:var(--green-i);color:var(--green-i);background:var(--green-b);filter:brightness(0.96)}
+/* Durum geri alma — küçük, yuvarlak, sadece ikonlu; ileri aksiyonların
+   (mavi/yeşil) renginden bilerek ayrışan nötr gri — karışmasın diye. */
+.act-revert-icon{
+  width:28px;height:28px;flex:none;padding:0;border-radius:50%;
+  border:1px solid var(--line);background:var(--card);color:var(--ink-3);
+  font-size:14px;line-height:1;cursor:pointer;font-family:var(--sans);
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.act-revert-icon:hover{border-color:var(--ink-3);color:var(--ink-2);background:var(--line-2)}
 
 /* right panel */
 .rail{width:372px; flex:none; background:var(--card); border-left:1px solid var(--line); display:flex; flex-direction:column; min-height:0}
@@ -273,6 +294,11 @@ tbody tr.sel{background:var(--accent-soft)}
   .app{height:auto;max-height:none}
   .shell{flex-direction:column}
   .side{width:100%;flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line)}
+
+  /* çoklu seçim checkbox'ı — dokunmatik için büyütülmüş hedef alanı */
+  .bulkcell{padding:6px 10px!important}
+  .bulkcell input[type=checkbox]{width:22px;height:22px}
+  .bulkbar{padding:10px 16px;flex-wrap:wrap}
 
   /* sağ ray (Yeni İstek / detay / düzenleme panelleri): dar ekranda
      akışa gömülü değil, tam ekran overlay olarak üstten kayarak açılır */

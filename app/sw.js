@@ -2,12 +2,15 @@
 // Supabase istekleri (farklı origin) her zaman ağdan geçer, asla önbellek/offline
 // mantığına takılmaz.
 //
-// index.html ve config.js İSTİSNADIR: network-first ile servis edilir —
-// önce ağdan denenir, sadece ağ başarısız olursa (çevrimdışı) son bilinen
-// önbellek kopyasına düşülür. Böylece yeni bir deploy sonrası kullanıcı eski
-// bir index.html/config.js'e "takılı kalmaz" (daha önce config.js'te
-// yaşanan bu soruna karşı index.html'e de aynı strateji uygulandı).
-const CACHE = "istem-shell-v17";
+// index.html, app.js, api.js ve config.js İSTİSNADIR: network-first ile
+// servis edilir — önce ağdan denenir, sadece ağ başarısız olursa
+// (çevrimdışı) son bilinen önbellek kopyasına düşülür. Bunlar uygulamanın
+// DAVRANIŞINI belirleyen dosyalar (auth/boot mantığı dahil) — eski bir
+// kopyada takılı kalmak sadece görsel değil, işlevsel/güvenlik hatalarına
+// yol açabilir (bkz. boot() — eski app.js'te oturum doğrulaması olmayabilir).
+// styles.css bilerek cache-first kalıyor: en kötü ihtimalle bayat bir görsel
+// verir, davranışı bozmaz.
+const CACHE = "istem-shell-v18";
 const ASSETS = [
   "./",
   "./index.html",
@@ -37,6 +40,8 @@ self.addEventListener("activate", (e) => {
 function isNetworkFirst(url, req) {
   return req.mode === "navigate"
     || url.pathname.endsWith("/config.js")
+    || url.pathname.endsWith("/app.js")
+    || url.pathname.endsWith("/api.js")
     || url.pathname.endsWith("/index.html")
     || url.pathname.endsWith("/");
 }

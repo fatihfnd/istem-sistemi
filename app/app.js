@@ -26,7 +26,6 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Durum", value: (r) => PILL[r.durum][1] },
   { label: "Not", value: (r) => r.not_metni || "" },
 ];
-const SESSION_KEY = "istem_session";
 const EMPTY_MSG = {
   kuyruk: { t: "Bir istek seç", d: "Detayını ve durum geçmişini görmek için soldan bir satıra dokun, ya da yeni istek ver." },
   setler: { t: "Bir set seç", d: "Testlerini görmek ve doğrudan istek vermek için bir karta dokun." },
@@ -141,6 +140,9 @@ const EXPORT_MENU_HTML = `
     </div>
   </div>`;
 document.addEventListener("click", () => $$(".exportbox .thfilter.open").forEach((p) => p.classList.remove("open")));
+// Çoklu seçim: checkbox üstünde sürükleyerek seçim (masaüstü, opsiyonel) —
+// sürüklemeyi nerede bitirirse bitirsin devreyi kapatır.
+document.addEventListener("mouseup", () => { dragStartId = null; dragActive = false; });
 
 // Yönetim ekranlarındaki "Sil" aksiyonlarının ortak yolu — basit bir
 // onay diyaloğu + silme + başarı/hata geri bildirimi. Kayıt başka bir
@@ -156,11 +158,6 @@ async function confirmAndDelete(label, deleteFn, onSuccess) {
   }
 }
 
-function getSession() {
-  try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch { return null; }
-}
-function setSession(u) { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); }
-function clearSession() { localStorage.removeItem(SESSION_KEY); }
 
 // ---- state ----
 let session = null;
@@ -173,6 +170,11 @@ const RECENT_CAP = 20;                    // Tek Tek Seç varsayılan görünüm
 const RECENT_SET_CAP = 10;                // Hazır Setler varsayılan görünümünde üst sınır
 let rows = [];
 let selId = null, searchQ = "";
+let bulkSelected = new Set(); // kalem_id'ler — çoklu seçim (İş Kuyruğu)
+let bulkAnchor = null;        // Shift+tık ile ardışık aralık genişletmede sabit kalan "temel" satır
+let dragStartId = null;       // checkbox sürükleyerek seçim (masaüstü, opsiyonel) — mousedown olan satır
+let dragActive = false;       // fare gerçekten başka bir satıra taşındı mı (basit tıkla karışmasın diye)
+let dragValue = false;        // sürüklenirken uygulanacak checked durumu
 let unsub = null, pageUnsub = null, reloadTimer = null;
 let grp = "ihc", prio = "rutin";
 let selectedTests = new Map(); // test_id -> {ad,klon,grup}
@@ -210,7 +212,52 @@ function clearAllFilters() {
   searchQ = "";
   const qs = $("#qSearch"); if (qs) qs.value = "";
   $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+  clearBulkSelection();
   renderTable();
+}
+
+// Çoklu seçim, sekme/filtre değişince ya da bir toplu aksiyon bitince
+// temizlenir — sıralama değişikliğinde ve realtime yeniden yüklemede KORUNUR.
+function clearBulkSelection() {
+  bulkSelected = new Set();
+  bulkAnchor = null;
+  syncBulkUI();
+}
+
+// Düz tık ve Ctrl/Cmd+tık (ve checkbox'a doğrudan tık) buradan geçer —
+// anchor'ı bu satıra taşır ki bir sonraki Shift+tık buradan başlasın.
+function toggleBulkSelect(kalemId) {
+  if (bulkSelected.has(kalemId)) bulkSelected.delete(kalemId);
+  else bulkSelected.add(kalemId);
+  bulkAnchor = kalemId;
+  syncBulkUI();
+}
+
+// Shift+tık — anchor'dan hedefe, GÖRÜNEN sıraya göre aralık seçer. Anchor
+// kasıtlı olarak DEĞİŞMEZ: ardışık Shift+tık'larla aynı temelden aralık
+// büyütülüp küçültülebilsin (Windows Gezgini deseni).
+function selectRange(fromId, toId) {
+  const ids = getVisibleRows().map((r) => r.kalem_id);
+  const i1 = ids.indexOf(fromId), i2 = ids.indexOf(toId);
+  if (i1 === -1 || i2 === -1) { toggleBulkSelect(toId); return; }
+  const [lo, hi] = i1 < i2 ? [i1, i2] : [i2, i1];
+  bulkSelected = new Set(ids.slice(lo, hi + 1));
+  syncBulkUI();
+}
+
+// Tam yeniden çizimden sonra (renderTable) ya da tek başına bir seçim
+// değişikliğinden sonra çağrılır — satırları/checkbox'ları TEK TEK güncelleyip
+// tüm tabloyu yeniden kurmadan akıcı kalır. Artık rows'ta olmayan (silinmiş/
+// realtime'da kaybolmuş) kalem_id'ler burada sessizce düşürülür.
+function syncBulkUI() {
+  bulkSelected = new Set([...bulkSelected].filter((id) => rows.some((r) => r.kalem_id === id)));
+  $$("#rows tr[data-kalem]").forEach((tr) => {
+    const on = bulkSelected.has(tr.dataset.kalem);
+    tr.classList.toggle("bulk-checked", on);
+    const cb = tr.querySelector("[data-bulk-check]");
+    if (cb) cb.checked = on;
+  });
+  renderBulkBar();
 }
 
 const SORT_RANK = {
@@ -228,9 +275,14 @@ function compareForSort(a, b, col) {
 }
 
 // ---------------- Auth ----------------
+// Giriş formunu gösterir — boot() (doğrulanmış oturum yoksa) ve
+// handleLogout() tarafından çağrılır. #bootLoadCard'ı (varsayılan "Yükleniyor…"
+// durumu) gizleyip gerçek formu açar, sonra kullanıcı listesini doldurur.
 async function showAuth() {
   $("#appRoot").classList.add("hidden");
   $("#authOverlay").classList.remove("hidden");
+  $("#bootLoadCard").classList.add("hidden");
+  $("#authCard").classList.remove("hidden");
   $("#authErr").textContent = "";
   $("#authPin").value = "";
   const sel = $("#authUser");
@@ -251,7 +303,6 @@ async function handleAuthSubmit() {
   try {
     const user = await Api.login(id, pin);
     if (!user) { $("#authErr").textContent = "PIN hatalı"; return; }
-    setSession(user);
     $("#authOverlay").classList.add("hidden");
     await initApp(user);
   } catch (e) {
@@ -262,7 +313,6 @@ async function handleAuthSubmit() {
 }
 
 async function handleLogout() {
-  clearSession();
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -393,6 +443,15 @@ function renderQueuePage() {
       </div>
     </div>
     <div class="case-banner hidden" id="caseBanner"></div>
+    <div class="bulkbar hidden" id="bulkBar">
+      <span id="bulkCount"></span>
+      <div class="grow"></div>
+      <button class="act act-cihaza" id="bulkCihazaBtn">Cihaza Al</button>
+      <button class="act act-tamamla" id="bulkTamamlaBtn">Tamamla</button>
+      <button class="btn-ghost btn-sm" id="bulkGeriBtn">↺ Geri Al</button>
+      <button class="btn-ghost btn-sm" id="bulkSilBtn">Sil</button>
+      <button class="ub-x" id="bulkClearBtn" title="Seçimi temizle">×</button>
+    </div>
     <div class="tablewrap">
       <table>
         <thead id="qhead"></thead>
@@ -406,6 +465,7 @@ function renderQueuePage() {
     const b = e.target.closest("button"); if (!b) return;
     setDurumTab(b.dataset.f);
     $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+    clearBulkSelection();
     renderTable();
   });
   $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderTable(); });
@@ -414,6 +474,11 @@ function renderQueuePage() {
     const list = which === "tum" ? rows : getVisibleRows();
     exportToExcel(list, KUYRUK_EXPORT_COLS, `istem_kuyruk_${which === "tum" ? "tumu" : "gorunenler"}`);
   });
+  $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen", "Cihaza alındı"));
+  $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda", "Tamamlandı"));
+  $("#bulkGeriBtn").addEventListener("click", bulkRevert);
+  $("#bulkSilBtn").addEventListener("click", bulkDelete);
+  $("#bulkClearBtn").addEventListener("click", clearBulkSelection);
   $("#rows").addEventListener("click", (e) => {
     const patCell = e.target.closest(".c-pat");
     if (patCell) {
@@ -423,7 +488,7 @@ function renderQueuePage() {
       if (r) openCaseView(r.patoloji_no);
       return;
     }
-    const btn = e.target.closest(".act[data-id]");
+    const btn = e.target.closest(".act[data-id], .act-revert-icon[data-id]");
     if (btn) {
       e.stopPropagation();
       if (btn.dataset.revert) {
@@ -434,8 +499,52 @@ function renderQueuePage() {
       }
       return;
     }
+    const checkEl = e.target.closest("[data-bulk-check]");
+    if (checkEl) {
+      e.stopPropagation();
+      toggleBulkSelect(checkEl.dataset.bulkCheck);
+      return;
+    }
     const tr = e.target.closest("tr[data-kalem]");
-    if (tr) { const r = rows.find((x) => x.kalem_id === tr.dataset.kalem); if (r) showDetail(r); }
+    if (!tr) return;
+    const r = rows.find((x) => x.kalem_id === tr.dataset.kalem);
+    if (!r) return;
+    // Shift/Ctrl+tık: sadece çoklu seçimi yönetir, detay panelini AÇMAZ
+    // (mevcut seçili detay ne ise öyle kalır).
+    if (e.shiftKey && bulkAnchor) { e.preventDefault(); selectRange(bulkAnchor, r.kalem_id); return; }
+    if (e.ctrlKey || e.metaKey) { toggleBulkSelect(r.kalem_id); return; }
+    // Düz tık: hem detay panelini açar (mevcut davranış) hem çoklu seçimi
+    // bu tek satıra indirger (öncekini temizler).
+    bulkSelected = new Set([r.kalem_id]);
+    bulkAnchor = r.kalem_id;
+    syncBulkUI();
+    showDetail(r);
+  });
+  // Sürükleyerek seçim (masaüstü, opsiyonel — bkz. plan #7): basit bir tıkla
+  // ASLA çakışmaz, çünkü sadece fare GERÇEKTEN başka bir checkbox'a
+  // taşındığında (dragActive) devreye girer — aksi halde native "click"
+  // olayı yukarıdaki handler'dan normal şekilde (tek seferlik toggle) geçer.
+  $("#rows").addEventListener("mousedown", (e) => {
+    const cb = e.target.closest("[data-bulk-check]");
+    if (!cb) return;
+    dragStartId = cb.dataset.bulkCheck;
+    dragActive = false;
+    dragValue = !bulkSelected.has(dragStartId);
+  });
+  $("#rows").addEventListener("mouseover", (e) => {
+    if (!dragStartId) return;
+    const cb = e.target.closest("[data-bulk-check]");
+    if (!cb) return;
+    const id = cb.dataset.bulkCheck;
+    if (!dragActive) {
+      if (id === dragStartId) return; // fare henüz aynı checkbox üstünde, sürükleme başlamadı
+      dragActive = true;
+      if (dragValue) bulkSelected.add(dragStartId); else bulkSelected.delete(dragStartId);
+      bulkAnchor = dragStartId;
+    }
+    if (dragValue) bulkSelected.add(id); else bulkSelected.delete(id);
+    bulkAnchor = id;
+    syncBulkUI();
   });
   $("#qhead").addEventListener("click", (e) => {
     const caret = e.target.closest("[data-thopen]");
@@ -470,6 +579,7 @@ function renderQueuePage() {
     } else {
       if (chk.checked) colFilters[key].add(val); else colFilters[key].delete(val);
     }
+    clearBulkSelection();
     renderTable();
   });
   // Metin sütun filtreleri — canlı arama.
@@ -477,6 +587,7 @@ function renderQueuePage() {
     const inp = e.target.closest("[data-thsearch]");
     if (!inp) return;
     colFilters[inp.dataset.thsearch] = inp.value.toLowerCase();
+    clearBulkSelection();
     renderTable();
   });
 
@@ -538,7 +649,7 @@ function renderQHead() {
   const head = $("#qhead");
   if (!head) return;
   if (caseView !== null) {
-    head.innerHTML = `<tr><th>Aksiyon</th><th>Patoloji No</th><th>Blok</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Uzman Adına</th><th>Tarih</th><th>Öncelik</th><th>Durum</th><th>Not</th></tr>`;
+    head.innerHTML = `<tr><th></th><th>Aksiyon</th><th>Patoloji No</th><th>Blok</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Uzman Adına</th><th>Tarih</th><th>Öncelik</th><th>Durum</th><th>Not</th></tr>`;
     return;
   }
 
@@ -554,6 +665,7 @@ function renderQHead() {
 
   const sortOf = (key) => ({ active: sortCol === key, dir: sortDir });
   head.innerHTML = `<tr>
+    <th></th>
     <th>Aksiyon</th>
     ${thTextFilter("pat", "Patoloji No", colFilters.pat, sortOf("pat"))}
     ${thTextFilter("blok", "Blok", colFilters.blok, sortOf("blok"))}
@@ -624,15 +736,16 @@ function renderTable() {
     } else if (r.durum === "cihazda") {
       act = `<div class="actrow">
         <button class="act act-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>
-        <button class="act" data-id="${r.kalem_id}" data-revert="1">↩ Geri al</button>
+        <button class="act-revert-icon" data-id="${r.kalem_id}" data-revert="1" title="Geri al" aria-label="Geri al">↺</button>
       </div>`;
     } else {
-      act = `<button class="act" data-id="${r.kalem_id}" data-revert="1">↩ Geri al</button>`;
+      act = `<button class="act-revert-icon" data-id="${r.kalem_id}" data-revert="1" title="Geri al" aria-label="Geri al">↺</button>`;
     }
     const notCell = r.not_metni
       ? `<span class="note-txt" title="${esc(r.not_metni)}">${esc(r.not_metni.length > 40 ? r.not_metni.slice(0, 40) + "…" : r.not_metni)}</span>`
       : "";
-    tr.innerHTML = `<td>${act}</td>
+    tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
+      <td>${act}</td>
       <td class="c-pat">${esc(r.patoloji_no)}</td>
       <td class="c-blok">${esc(r.blok_no)}</td>
       <td class="c-test">${esc(r.test_adi)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
@@ -646,6 +759,7 @@ function renderTable() {
     tb.appendChild(tr);
   });
   updateCounts();
+  syncBulkUI();
 }
 
 function updateCounts() {
@@ -682,6 +796,63 @@ async function revertDurum(kalemId, fromDurum) {
   } catch (e) {
     toast("Durum geri alınamadı", true);
   }
+}
+
+// ---------------- Toplu aksiyonlar (İş Kuyruğu çoklu seçim) ----------------
+function renderBulkBar() {
+  const bar = $("#bulkBar");
+  if (!bar) return;
+  const n = bulkSelected.size;
+  bar.classList.toggle("hidden", n === 0);
+  if (n) $("#bulkCount").textContent = `${n} seçili`;
+}
+
+function summarize(prefix, ok, skipped, fail) {
+  let msg = `${ok} ${prefix}, ${skipped} atlandı (uygun değildi)`;
+  if (fail) msg += `, ${fail} başarısız`;
+  toast(msg, ok === 0 && fail > 0);
+}
+
+// Cihaza Al / Tamamla — mevcut tekli advance() ile aynı primitif
+// (Api.advanceDurum), sadece seçili+uygun (fromDurum'daki) kalemler için
+// paralel çalıştırılır. İleri aksiyonlarda (tekli davranışla simetrik) onay
+// istenmez.
+async function bulkAdvance(toDurum, fromDurum) {
+  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && r.durum === fromDurum);
+  const skipped = bulkSelected.size - targets.length;
+  if (!targets.length) { toast("Uygun satır yok", true); return; }
+  const results = await Promise.allSettled(targets.map((r) => Api.advanceDurum(r.kalem_id, toDurum, session.id)));
+  const ok = results.filter((r) => r.status === "fulfilled").length;
+  clearBulkSelection();
+  await loadQueue();
+  summarize("güncellendi", ok, skipped, results.length - ok);
+}
+
+// Geri Al — her satır KENDİ durumuna göre bir önceki adıma döner
+// (REVERT_TO), tekli revertDurum ile aynı kural; tek bir toplu onay.
+async function bulkRevert() {
+  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && REVERT_TO[r.durum]);
+  const skipped = bulkSelected.size - targets.length;
+  if (!targets.length) { toast("Uygun satır yok", true); return; }
+  if (!confirm(`${targets.length} kaydın durumu geri alınsın mı?`)) return;
+  const results = await Promise.allSettled(targets.map((r) => Api.advanceDurum(r.kalem_id, REVERT_TO[r.durum], session.id)));
+  const ok = results.filter((r) => r.status === "fulfilled").length;
+  clearBulkSelection();
+  await loadQueue();
+  summarize("güncellendi", ok, skipped, results.length - ok);
+}
+
+// Sil — mevcut tekli kısıt AYNEN: Tamamlandı durumundaki kalemler silinemez.
+async function bulkDelete() {
+  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && r.durum !== "tamamlandi");
+  const skipped = bulkSelected.size - targets.length;
+  if (!targets.length) { toast("Uygun satır yok", true); return; }
+  if (!confirm(`${targets.length} kaydı silmek istediğinize emin misiniz? Bu geri alınamaz.`)) return;
+  const results = await Promise.allSettled(targets.map((r) => Api.deleteIstemKalem(r.kalem_id)));
+  const ok = results.filter((r) => r.status === "fulfilled").length;
+  clearBulkSelection();
+  await loadQueue(); // silinen satır o an detayda açıksa loadQueue kendi showEmpty()'yi tetikler
+  summarize("silindi", ok, skipped, results.length - ok);
 }
 
 async function loadQueue() {
@@ -2219,26 +2390,24 @@ function renderYedekList() {
   $("#updateBannerClose").addEventListener("click", () => $("#updateBanner").classList.remove("show"));
   registerSW();
 
-  // Önce GERÇEK Supabase Auth oturumuna bak (localStorage'a körü körüne
-  // güvenmek yerine) — secure_rls_authenticated.sql çalıştıktan sonra
-  // veri erişimi zaten sadece bu yolla mümkün olacak.
+  // Eski (Auth migrasyonundan önceki) "istem_session" localStorage işareti —
+  // artık hiçbir yerde yazılmıyor/okunmuyor, sadece eski taraycılarda kalmış
+  // olabilecek kopyayı bir kerelik temizliyoruz. ASLA güvenilmez: tek
+  // güvenilir kaynak her zaman client.auth.getSession()'dır — secure_rls_
+  // authenticated.sql çalıştıktan sonra RLS authenticated-only kilitli
+  // olduğundan, doğrulanmamış bir oturumla açılan İş Kuyruğu'nda TÜM veri
+  // istekleri sessizce başarısız oluyordu (kullanıcı elle çıkış yapıp tekrar
+  // girene kadar).
+  try { localStorage.removeItem("istem_session"); } catch (e) { /* localStorage kapalıysa önemli değil */ }
+
+  // #bootLoadCard (index.html'de varsayılan görünür) bu kontrol sonuçlanana
+  // kadar tek görünen şey — ne boş bir giriş formu flaşı, ne de doğrulanmamış
+  // bir oturumla doğrudan uygulama.
   let real = null;
   try { real = await Api.getCurrentAuthSession(); } catch (e) { real = null; }
   if (real) {
-    setSession(real);
     await initApp(real);
-    return;
-  }
-
-  // Gerçek Auth oturumu yok — GEÇİCİ: henüz Auth'a taşınmamış bir
-  // kullanıcının dual-mode fallback ile girmiş olabileceği eski
-  // localStorage oturumuna bak (migrasyon tamamlanıp RLS kilitlenince
-  // bu dal zaten anlamsızlaşır, veri istekleri RLS'ye takılır).
-  const legacy = getSession();
-  if (legacy) {
-    await initApp(legacy);
   } else {
-    clearSession();
     showAuth();
   }
 })();

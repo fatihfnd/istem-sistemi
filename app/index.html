@@ -17,9 +17,17 @@
 </head>
 <body>
 
-<!-- GİRİŞ EKRANI (ad seç + PIN) -->
+<!-- BOOT: client.auth.getSession() sonuçlanana kadar tek görünen şey bu —
+     ne giriş formu (boş dropdown flaşı) ne de eski/doğrulanmamış bir
+     localStorage işaretiyle doğrudan uygulama gösterilir. -->
 <div class="authoverlay" id="authOverlay">
-  <div class="authcard">
+  <div class="authcard" id="bootLoadCard">
+    <div class="wordmark" style="justify-content:center"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+    <p style="text-align:center;color:var(--ink-3);font-size:13px;padding:18px 0 4px">Yükleniyor…</p>
+  </div>
+
+  <!-- GİRİŞ EKRANI (ad seç + PIN) -->
+  <div class="authcard hidden" id="authCard">
     <div class="wordmark"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
     <p class="m-label">Kullanıcı</p>
     <select id="authUser"></select>
