@@ -13,6 +13,19 @@ let TIP = Object.fromEntries(GROUPS);
 const ROL_LABEL = { uzman: "Uzman Patolog", asistan: "Asistan", teknisyen: "Teknisyen" };
 const PILL = { bekleyen: ["st-bekleyen", "Bekleyen"], cihazda: ["st-cihazda", "Cihazda"], tamamlandi: ["st-tamamlandi", "Tamamlandı"] };
 const PRIO = { rutin: ["p-rutin", "Rutin"], acil: ["p-acil", "Acil"], stat: ["p-stat", "STAT"] };
+const KUYRUK_EXPORT_COLS = [
+  { label: "Patoloji No", value: (r) => r.patoloji_no },
+  { label: "Blok", value: (r) => r.blok_no },
+  { label: "Test", value: (r) => r.test_adi },
+  { label: "Klon", value: (r) => r.klon || "" },
+  { label: "Tip", value: (r) => TIP[r.grup] || "Diğer" },
+  { label: "İsteyen", value: (r) => r.isteyen_adi || "" },
+  { label: "Uzman Adına", value: (r) => r.uzman_adi || "" },
+  { label: "Tarih", value: (r) => formatDateFull(r.created_at) },
+  { label: "Öncelik", value: (r) => PRIO[r.oncelik][1] },
+  { label: "Durum", value: (r) => PILL[r.durum][1] },
+  { label: "Not", value: (r) => r.not_metni || "" },
+];
 const SESSION_KEY = "istem_session";
 const EMPTY_MSG = {
   kuyruk: { t: "Bir istek seç", d: "Detayını ve durum geçmişini görmek için soldan bir satıra dokun, ya da yeni istek ver." },
@@ -23,6 +36,7 @@ const EMPTY_MSG = {
   kullanicilar: { t: "Bir kullanıcı seç", d: "Düzenlemek için bir kullanıcıya dokun, ya da yeni kullanıcı ekle." },
   "test-gruplari": { t: "Bir grup seç", d: "Düzenlemek için bir gruba dokun, ya da yeni grup ekle." },
   "test-katalogu": { t: "Bir test seç", d: "Düzenlemek için bir teste dokun, ya da yeni test ekle." },
+  yedekler: { t: "Otomatik yedekler", d: "Her gece 02:00'de alınan veritabanı yedeklerini buradan indirebilirsiniz." },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -68,6 +82,46 @@ function toast(msg, isErr) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
 }
+
+// ---------------- Excel'e Aktar (manuel, tarayıcı tarafı — SheetJS) ----------------
+// columns: [{label, value(row)}]. Dosya adı otomatik tarih damgalı.
+function exportToExcel(rows, columns, filenamePrefix) {
+  if (!rows.length) { toast("Aktarılacak kayıt yok", true); return; }
+  const data = rows.map((r) => Object.fromEntries(columns.map((c) => [c.label, c.value(r)])));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Veri");
+  const tarih = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `${filenamePrefix}_${tarih}.xlsx`);
+}
+
+// "Excel'e Aktar ▾" butonu + Görünenler/Tümü mini menüsü — hem İş Kuyruğu
+// hem Hizmetler sayfasında aynı davranışı verir. onPick("gorunen"|"tum")
+// export'u tetikler.
+function bindExportMenu(boxSel, onPick) {
+  const box = $(boxSel);
+  if (!box) return;
+  box.querySelector(".exportbtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    box.querySelector(".thfilter").classList.toggle("open");
+  });
+  box.querySelectorAll("[data-exp]").forEach((opt) => {
+    opt.addEventListener("click", (e) => {
+      e.stopPropagation();
+      box.querySelector(".thfilter").classList.remove("open");
+      onPick(opt.dataset.exp);
+    });
+  });
+}
+const EXPORT_MENU_HTML = `
+  <div class="exportbox">
+    <button class="btn-ghost btn-sm exportbtn">Excel'e Aktar ▾</button>
+    <div class="thfilter" style="right:auto;left:0">
+      <button class="thopt" data-exp="gorunen">Görünenler</button>
+      <button class="thopt" data-exp="tum">Tümü</button>
+    </div>
+  </div>`;
+document.addEventListener("click", () => $$(".exportbox .thfilter.open").forEach((p) => p.classList.remove("open")));
 
 // Yönetim ekranlarındaki "Sil" aksiyonlarının ortak yolu — basit bir
 // onay diyaloğu + silme + başarı/hata geri bildirimi. Kayıt başka bir
@@ -252,6 +306,8 @@ function navigate(page) {
     renderTestGruplariPage();
   } else if (page === "test-katalogu") {
     renderTestKatalogPage();
+  } else if (page === "yedekler") {
+    renderYedeklerPage();
   }
 }
 
@@ -272,6 +328,7 @@ function renderQueuePage() {
         <button class="${filter === "tamamlandi" ? "on" : ""}" data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
       </div>
       <div class="grow"></div>
+      <div id="qExport">${EXPORT_MENU_HTML}</div>
       <div class="msearch">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
         <input id="qSearch" placeholder="Blok, patoloji no…" value="${esc(searchQ)}">
@@ -293,6 +350,10 @@ function renderQueuePage() {
     filter = b.dataset.f; renderTable();
   });
   $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderTable(); });
+  bindExportMenu("#qExport", (which) => {
+    const list = which === "tum" ? rows : getVisibleRows();
+    exportToExcel(list, KUYRUK_EXPORT_COLS, `istem_kuyruk_${which === "tum" ? "tumu" : "gorunenler"}`);
+  });
   $("#rows").addEventListener("click", (e) => {
     const patCell = e.target.closest(".c-pat");
     if (patCell) {
@@ -416,6 +477,21 @@ function passesFilter(r) {
   return true;
 }
 
+// Ekranda o an görünen (filtre+arama+sıralama+vaka görünümü uygulanmış)
+// satırlar — hem renderTable hem "Görünenler" Excel export'u bunu kullanır.
+function getVisibleRows() {
+  if (caseView !== null) {
+    return rows.filter((r) => r.patoloji_no === caseView)
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  }
+  let list = rows.filter(passesFilter);
+  if (sortCol) {
+    const dir = sortDir === "asc" ? 1 : -1;
+    list = [...list].sort((a, b) => compareForSort(a, b, sortCol) * dir);
+  }
+  return list;
+}
+
 function renderTable() {
   const tb = $("#rows");
   if (!tb) return; // kuyruk sayfasında değiliz
@@ -423,17 +499,7 @@ function renderTable() {
   renderCaseBanner();
   tb.innerHTML = "";
 
-  let list;
-  if (caseView !== null) {
-    list = rows.filter((r) => r.patoloji_no === caseView)
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  } else {
-    list = rows.filter(passesFilter);
-    if (sortCol) {
-      const dir = sortDir === "asc" ? 1 : -1;
-      list = [...list].sort((a, b) => compareForSort(a, b, sortCol) * dir);
-    }
-  }
+  const list = getVisibleRows();
 
   list.forEach((r) => {
     const tr = document.createElement("tr");
@@ -1187,6 +1253,16 @@ function showCihazForm(existing) {
 // HİZMETLER (faturalama — laboratuvar iş akışından bağımsız)
 // ================================================================
 let hizmetlerList = [];
+const HIZMETLER_EXPORT_COLS = [
+  { label: "Patoloji No", value: (h) => h.patoloji_no },
+  { label: "İsteyen", value: (h) => h.isteyen_adi || "" },
+  { label: "Uzman Adına", value: (h) => h.uzman_adi || "" },
+  { label: "Özet", value: (h) => h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") },
+  { label: "Tarih", value: (h) => formatDT(h.created_at) },
+  { label: "Fatura Durumu", value: (h) => (h.fatura_girildi ? "Girildi" : "Girilmedi") },
+  { label: "Fatura Giren", value: (h) => h.fatura_giren_adi || "" },
+  { label: "Fatura Zamanı", value: (h) => (h.fatura_zamani ? formatDT(h.fatura_zamani) : "") },
+];
 
 function renderHizmetlerPage() {
   $("#mainView").innerHTML = `
@@ -1194,6 +1270,7 @@ function renderHizmetlerPage() {
       <h1>Hizmetler</h1>
       <div class="sub">Faturalama özeti — her satır bir "İstek Ver" işlemini (istemler kaydını) temsil eder.</div>
       <div class="spacer"></div>
+      <div id="hizExport">${EXPORT_MENU_HTML}</div>
     </div>
     <div class="tablewrap">
       <table>
@@ -1202,6 +1279,9 @@ function renderHizmetlerPage() {
       </table>
     </div>`;
 
+  bindExportMenu("#hizExport", () => {
+    exportToExcel(hizmetlerList, HIZMETLER_EXPORT_COLS, "istem_hizmetler");
+  });
   $("#hizRows").addEventListener("click", (e) => {
     const patCell = e.target.closest("[data-pat]");
     if (patCell) {
@@ -1711,6 +1791,64 @@ function registerSW() {
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
   }
+}
+
+// ================================================================
+// YEDEKLER (otomatik günlük yedek dosyaları — Storage, bkz. yedekler_sema.sql)
+// ================================================================
+let YEDEKLER_LIST = [];
+
+function formatBytes(n) {
+  if (!n && n !== 0) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderYedeklerPage() {
+  $("#mainView").innerHTML = `
+    <div class="page-head">
+      <h1>Yedekler</h1>
+      <div class="sub">Her gece 02:00'de otomatik alınan veritabanı yedekleri.</div>
+      <div class="spacer"></div>
+    </div>
+    <div class="devlist" id="yedekList"></div>`;
+  loadYedekler();
+}
+
+async function loadYedekler() {
+  try {
+    YEDEKLER_LIST = await Api.listYedekler();
+  } catch (e) {
+    toast("Yedekler yüklenemedi — yedekler_sema.sql çalıştırıldı mı?", true);
+    YEDEKLER_LIST = [];
+  }
+  if (currentPage !== "yedekler") return;
+  renderYedekList();
+}
+
+function renderYedekList() {
+  const wrap = $("#yedekList"); if (!wrap) return;
+  if (!YEDEKLER_LIST.length) {
+    wrap.innerHTML = `<div class="empty"><div class="t">Henüz yedek yok</div><div class="d">İlk otomatik yedek gece 02:00'de alınacak.</div></div>`;
+    return;
+  }
+  wrap.innerHTML = YEDEKLER_LIST.map((f) => `
+    <div class="devrow" style="cursor:default">
+      <div><div class="nm">${esc(f.name)}</div><div class="tip">${formatBytes(f.metadata?.size)} · ${formatDT(f.created_at)}</div></div>
+      <div class="grow"></div>
+      <button class="act" data-indir="${esc(f.name)}">İndir</button>
+    </div>`).join("");
+  wrap.querySelectorAll("[data-indir]").forEach((btn) => {
+    btn.onclick = async () => {
+      try {
+        const url = await Api.getYedekIndirLink(btn.dataset.indir);
+        window.open(url, "_blank");
+      } catch (e) {
+        toast("İndirme linki alınamadı", true);
+      }
+    };
+  });
 }
 
 // ---------------- Boot ----------------

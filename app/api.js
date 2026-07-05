@@ -528,6 +528,25 @@
       if (error) throw error;
     },
 
+    // ---------------- Yedekler (otomatik günlük yedek — Storage) ----------------
+    // "yedekler" private bucket'ı ve daily-backup Edge Function'ı
+    // yedekler_sema.sql ile kurulur (bkz. proje kökü).
+    async listYedekler() {
+      const { data, error } = await client.storage
+        .from("yedekler")
+        .list("", { sortBy: { column: "created_at", order: "desc" } });
+      return must(data, error);
+    },
+
+    // Bucket private olduğu için doğrudan link çalışmaz — kısa ömürlü
+    // (60sn) imzalı bir indirme URL'i alınır.
+    async getYedekIndirLink(path) {
+      const { data, error } = await client.storage
+        .from("yedekler")
+        .createSignedUrl(path, 60);
+      return must(data, error).signedUrl;
+    },
+
     // ---------------- Hizmetler (faturalama) ----------------
     // Tüm kullanıcılar (aktif filtresi yok — geçmişte pasif olmuş
     // kullanıcının adı da eski kayıtlarda görünmeye devam etsin).
@@ -600,11 +619,18 @@
     },
 
     // ---------------- İş kuyruğu ----------------
+    // "Tümü" sekmesinde durum değişince satır sıçramasın diye ikincil,
+    // sabit bir sıralama anahtarı (kalem_id) şart: aynı istemden gelen
+    // kalemler genelde aynı created_at'e sahip (tek INSERT), bu yüzden
+    // sadece created_at'e göre sıralamak eşit değerlerde Postgres'in
+    // fiziksel satır sırasına bağlı kalır — bir UPDATE (durum değişimi)
+    // o satırın fiziksel konumunu değiştirip sırayı bozabilir.
     async listQueue() {
       const { data, error } = await client
         .from("istem_kuyruk_v")
         .select("*")
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .order("kalem_id", { ascending: true });
       return must(data, error);
     },
 

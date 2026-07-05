@@ -93,6 +93,7 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .thopt:hover{background:var(--line-2);color:var(--ink)}
 .thopt.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .note-txt{color:var(--ink-3);font-size:12px;cursor:default;white-space:nowrap}
+.exportbox{position:relative}
 .barrow.dimmed{opacity:.45;pointer-events:none}
 .case-banner{display:flex;align-items:center;gap:14px;padding:10px 26px;background:var(--accent-soft);border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)}
 .case-banner b{color:var(--accent)}
