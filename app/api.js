@@ -528,6 +528,37 @@
       if (error) throw error;
     },
 
+    // ---------------- Son kullanılanlar (test seçici + Hazır Setler önceliklendirme) ----------------
+    // son_kullanilanlar_sema.sql ile kurulur (bkz. proje kökü). Tablo/view
+    // henüz yoksa (sql çalıştırılmadıysa) çağıran taraf (initApp) bunu
+    // Promise.allSettled ile tolere edip eski (tam liste) davranışa düşer.
+    async getSonKullanilanTestler(kullaniciId) {
+      const { data, error } = await client
+        .from("istem_test_kullanim_v")
+        .select("test_id,grup,son_kullanim")
+        .eq("kullanici_id", kullaniciId)
+        .order("son_kullanim", { ascending: false });
+      return must(data, error);
+    },
+
+    async getSonKullanilanSetler(kullaniciId) {
+      const { data, error } = await client
+        .from("set_kullanim_v")
+        .select("istek_seti_id,son_kullanim,kullanim_sayisi")
+        .eq("kullanici_id", kullaniciId)
+        .order("son_kullanim", { ascending: false });
+      return must(data, error);
+    },
+
+    // Best-effort telemetri — bir Hazır Set quick-fill ile forma dolduğunda
+    // çağrılır. Çağıran taraf .catch ile yutar, forma engel olmaz.
+    async logSetKullanimi(kullaniciId, istekSetiId) {
+      const { error } = await client
+        .from("set_kullanim_log")
+        .insert({ kullanici_id: kullaniciId, istek_seti_id: istekSetiId });
+      if (error) throw error;
+    },
+
     // ---------------- Yedekler (otomatik günlük yedek — Storage) ----------------
     // "yedekler" private bucket'ı ve daily-backup Edge Function'ı
     // yedekler_sema.sql ile kurulur (bkz. proje kökü).

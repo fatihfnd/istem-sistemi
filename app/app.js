@@ -74,6 +74,25 @@ function activeSetsInst(list) {
   return groupByGrup(list.filter((s) => s.aktif));
 }
 
+// istem_test_kullanim_v satırlarını (zaten son_kullanim'e göre azalan sırada)
+// CAT'teki ad/klon ile zenginleştirip gruba göre ayırır. Pasifleştirilmiş/
+// silinmiş testler (artık CAT'te yok) sessizce atlanır.
+function buildRecentTests(usageRows) {
+  const byGrup = {};
+  usageRows.forEach((u) => {
+    const t = (CAT[u.grup] || []).find((c) => c.id === u.test_id);
+    if (!t) return;
+    (byGrup[u.grup] ??= []).push({ id: t.id, ad: t.ad, klon: t.klon, grup: u.grup });
+  });
+  return byGrup;
+}
+
+function buildRecentSetlerMap(usageRows) {
+  const map = new Map();
+  usageRows.forEach((u) => map.set(u.istek_seti_id, { son_kullanim: u.son_kullanim, kullanim_sayisi: u.kullanim_sayisi }));
+  return map;
+}
+
 let toastTimer = null;
 function toast(msg, isErr) {
   const t = $("#toast");
@@ -148,8 +167,12 @@ let session = null;
 let CAT = {}, UZMANLAR = [], CIHAZLAR = [];
 let ISTEK_SETLERI = [], SETS_INST = {};   // kurumsal, herkese açık
 let MY_SABLONLAR = [], SETS_MINE = {};    // kişiye özel
+let RECENT_TESTS = {};                    // {grup: [{id,ad,klon,grup}]} — kullanıcının en son kullandığı testler
+let RECENT_SETLER = new Map();            // istek_seti_id -> {son_kullanim, kullanim_sayisi}
+const RECENT_CAP = 20;                    // Tek Tek Seç varsayılan görünümünde grup başına üst sınır
+const RECENT_SET_CAP = 10;                // Hazır Setler varsayılan görünümünde üst sınır
 let rows = [];
-let filter = "all", selId = null, searchQ = "";
+let selId = null, searchQ = "";
 let unsub = null, pageUnsub = null, reloadTimer = null;
 let grp = "ihc", prio = "rutin";
 let selectedTests = new Map(); // test_id -> {ad,klon,grup}
@@ -157,15 +180,44 @@ let customItems = []; // {ad, sel, grup}
 let uiWired = false;
 let currentPage = "kuyruk";
 let setFilterGrup = "all", setFilterUzmanlik = "all";
-let colFilters = { blok: null, pat: null, tip: null, isteyen: null, oncelik: null };
+// Metin alanları: küçük harfe çevrilmiş alt-dizi arama. Set alanları
+// (tip/oncelik/durum): çoklu seçim — "durum" aynı zamanda üstteki
+// Tümü/Bekleyen/Cihazda/Tamamlandı sekmeleriyle PAYLAŞILAN tek gerçek kaynak
+// (bkz. isTabActive/setDurumTab) — sekmeler tek değere kısayol, sütun
+// başlığındaki checkbox listesi aynı Set'i çoklu işaretleyebilir.
+function freshColFilters() {
+  return {
+    pat: "", blok: "", test: "", isteyen: "", uzman: "",
+    tip: new Set(), oncelik: new Set(), durum: new Set(),
+  };
+}
+let colFilters = freshColFilters();
 let sortCol = null, sortDir = "asc";
 let caseView = null; // aktifken bir patoloji_no string'i (vaka görünümü)
+
+function isTabActive(f) {
+  return f === "all" ? colFilters.durum.size === 0 : colFilters.durum.size === 1 && colFilters.durum.has(f);
+}
+function setDurumTab(f) {
+  colFilters.durum = f === "all" ? new Set() : new Set([f]);
+}
+function hasActiveFilters() {
+  return Boolean(searchQ) || Boolean(colFilters.pat || colFilters.blok || colFilters.test || colFilters.isteyen || colFilters.uzman)
+    || colFilters.tip.size > 0 || colFilters.oncelik.size > 0 || colFilters.durum.size > 0;
+}
+function clearAllFilters() {
+  colFilters = freshColFilters();
+  searchQ = "";
+  const qs = $("#qSearch"); if (qs) qs.value = "";
+  $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+  renderTable();
+}
 
 const SORT_RANK = {
   oncelik: { rutin: 0, acil: 1, stat: 2 },
   durum: { bekleyen: 0, cihazda: 1, tamamlandi: 2 },
 };
-const SORT_FIELD = { blok: "blok_no", pat: "patoloji_no", tip: "grup", isteyen: "isteyen_adi", oncelik: "oncelik", durum: "durum" };
+const SORT_FIELD = { blok: "blok_no", pat: "patoloji_no", test: "test_adi", tip: "grup", isteyen: "isteyen_adi", uzman: "uzman_adi", oncelik: "oncelik", durum: "durum" };
 function compareForSort(a, b, col) {
   if (col === "oncelik" || col === "durum") {
     const rank = SORT_RANK[col];
@@ -214,8 +266,8 @@ async function handleLogout() {
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
-  rows = []; selId = null; filter = "all"; searchQ = "";
-  colFilters = { blok: null, pat: null, tip: null, isteyen: null, oncelik: null };
+  rows = []; selId = null; searchQ = "";
+  colFilters = freshColFilters();
   sortCol = null; sortDir = "asc"; caseView = null;
   currentPage = "kuyruk";
   $("#appRoot").classList.add("hidden");
@@ -236,8 +288,9 @@ async function initApp(user) {
   // yine de yüklenir — tek bir eksik tablo tüm girişi kilitlemesin.
   const results = await Promise.allSettled([
     Api.getTestKatalog(), Api.getIstekSetleri(), Api.getMySablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getTestGruplari(),
+    Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id),
   ]);
-  const [catR, setlerR, mineR, uzmanlarR, cihazlarR, gruplarR] = results;
+  const [catR, setlerR, mineR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR] = results;
   if (catR.status === "fulfilled") CAT = catR.value; else toast("Test kataloğu yüklenemedi", true);
   if (setlerR.status === "fulfilled") { ISTEK_SETLERI = setlerR.value; SETS_INST = activeSetsInst(ISTEK_SETLERI); }
   else toast("İstek Setleri yüklenemedi — setler_sema.sql çalıştırıldı mı?", true);
@@ -250,6 +303,10 @@ async function initApp(user) {
   } else if (gruplarR.status === "rejected") {
     toast("Test grupları yüklenemedi — yonetim_sema.sql çalıştırıldı mı? (varsayılan gruplar kullanılıyor)", true);
   }
+  // son_kullanilanlar_sema.sql henüz çalıştırılmadıysa bu iki view/tablo yok
+  // olur — sessizce eski (tam liste) davranışa düşülür, hata gösterilmez.
+  if (sonTestR.status === "fulfilled") RECENT_TESTS = buildRecentTests(sonTestR.value);
+  if (sonSetR.status === "fulfilled") RECENT_SETLER = buildRecentSetlerMap(sonSetR.value);
 
   wireStaticUI();
   if (unsub) unsub();
@@ -322,12 +379,13 @@ function renderQueuePage() {
     </div>
     <div class="barrow" id="barrow">
       <div class="tabs" id="tabs">
-        <button class="${filter === "all" ? "on" : ""}" data-f="all">Tümü <span class="count" data-c="all">0</span></button>
-        <button class="${filter === "bekleyen" ? "on" : ""}" data-f="bekleyen">Bekleyen <span class="count" data-c="bekleyen">0</span></button>
-        <button class="${filter === "cihazda" ? "on" : ""}" data-f="cihazda">Cihazda <span class="count" data-c="cihazda">0</span></button>
-        <button class="${filter === "tamamlandi" ? "on" : ""}" data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
+        <button class="${isTabActive("all") ? "on" : ""}" data-f="all">Tümü <span class="count" data-c="all">0</span></button>
+        <button class="${isTabActive("bekleyen") ? "on" : ""}" data-f="bekleyen">Bekleyen <span class="count" data-c="bekleyen">0</span></button>
+        <button class="${isTabActive("cihazda") ? "on" : ""}" data-f="cihazda">Cihazda <span class="count" data-c="cihazda">0</span></button>
+        <button class="${isTabActive("tamamlandi") ? "on" : ""}" data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
       </div>
       <div class="grow"></div>
+      <button class="btn-ghost btn-sm hidden" id="clearFiltersBtn">Filtreleri Temizle</button>
       <div id="qExport">${EXPORT_MENU_HTML}</div>
       <div class="msearch">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
@@ -346,10 +404,12 @@ function renderQueuePage() {
 
   $("#tabs").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
-    $$("#tabs button").forEach((x) => x.classList.remove("on")); b.classList.add("on");
-    filter = b.dataset.f; renderTable();
+    setDurumTab(b.dataset.f);
+    $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+    renderTable();
   });
   $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderTable(); });
+  $("#clearFiltersBtn").addEventListener("click", clearAllFilters);
   bindExportMenu("#qExport", (which) => {
     const list = which === "tum" ? rows : getVisibleRows();
     exportToExcel(list, KUYRUK_EXPORT_COLS, `istem_kuyruk_${which === "tum" ? "tumu" : "gorunenler"}`);
@@ -375,21 +435,10 @@ function renderQueuePage() {
       const panel = $(`[data-thpanel="${caret.dataset.thopen}"]`);
       const isOpen = panel.classList.contains("open");
       $$(".thfilter.open").forEach((p) => p.classList.remove("open"));
-      if (!isOpen) panel.classList.add("open");
-      return;
-    }
-    const opt = e.target.closest("[data-thkey]");
-    if (opt) {
-      e.stopPropagation();
-      const key = opt.dataset.thkey, val = opt.dataset.thval || null;
-      if (key === "durum") {
-        filter = val || "all";
-        $$("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.f === filter));
-      } else {
-        colFilters[key] = val;
+      if (!isOpen) {
+        panel.classList.add("open");
+        panel.querySelector("[data-thsearch]")?.focus();
       }
-      $$(".thfilter.open").forEach((p) => p.classList.remove("open"));
-      renderTable();
       return;
     }
     const label = e.target.closest("[data-sortcol]");
@@ -399,6 +448,27 @@ function renderQueuePage() {
       else { sortCol = key; sortDir = "asc"; }
       renderTable();
     }
+  });
+  // Checkbox'lar (Tip/Öncelik/Durum çoklu seçim) — "change" ile, popover
+  // KAPANMAZ, art arda birden fazla değer işaretlenebilsin.
+  $("#qhead").addEventListener("change", (e) => {
+    const chk = e.target.closest("[data-thcheck]");
+    if (!chk) return;
+    const key = chk.dataset.thcheck, val = chk.value;
+    if (key === "durum") {
+      if (chk.checked) colFilters.durum.add(val); else colFilters.durum.delete(val);
+      $$("#tabs button").forEach((b) => b.classList.toggle("on", isTabActive(b.dataset.f)));
+    } else {
+      if (chk.checked) colFilters[key].add(val); else colFilters[key].delete(val);
+    }
+    renderTable();
+  });
+  // Metin sütun filtreleri — canlı arama.
+  $("#qhead").addEventListener("input", (e) => {
+    const inp = e.target.closest("[data-thsearch]");
+    if (!inp) return;
+    colFilters[inp.dataset.thsearch] = inp.value.toLowerCase();
+    renderTable();
   });
 
   loadQueue();
@@ -425,17 +495,27 @@ function renderCaseBanner() {
   $("#closeCaseView").onclick = closeCaseView;
 }
 
-function thCell(key, label, options) {
-  const activeVal = key === "durum" ? (filter === "all" ? "" : filter) : (colFilters[key] || "");
-  const arrow = sortCol === key ? (sortDir === "asc" ? " ▲" : " ▼") : "";
-  return `<th class="thcol">
-    <span class="thlabel" data-sortcol="${key}">${esc(label)}${arrow}</span>
-    <button class="thcaret ${activeVal ? "on" : ""}" data-thopen="${key}">▾</button>
-    <div class="thfilter" data-thpanel="${key}">
-      <button class="thopt ${!activeVal ? "on" : ""}" data-thkey="${key}" data-thval="">Tümü</button>
-      ${options.map((o) => `<button class="thopt ${activeVal === o.value ? "on" : ""}" data-thkey="${key}" data-thval="${esc(o.value)}">${esc(o.label)}</button>`).join("")}
-    </div>
+// Paylaşılan th-builder'lar (İş Kuyruğu + Hizmetler) — global state'e doğrudan
+// erişmeden, tüm değerleri parametre olarak alır.
+// sortState: {active, dir} ya da null (sıralanamayan sütun, ör. Özet).
+function thHead(key, label, sortState, filterOn, innerPanelHTML) {
+  const arrow = sortState ? (sortState.active ? (sortState.dir === "asc" ? " ▲" : " ▼") : "") : "";
+  const labelHTML = sortState
+    ? `<span class="thlabel" data-sortcol="${key}">${esc(label)}${arrow}</span>`
+    : `<span class="thlabel-static">${esc(label)}</span>`;
+  return `<th class="thcol${filterOn ? " filtered" : ""}">
+    ${labelHTML}
+    <button class="thcaret ${filterOn ? "on" : ""}" data-thopen="${key}">▾</button>
+    <div class="thfilter" data-thpanel="${key}">${innerPanelHTML}</div>
   </th>`;
+}
+function thTextFilter(key, label, value, sortState) {
+  return thHead(key, label, sortState, Boolean(value), `
+    <input type="text" class="thsearch" data-thsearch="${key}" placeholder="${esc(label)} ara…" value="${esc(value || "")}">`);
+}
+function thMultiFilter(key, label, options, activeSet, sortState) {
+  return thHead(key, label, sortState, activeSet.size > 0, options.map((o) => `
+    <label class="thcheck"><input type="checkbox" data-thcheck="${key}" value="${esc(o.value)}" ${activeSet.has(o.value) ? "checked" : ""}> ${esc(o.label)}</label>`).join(""));
 }
 
 function renderQHead() {
@@ -445,31 +525,48 @@ function renderQHead() {
     head.innerHTML = `<tr><th>Aksiyon</th><th>Patoloji No</th><th>Blok</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Uzman Adına</th><th>Tarih</th><th>Öncelik</th><th>Durum</th><th>Not</th></tr>`;
     return;
   }
-  const distinct = (field) => Array.from(new Set(rows.map((r) => r[field]).filter(Boolean)))
-    .sort((a, b) => a.localeCompare(b, "tr", { numeric: true }))
-    .map((v) => ({ value: v, label: v }));
+
+  // Bu fonksiyon her renderTable()'da (tuş vuruşu, realtime güncelleme, sekme
+  // tıklaması...) TÜM thead'i yeniden kuruyor — açık panel ve odaklı bir metin
+  // filtresi varsa, kullanıcı yazarken odağının/imlecinin kaybolmaması için
+  // kaydedip innerHTML'den SONRA geri yükle.
+  const openKey = head.querySelector(".thfilter.open")?.dataset.thpanel;
+  const active = document.activeElement;
+  const focusKey = active?.matches("[data-thsearch]") ? active.dataset.thsearch : null;
+  const selStart = focusKey ? active.selectionStart : null;
+  const selEnd = focusKey ? active.selectionEnd : null;
+
+  const sortOf = (key) => ({ active: sortCol === key, dir: sortDir });
   head.innerHTML = `<tr>
     <th>Aksiyon</th>
-    ${thCell("pat", "Patoloji No", distinct("patoloji_no"))}
-    ${thCell("blok", "Blok", distinct("blok_no"))}
-    <th>İstek</th>
-    ${thCell("tip", "Tip", GROUPS.map(([k, l]) => ({ value: k, label: l })))}
-    ${thCell("isteyen", "İsteyen", distinct("isteyen_adi"))}
-    <th>Uzman Adına</th>
+    ${thTextFilter("pat", "Patoloji No", colFilters.pat, sortOf("pat"))}
+    ${thTextFilter("blok", "Blok", colFilters.blok, sortOf("blok"))}
+    ${thTextFilter("test", "İstek", colFilters.test, sortOf("test"))}
+    ${thMultiFilter("tip", "Tip", GROUPS.map(([k, l]) => ({ value: k, label: l })), colFilters.tip, sortOf("tip"))}
+    ${thTextFilter("isteyen", "İsteyen", colFilters.isteyen, sortOf("isteyen"))}
+    ${thTextFilter("uzman", "Uzman Adına", colFilters.uzman, sortOf("uzman"))}
     <th>Tarih</th>
-    ${thCell("oncelik", "Öncelik", ["rutin", "acil", "stat"].map((k) => ({ value: k, label: PRIO[k][1] })))}
-    ${thCell("durum", "Durum", ["bekleyen", "cihazda", "tamamlandi"].map((k) => ({ value: k, label: PILL[k][1] })))}
+    ${thMultiFilter("oncelik", "Öncelik", ["rutin", "acil", "stat"].map((k) => ({ value: k, label: PRIO[k][1] })), colFilters.oncelik, sortOf("oncelik"))}
+    ${thMultiFilter("durum", "Durum", ["bekleyen", "cihazda", "tamamlandi"].map((k) => ({ value: k, label: PILL[k][1] })), colFilters.durum, sortOf("durum"))}
     <th>Not</th>
   </tr>`;
+
+  if (openKey) head.querySelector(`[data-thpanel="${openKey}"]`)?.classList.add("open");
+  if (focusKey) {
+    const input = head.querySelector(`[data-thsearch="${focusKey}"]`);
+    if (input) { input.focus(); input.setSelectionRange(selStart, selEnd); }
+  }
 }
 
 function passesFilter(r) {
-  if (filter !== "all" && r.durum !== filter) return false;
-  if (colFilters.blok && r.blok_no !== colFilters.blok) return false;
-  if (colFilters.pat && r.patoloji_no !== colFilters.pat) return false;
-  if (colFilters.tip && r.grup !== colFilters.tip) return false;
-  if (colFilters.isteyen && (r.isteyen_adi || "") !== colFilters.isteyen) return false;
-  if (colFilters.oncelik && r.oncelik !== colFilters.oncelik) return false;
+  if (colFilters.durum.size && !colFilters.durum.has(r.durum)) return false;
+  if (colFilters.tip.size && !colFilters.tip.has(r.grup)) return false;
+  if (colFilters.oncelik.size && !colFilters.oncelik.has(r.oncelik)) return false;
+  if (colFilters.pat && !r.patoloji_no.toLowerCase().includes(colFilters.pat)) return false;
+  if (colFilters.blok && !r.blok_no.toLowerCase().includes(colFilters.blok)) return false;
+  if (colFilters.test && !r.test_adi.toLowerCase().includes(colFilters.test)) return false;
+  if (colFilters.isteyen && !(r.isteyen_adi || "").toLowerCase().includes(colFilters.isteyen)) return false;
+  if (colFilters.uzman && !(r.uzman_adi || "").toLowerCase().includes(colFilters.uzman)) return false;
   if (searchQ) {
     const q = searchQ.toLowerCase();
     if (!r.blok_no.toLowerCase().includes(q) && !r.patoloji_no.toLowerCase().includes(q)) return false;
@@ -506,8 +603,8 @@ function renderTable() {
     tr.dataset.kalem = r.kalem_id;
     if (r.kalem_id === selId) tr.className = "sel";
     let act;
-    if (r.durum === "bekleyen") act = `<button class="act" data-id="${r.kalem_id}" data-to="cihazda">Cihaza al</button>`;
-    else if (r.durum === "cihazda") act = `<button class="act" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>`;
+    if (r.durum === "bekleyen") act = `<button class="act act-cihaza" data-id="${r.kalem_id}" data-to="cihazda">Cihaza al</button>`;
+    else if (r.durum === "cihazda") act = `<button class="act act-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>`;
     else act = `<span style="color:var(--ink-3);font-size:12px">${timeAgo(r.updated_at)}</span>`;
     const notCell = r.not_metni
       ? `<span class="note-txt" title="${esc(r.not_metni)}">${esc(r.not_metni.length > 40 ? r.not_metni.slice(0, 40) + "…" : r.not_metni)}</span>`
@@ -535,6 +632,7 @@ function updateCounts() {
     const el = document.querySelector(`[data-c="${f}"]`);
     if (el) el.textContent = f === "all" ? rows.length : rows.filter((r) => r.durum === f).length;
   });
+  $("#clearFiltersBtn")?.classList.toggle("hidden", !hasActiveFilters());
 }
 
 async function advance(kalemId, toDurum) {
@@ -657,14 +755,21 @@ function pickerSectionsHTML({ withQuickFill }) {
       ${GROUPS.map(([k, l], i) => `<button class="${i === 0 ? "on" : ""}" data-g="${k}">${l}</button>`).join("")}
     </div></div>
     ${withQuickFill ? `
-    <div class="m-sec" id="setsSec"><p class="m-label">Hazır Setler</p><div class="sets" id="sets"></div></div>
+    <div class="m-sec" id="setsSec"><p class="m-label">Hazır Setler</p>
+      <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input id="setSearch" placeholder="Set ara…"></div>
+      <div class="sets" id="sets"></div></div>
     <div class="m-sec" id="mySetsSec"><p class="m-label">Şablonlarım</p><div class="sets" id="mySets"></div></div>` : ""}
     <div class="m-sec" id="antiSec"><p class="m-label">Tek Tek Seç <button type="button" class="bulkpick-toggle" id="bulkPickToggle">Toplu Seç</button></p>
       <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-        <input id="antiSearch" placeholder="Test ara… ER, HER2, CK7…"></div>
+        <input id="antiSearch" placeholder="Test ara… ER, HER2, CK7… (Enter ile hızlı ekle)"></div>
       <div class="bulkpick-box" id="bulkPickBox">
         <textarea id="bulkPickText" placeholder="Her satıra bir test adı, opsiyonel olarak virgülle klon…&#10;ER, SP1&#10;PR"></textarea>
         <button class="btn-ghost btn-sm" id="bulkPickAdd">Seç</button>
+      </div>
+      <div id="pickedSec" style="display:none;margin-bottom:12px">
+        <p class="m-label">Seçilenler</p>
+        <div class="antis" id="pickedChips"></div>
       </div>
       <div class="antis" id="antis"></div>
       <div class="otherbox" id="otherbox"><input id="otherin" placeholder="Katalogda olmayan istek…"><button class="add" id="addOtherBtn">+</button></div></div>`;
@@ -681,16 +786,37 @@ function applySetTestler(testler) {
   });
 }
 
+// Varsayılan (arama boş): kullanıcının bu grupta en son kullandığı setler
+// (RECENT_SETLER, en fazla RECENT_SET_CAP) — hiç kullanım geçmişi yoksa
+// mevcut "sira" sırasına göre ilk N. Arama doluysa: ada göre tam liste.
 function renderSets() {
   const s = $("#sets"); if (!s) return;
-  const list = SETS_INST[grp] || [];
-  $("#setsSec").style.display = list.length ? "" : "none";
+  const all = SETS_INST[grp] || [];
+  $("#setsSec").style.display = all.length ? "" : "none";
+  const q = ($("#setSearch")?.value || "").trim().toLowerCase();
+
+  let list;
+  if (q) {
+    list = all.filter((set) => set.ad.toLowerCase().includes(q));
+  } else {
+    const used = all
+      .map((set) => ({ set, usage: RECENT_SETLER.get(set.id) }))
+      .filter((x) => x.usage)
+      .sort((a, b) => new Date(b.usage.son_kullanim) - new Date(a.usage.son_kullanim));
+    list = used.length ? used.slice(0, RECENT_SET_CAP).map((x) => x.set) : all.slice(0, RECENT_SET_CAP);
+  }
+
   s.innerHTML = "";
   list.forEach((set) => {
     const el = document.createElement("button");
     el.className = "set";
     el.textContent = set.ad;
-    el.onclick = () => { applySetTestler(set.testler); el.classList.add("hot"); renderAntis($("#antiSearch")?.value || ""); };
+    el.onclick = () => {
+      applySetTestler(set.testler);
+      el.classList.add("hot");
+      Api.logSetKullanimi(session.id, set.id).catch(() => {}); // best-effort — başarısız olursa forma engel olmaz
+      renderAntis($("#antiSearch")?.value || "");
+    };
     s.appendChild(el);
   });
 }
@@ -709,6 +835,11 @@ function renderMySets() {
   });
 }
 
+// Varsayılan (arama boş): kullanıcının bu grupta en son kullandığı testler
+// (RECENT_TESTS, en fazla RECENT_CAP) — hiç kullanım geçmişi yoksa mevcut
+// "sira" sırasına göre ilk N. Arama doluysa: tüm katalogda ada göre arar
+// (eski davranış). Zaten seçilmiş testler burada TEKRAR gösterilmez —
+// "Seçilenler" sabit alanında (renderPicked) yaşarlar.
 function renderAntis(q = "") {
   const wrap = $("#antis");
   if (!wrap) return;
@@ -717,29 +848,37 @@ function renderAntis(q = "") {
   wrap.innerHTML = "";
   const query = q.trim().toLowerCase();
 
-  const catMatches = (CAT[grp] || []).filter((t) => t.ad.toLowerCase().includes(query));
+  let catMatches;
+  if (query) {
+    catMatches = (CAT[grp] || []).filter((t) => t.ad.toLowerCase().includes(query) && !selectedTests.has(t.id));
+  } else {
+    const recent = (RECENT_TESTS[grp] || []).filter((t) => !selectedTests.has(t.id));
+    catMatches = recent.length
+      ? recent.slice(0, RECENT_CAP)
+      : (CAT[grp] || []).filter((t) => !selectedTests.has(t.id)).slice(0, RECENT_CAP);
+  }
   catMatches.forEach((t) => {
     const el = document.createElement("span");
-    el.className = "anti" + (selectedTests.has(t.id) ? " sel" : "");
+    el.className = "anti";
     el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}`;
     el.onclick = () => {
-      if (selectedTests.has(t.id)) selectedTests.delete(t.id);
-      else selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
+      selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
       renderAntis(q);
     };
     wrap.appendChild(el);
   });
 
   // "Diğer" grubunun kendi serbest-metin (ozel_test, kataloğa yazılmayan)
-  // öğeleri — otherbox ile eklenir, burada da arama/işaretleme için gösterilir.
+  // öğeleri — otherbox ile eklenir, burada da (henüz seçilmemişse) aranır.
   let customMatches = [];
   if (isDiger) {
-    customMatches = customItems.filter((c) => c.ad.toLowerCase().includes(query));
+    const unsel = customItems.filter((c) => !c.sel);
+    customMatches = query ? unsel.filter((c) => c.ad.toLowerCase().includes(query)) : unsel;
     customMatches.forEach((c) => {
       const el = document.createElement("span");
-      el.className = "anti" + (c.sel ? " sel" : "");
+      el.className = "anti";
       el.textContent = c.ad;
-      el.onclick = () => { c.sel = !c.sel; renderAntis(q); };
+      el.onclick = () => { c.sel = true; renderAntis(q); };
       wrap.appendChild(el);
     });
   }
@@ -756,6 +895,31 @@ function renderAntis(q = "") {
     addBtn.onclick = () => addTestToKatalog(q.trim());
     wrap.appendChild(addBtn);
   }
+
+  renderPicked();
+}
+
+// Zaten seçilmiş tüm testler/serbest-metin öğeleri — TÜM gruplar (bir istem
+// birden fazla gruptan test içerebilir, bkz. collectPickedTestler), sabit bir
+// alanda. Tıklamak seçimi kaldırır (antis listesine geri döner).
+function renderPicked() {
+  const wrap = $("#pickedChips"), sec = $("#pickedSec");
+  if (!wrap || !sec) return;
+  const chips = [];
+  selectedTests.forEach((v, id) => chips.push({ kind: "cat", key: id, ad: v.ad, klon: v.klon }));
+  customItems.filter((c) => c.sel).forEach((c) => chips.push({ kind: "custom", key: c.ad, ad: c.ad, klon: "" }));
+
+  sec.style.display = chips.length ? "" : "none";
+  wrap.innerHTML = chips.map((c) =>
+    `<span class="anti sel" data-kind="${c.kind}" data-key="${esc(c.key)}">${esc(c.ad)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}</span>`
+  ).join("");
+  wrap.querySelectorAll(".anti").forEach((el) => {
+    el.onclick = () => {
+      if (el.dataset.kind === "cat") selectedTests.delete(el.dataset.key);
+      else { const c = customItems.find((x) => x.ad === el.dataset.key); if (c) c.sel = false; }
+      renderAntis($("#antiSearch")?.value || "");
+    };
+  });
 }
 
 async function addTestToKatalog(ad) {
@@ -781,6 +945,23 @@ function bindPicker(withQuickFill) {
     renderAntis();
   });
   $("#antiSearch").addEventListener("input", (e) => renderAntis(e.target.value));
+  // Enter: o an görünen ilk sonucu (ya da eşleşme yoksa "+ ... olarak ekle"
+  // seçeneğini) seçip kutuyu temizler — art arda isim yazıp Enter'a basarak
+  // fareye dokunmadan hızlıca ekleme.
+  $("#antiSearch").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const input = $("#antiSearch");
+    if (!input.value.trim()) return;
+    const first = $("#antis .anti, #antis .anti-add");
+    if (first) first.click();
+    input.value = "";
+    renderAntis("");
+    input.focus();
+  });
+  if (withQuickFill) {
+    $("#setSearch").addEventListener("input", renderSets);
+  }
   $("#addOtherBtn").addEventListener("click", () => {
     const v = $("#otherin").value.trim(); if (!v) return;
     const existing = customItems.find((c) => c.ad === v);
@@ -922,11 +1103,15 @@ async function submitForm() {
   $("#submitForm").disabled = true;
   try {
     await Api.createIstem({ patoloji_no: patNo, istem_yapan_id: session.id, uzman_id, oncelik: prio, not_metni, bloklar, testler });
-    filter = "all";
+    setDurumTab("all");
+    $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
     toast("İstek oluşturuldu");
     showEmpty();
     await loadQueue();
     if (currentPage === "kuyruk") renderTable();
+    // Az önce kullanılan testler bu oturumda hemen "son kullanılanlar"a
+    // yansısın diye — best-effort, başarısız olursa sessizce geç.
+    Api.getSonKullanilanTestler(session.id).then((rows) => { RECENT_TESTS = buildRecentTests(rows); }).catch(() => {});
   } catch (e) {
     toast("İstek oluşturulamadı", true);
   } finally {
@@ -1253,6 +1438,41 @@ function showCihazForm(existing) {
 // HİZMETLER (faturalama — laboratuvar iş akışından bağımsız)
 // ================================================================
 let hizmetlerList = [];
+let hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
+let hizSortCol = null, hizSortDir = "asc";
+const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzman_adi" };
+
+function hizOzetTxt(h) {
+  return h.ozet.length ? h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") : "—";
+}
+function hizHasActiveFilters() {
+  return Boolean(hizColFilters.pat || hizColFilters.isteyen || hizColFilters.uzman || hizColFilters.ozet);
+}
+function hizClearFilters() {
+  hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
+  renderHizTable();
+}
+function hizPassesFilter(h) {
+  if (hizColFilters.pat && !h.patoloji_no.toLowerCase().includes(hizColFilters.pat)) return false;
+  if (hizColFilters.isteyen && !(h.isteyen_adi || "").toLowerCase().includes(hizColFilters.isteyen)) return false;
+  if (hizColFilters.uzman && !(h.uzman_adi || "").toLowerCase().includes(hizColFilters.uzman)) return false;
+  if (hizColFilters.ozet && !hizOzetTxt(h).toLowerCase().includes(hizColFilters.ozet)) return false;
+  return true;
+}
+function hizCompareForSort(a, b, col) {
+  const field = HIZ_SORT_FIELD[col];
+  return String(a[field] ?? "").localeCompare(String(b[field] ?? ""), "tr", { numeric: true });
+}
+// Excel export'unun "Görünenler" seçeneği ve renderHizTable bunu kullanır.
+function getVisibleHizmetler() {
+  let list = hizmetlerList.filter(hizPassesFilter);
+  if (hizSortCol) {
+    const dir = hizSortDir === "asc" ? 1 : -1;
+    list = [...list].sort((a, b) => hizCompareForSort(a, b, hizSortCol) * dir);
+  }
+  return list;
+}
+
 const HIZMETLER_EXPORT_COLS = [
   { label: "Patoloji No", value: (h) => h.patoloji_no },
   { label: "İsteyen", value: (h) => h.isteyen_adi || "" },
@@ -1270,18 +1490,21 @@ function renderHizmetlerPage() {
       <h1>Hizmetler</h1>
       <div class="sub">Faturalama özeti — her satır bir "İstek Ver" işlemini (istemler kaydını) temsil eder.</div>
       <div class="spacer"></div>
+      <button class="btn-ghost btn-sm hidden" id="hizClearFiltersBtn">Filtreleri Temizle</button>
       <div id="hizExport">${EXPORT_MENU_HTML}</div>
     </div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>Patoloji No</th><th>İsteyen</th><th>Uzman Adına</th><th>Özet</th><th>Tarih</th><th>Aksiyon</th></tr></thead>
+        <thead id="hizhead"></thead>
         <tbody id="hizRows"></tbody>
       </table>
     </div>`;
 
-  bindExportMenu("#hizExport", () => {
-    exportToExcel(hizmetlerList, HIZMETLER_EXPORT_COLS, "istem_hizmetler");
+  bindExportMenu("#hizExport", (which) => {
+    const list = which === "tum" ? hizmetlerList : getVisibleHizmetler();
+    exportToExcel(list, HIZMETLER_EXPORT_COLS, "istem_hizmetler");
   });
+  $("#hizClearFiltersBtn").addEventListener("click", hizClearFilters);
   $("#hizRows").addEventListener("click", (e) => {
     const patCell = e.target.closest("[data-pat]");
     if (patCell) {
@@ -1292,6 +1515,33 @@ function renderHizmetlerPage() {
     }
     const btn = e.target.closest("[data-hiz]");
     if (btn) markFatura(btn.dataset.hiz);
+  });
+  $("#hizhead").addEventListener("click", (e) => {
+    const caret = e.target.closest("[data-thopen]");
+    if (caret) {
+      e.stopPropagation();
+      const panel = $(`[data-thpanel="${caret.dataset.thopen}"]`);
+      const isOpen = panel.classList.contains("open");
+      $$(".thfilter.open").forEach((p) => p.classList.remove("open"));
+      if (!isOpen) {
+        panel.classList.add("open");
+        panel.querySelector("[data-thsearch]")?.focus();
+      }
+      return;
+    }
+    const label = e.target.closest("[data-sortcol]");
+    if (label) {
+      const key = label.dataset.sortcol;
+      if (hizSortCol === key) hizSortDir = hizSortDir === "asc" ? "desc" : "asc";
+      else { hizSortCol = key; hizSortDir = "asc"; }
+      renderHizTable();
+    }
+  });
+  $("#hizhead").addEventListener("input", (e) => {
+    const inp = e.target.closest("[data-thsearch]");
+    if (!inp) return;
+    hizColFilters[inp.dataset.thsearch] = inp.value.toLowerCase();
+    renderHizTable();
   });
 
   loadHizmetler();
@@ -1305,27 +1555,57 @@ async function loadHizmetler() {
     hizmetlerList = [];
   }
   if (currentPage !== "hizmetler") return;
-  renderHizRows();
+  renderHizTable();
 }
 
-function renderHizRows() {
+function renderHizHead() {
+  const head = $("#hizhead");
+  if (!head) return;
+
+  // İş Kuyruğu'ndaki renderQHead ile aynı odak/panel koruma deseni — bkz.
+  // oradaki yorum.
+  const openKey = head.querySelector(".thfilter.open")?.dataset.thpanel;
+  const active = document.activeElement;
+  const focusKey = active?.matches("[data-thsearch]") ? active.dataset.thsearch : null;
+  const selStart = focusKey ? active.selectionStart : null;
+  const selEnd = focusKey ? active.selectionEnd : null;
+
+  const sortOf = (key) => ({ active: hizSortCol === key, dir: hizSortDir });
+  head.innerHTML = `<tr>
+    ${thTextFilter("pat", "Patoloji No", hizColFilters.pat, sortOf("pat"))}
+    ${thTextFilter("isteyen", "İsteyen", hizColFilters.isteyen, sortOf("isteyen"))}
+    ${thTextFilter("uzman", "Uzman Adına", hizColFilters.uzman, sortOf("uzman"))}
+    ${thTextFilter("ozet", "Özet", hizColFilters.ozet, null)}
+    <th>Tarih</th>
+    <th>Aksiyon</th>
+  </tr>`;
+
+  if (openKey) head.querySelector(`[data-thpanel="${openKey}"]`)?.classList.add("open");
+  if (focusKey) {
+    const input = head.querySelector(`[data-thsearch="${focusKey}"]`);
+    if (input) { input.focus(); input.setSelectionRange(selStart, selEnd); }
+  }
+}
+
+function renderHizTable() {
+  renderHizHead();
   const tb = $("#hizRows");
   if (!tb) return;
   tb.innerHTML = "";
-  hizmetlerList.forEach((h) => {
+  getVisibleHizmetler().forEach((h) => {
     const tr = document.createElement("tr");
-    const ozetTxt = h.ozet.length ? h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") : "—";
     const act = h.fatura_girildi
       ? `<span style="color:var(--ink-3);font-size:12px">✓ ${esc(h.fatura_giren_adi || "—")} · ${formatDT(h.fatura_zamani)}</span>`
       : `<button class="act" data-hiz="${h.istem_id}">Gir</button>`;
     tr.innerHTML = `<td class="c-pat" data-pat="${esc(h.patoloji_no)}" style="cursor:pointer">${esc(h.patoloji_no)}</td>
       <td>${esc(h.isteyen_adi)}</td>
       <td>${esc(h.uzman_adi || "—")}</td>
-      <td>${esc(ozetTxt)}</td>
+      <td>${esc(hizOzetTxt(h))}</td>
       <td style="color:var(--ink-3);font-size:12px">${formatDT(h.created_at)}</td>
       <td>${act}</td>`;
     tb.appendChild(tr);
   });
+  $("#hizClearFiltersBtn")?.classList.toggle("hidden", !hizHasActiveFilters());
 }
 
 async function markFatura(istemId) {
