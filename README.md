@@ -34,3 +34,22 @@ Repo kökünde `netlify.toml` zaten `base/publish = app` olarak ayarlı. Netlify
 - Auth: "ad seç + PIN" görünümü aynı kalır ama artık arka planda gerçek Supabase Auth (`signInWithPassword`) çalışır — bkz. "1b) Supabase Auth'a geçiş".
 - Başka bir kullanıcının PIN'ini admin ekrandan sıfırlama şu an desteklenmiyor (service_role/Edge Function gerektirir) — PIN sadece hesap oluşturulurken belirlenir.
 - `secure_rls_authenticated.sql` çalıştırıldıktan sonra RLS `authenticated`-only olur; `policies.sql`/`setler_sema.sql`/`hizmetler_sema.sql`/`yonetim_sema.sql`'deki `anon_full_access` politikaları bu dosyayla değiştirilir.
+
+## Rapor editörü ucu (salt okunur)
+`supabase/functions/rapor-istem` — rapor editörü (https://rapor-editoru.pages.dev) bir patoloji no için istenen
+İHK / histokimya / genetik testleri buradan okur ve "İmmünohistokimyasal / Histokimyasal Bulgular" modülünü doldurur.
+
+- `GET …/functions/v1/rapor-istem?protokol=11240/26` → `[{ ad, tur: 'ihk'|'histokimya'|'genetik', klon, durum }]`
+  (editördeki `11240/2026` biçimi de eşleşir). `?katalog=1` → aktif test kataloğu `[{ ad, tur, klon }]`.
+- **Hasta adı, kimlik, istem notu, isteyen/uzman adı dönmez**; yalnızca test listesi. Kesit / hücre bloğu / yayma dönmez.
+- CORS yalnızca `https://rapor-editoru.pages.dev` kökenine açık; başka kökenden gelen tarayıcı isteği 403 alır.
+- Yetki: `x-okuma-anahtari` başlığı. Anahtar kodda değil, Supabase ortam değişkeninde (`RAPOR_OKUMA_ANAHTARI`);
+  tanımlı değilse uç kapalıdır (503). Editör tarafında anahtar Ayarlar → "İstem bağlantısı"na girilir (yalnızca o tarayıcıda saklanır).
+
+Kurulum (bir kez):
+```
+supabase secrets set RAPOR_OKUMA_ANAHTARI=<en az 16 karakter, rastgele>
+supabase functions deploy rapor-istem --no-verify-jwt
+```
+`--no-verify-jwt` gerekir: editör Supabase oturumu taşımaz, yetkiyi okuma anahtarı sağlar.
+Test (sahte veriyle): `node --test supabase/functions/rapor-istem/cekirdek.test.ts`
