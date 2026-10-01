@@ -18,7 +18,25 @@ Prototipte RLS `anon` rolüne tam açıktı — bu, giriş ekranını hiç görm
 5. **Ancak o zaman** `secure_rls_authenticated.sql`'i çalıştırın — bu, tüm tabloları `authenticated`-only yapar (anon erişimi tamamen keser). Migrasyon tamamlanmadan bu dosyayı çalıştırırsanız taşınmamış kullanıcılar kilitlenir.
 6. (İsteğe bağlı, ileride) `api.js`'teki `login()` içindeki "GEÇİCİ fallback" bloğu kaldırılabilir, `kullanicilar.pin` kolonu düşürülebilir — artık kullanılmıyor.
 
-**Yeni kullanıcı eklerken / oluştururken:** `signUp()` çağrısı anlık olarak tarayıcının Auth oturumunu yeni kullanıcıya çevirir; hemen ardından uygulama yöneticinin oturumunu (o oturumda bellekte tutulan email+PIN ile) otomatik geri yükler — bu esnada başka bir sekmede aynı hesapla işlem yapmayın.
+## 1c) Rol bazlı yetkiler (`yetki_sema.sql`)
+**Sıra önemli: önce SQL, sonra kod deploy.** Yeni kod girişte `kullanicilar.is_admin`'i okur; kolon yoksa giriş kırılır.
+
+1. `secure_rls_authenticated.sql` çalışmış ve herkes Auth'a taşınmış olmalı (script bunu kendisi kontrol eder, değilse hiçbir şey yapmadan durur).
+2. `yetki_sema.sql`'i SQL Editor'de çalıştırın (tek transaction, idempotent). İlk yönetici olarak **Öğr. Gör. Dr. Fatih Demir** hesabını id + birebir ad ile işaretler; birebir eşleşme tek değilse ya da benzer isimli başka bir hesap (pasifler dahil) varsa durur ve eşleşen satırları listeler — en yakın eşleşmeyi otomatik seçmez.
+3. Kodu deploy edin.
+
+Getirdikleri:
+- **Yönetici (`is_admin`)**: Yönetim sayfaları (Kullanıcılar, Test Grupları, Test Kataloğu, Yedekler) sadece yöneticiye görünür; `kullanicilar`/`test_gruplari` yazma, `test_katalog` düzenleme/silme, `istek_setleri` yazma ve yedek indirme RLS'te de sadece yönetici. Yeni yöneticiyi Kullanıcılar formundaki "Yönetici" kutusuyla atayın.
+- **Kalem silme**: yönetici her kalemi (Tamamlandı dahil); diğerleri sadece kendi açtığı istemdeki, Tamamlandı olmayan kalemleri.
+- **Durum geri alma** (Tamamlandı→Cihazda, Cihazda→Bekleyen): sadece yönetici + teknisyen (veritabanında trigger ile).
+- **Teknisyen**: sıfırdan istem giremez, Şablonlar'a erişemez; tek istem yolu detay panelindeki "Tekrar İste".
+- **Tekrar İste**: aynı test/blok için yeni bir istem kaydı + Bekleyen kalem (`istem_kalemleri.tekrar_kaynagi_id` kaynağa bağlı). Hizmetler'de "Tekrar" rozetiyle görünür.
+- **Kalite notu** (`istem_kalemleri.kalite_notu`) ve **herkese açık şablon** (`sablonlar.herkese_acik`).
+- `istemler` ve `istem_kalemleri`'nde UPDATE kolon bazlıdır (sadece fatura / durum-cihaz-kalite notu kolonları).
+
+⚠️ Bu dosyadan SONRA `policies.sql`, `setler_sema.sql`, `yonetim_sema.sql` ya da `secure_rls_authenticated.sql`'i yeniden çalıştırmayın — eski "herkese açık" politikaları geri ekler. Çalıştırırsanız ardından `yetki_sema.sql`'i tekrar çalıştırın.
+
+**Yeni kullanıcı eklerken / oluştururken:** Auth hesabı oturum saklamayan ayrı bir Supabase client ile açılır — yöneticinin kendi oturumu hiç değişmez.
 
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):

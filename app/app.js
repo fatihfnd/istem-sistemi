@@ -24,7 +24,9 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Tarih", value: (r) => formatDateFull(r.created_at) },
   { label: "Öncelik", value: (r) => PRIO[r.oncelik][1] },
   { label: "Durum", value: (r) => PILL[r.durum][1] },
+  { label: "Tekrar", value: (r) => (r.tekrar_kaynagi_id ? "Evet" : "") },
   { label: "Not", value: (r) => r.not_metni || "" },
+  { label: "Kalite Notu", value: (r) => r.kalite_notu || "" },
 ];
 const EMPTY_MSG = {
   kuyruk: { t: "Bir istek seç", d: "Detayını ve durum geçmişini görmek için soldan bir satıra dokun, ya da yeni istek ver." },
@@ -154,7 +156,7 @@ async function confirmAndDelete(label, deleteFn, onSuccess) {
     await deleteFn();
     await onSuccess();
   } catch (e) {
-    toast(e && (e.isReferenced || e.hasAuthAccount) ? e.message : "Silinemedi", true);
+    toast(e && (e.isReferenced || e.hasAuthAccount || e.isForbidden) ? e.message : "Silinemedi", true);
   }
 }
 
@@ -163,7 +165,7 @@ async function confirmAndDelete(label, deleteFn, onSuccess) {
 let session = null;
 let CAT = {}, UZMANLAR = [], CIHAZLAR = [];
 let ISTEK_SETLERI = [], SETS_INST = {};   // kurumsal, herkese açık
-let MY_SABLONLAR = [], SETS_MINE = {};    // kişiye özel
+let SABLONLAR = [], SETS_SABLON = {};     // kendi şablonların + başkalarının herkese açık olanları
 let RECENT_TESTS = {};                    // {grup: [{id,ad,klon,grup}]} — kullanıcının en son kullandığı testler
 let RECENT_SETLER = new Map();            // istek_seti_id -> {son_kullanim, kullanim_sayisi}
 const RECENT_CAP = 20;                    // Tek Tek Seç varsayılan görünümünde grup başına üst sınır
@@ -196,6 +198,39 @@ function freshColFilters() {
 let colFilters = freshColFilters();
 let sortCol = null, sortDir = "asc";
 let caseView = null; // aktifken bir patoloji_no string'i (vaka görünümü)
+let kaliteDrafts = new Map(); // kalem_id -> kaydedilmemiş kalite notu taslağı
+let detailStale = false;      // kalite notu yazılırken gelen realtime yenilemesi ertelendi mi
+
+// ---------------- Yetkiler (arayüz) ----------------
+// Asıl uygulama RLS'te (yetki_sema.sql) — buradakiler sadece kullanıcının
+// yapamayacağı şeyleri ona hiç göstermemek için. Admin teknisyen
+// kısıtlarından muaftır (RLS'teki is_teknisyen() ile aynı kural).
+const isAdmin = () => Boolean(session && session.is_admin);
+const isTeknisyen = () => Boolean(session && session.rol === "teknisyen" && !session.is_admin);
+// Teknisyen sıfırdan istem giremez — tek yolu detay panelindeki "Tekrar İste".
+const canCreateIstem = () => !isTeknisyen();
+// Durum geri alma (Tamamlandı→Cihazda, Cihazda→Bekleyen): admin + teknisyen.
+// Uzman/asistan (isteyen taraf) sonucu görür, "Geri Al" ona hiç gösterilmez.
+const canRevert = () => isAdmin() || Boolean(session && session.rol === "teknisyen");
+// Admin her kalemi (Tamamlandı dahil); diğerleri kendi istemindeki,
+// Tamamlandı olmayan kalemleri.
+const canDeleteKalem = (r) => isAdmin() || (r.istem_yapan_id === session.id && r.durum !== "tamamlandi");
+const canManageSets = () => isAdmin();
+const canEditSablon = (s) => isAdmin() || (!isTeknisyen() && s.sahip_id === session.id);
+const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "test-katalogu", "yedekler"]);
+function pageAllowed(page) {
+  if (ADMIN_PAGES.has(page)) return isAdmin();
+  if (page === "sablonlar") return !isTeknisyen();
+  return true;
+}
+// Nav/sidebar görünürlüğü — her girişte (initApp) yeniden uygulanır.
+function applyRoleUI() {
+  $("#newBtn").classList.toggle("hidden", !canCreateIstem());
+  $$("#nav [data-admin]").forEach((el) => el.classList.toggle("hidden", !isAdmin()));
+  $$("#nav a[data-page]").forEach((a) => {
+    if (!a.hasAttribute("data-admin")) a.classList.toggle("hidden", !pageAllowed(a.dataset.page));
+  });
+}
 
 function isTabActive(f) {
   return f === "all" ? colFilters.durum.size === 0 : colFilters.durum.size === 1 && colFilters.durum.has(f);
@@ -245,17 +280,49 @@ function selectRange(fromId, toId) {
   syncBulkUI();
 }
 
+// Başlıktaki "tümünü seç/kaldır" — GÖRÜNEN (filtre/arama/vaka görünümü
+// uygulanmış) satırların hepsi zaten seçiliyse seçimlerini kaldırır, aksi
+// halde hepsini seçime ekler. Görünmeyen ama seçili satırlara dokunmaz.
+function toggleAllVisibleSelection() {
+  const ids = getVisibleRows().map((r) => r.kalem_id);
+  const allOn = ids.length > 0 && ids.every((id) => bulkSelected.has(id));
+  ids.forEach((id) => (allOn ? bulkSelected.delete(id) : bulkSelected.add(id)));
+  syncBulkUI();
+}
+
+// Vaka grubunun başındaki kısayol — o patoloji no'nun GÖRÜNEN tüm
+// satırları (tablo içinde dağınık olsalar bile) aynı mantıkla seçilir/kaldırılır.
+function toggleCaseSelection(patNo) {
+  const ids = getVisibleRows().filter((r) => r.patoloji_no === patNo).map((r) => r.kalem_id);
+  const allOn = ids.length > 0 && ids.every((id) => bulkSelected.has(id));
+  ids.forEach((id) => (allOn ? bulkSelected.delete(id) : bulkSelected.add(id)));
+  syncBulkUI();
+}
+
 // Tam yeniden çizimden sonra (renderTable) ya da tek başına bir seçim
 // değişikliğinden sonra çağrılır — satırları/checkbox'ları TEK TEK güncelleyip
 // tüm tabloyu yeniden kurmadan akıcı kalır. Artık rows'ta olmayan (silinmiş/
 // realtime'da kaybolmuş) kalem_id'ler burada sessizce düşürülür.
 function syncBulkUI() {
-  bulkSelected = new Set([...bulkSelected].filter((id) => rows.some((r) => r.kalem_id === id)));
+  const liveIds = new Set(rows.map((r) => r.kalem_id));
+  bulkSelected = new Set([...bulkSelected].filter((id) => liveIds.has(id)));
   $$("#rows tr[data-kalem]").forEach((tr) => {
     const on = bulkSelected.has(tr.dataset.kalem);
     tr.classList.toggle("bulk-checked", on);
     const cb = tr.querySelector("[data-bulk-check]");
     if (cb) cb.checked = on;
+  });
+
+  const visible = $("#rows") ? getVisibleRows() : [];
+  const all = $("[data-bulk-all]");
+  if (all) {
+    const n = visible.filter((r) => bulkSelected.has(r.kalem_id)).length;
+    all.checked = visible.length > 0 && n === visible.length;
+    all.indeterminate = n > 0 && n < visible.length;
+  }
+  $$("#rows [data-case-sel]").forEach((btn) => {
+    const ids = visible.filter((r) => r.patoloji_no === btn.dataset.caseSel);
+    btn.classList.toggle("on", ids.length > 0 && ids.every((r) => bulkSelected.has(r.kalem_id)));
   });
   renderBulkBar();
 }
@@ -319,6 +386,7 @@ async function handleLogout() {
   rows = []; selId = null; searchQ = "";
   colFilters = freshColFilters();
   sortCol = null; sortDir = "asc"; caseView = null;
+  kaliteDrafts = new Map(); detailStale = false;
   currentPage = "kuyruk";
   $("#appRoot").classList.add("hidden");
   showAuth();
@@ -331,20 +399,21 @@ async function initApp(user) {
   $("#appRoot").classList.remove("hidden");
   $("#meAv").textContent = initials(user.ad_soyad);
   $("#meName").textContent = user.ad_soyad;
-  $("#meRole").textContent = ROL_LABEL[user.rol] || user.rol;
+  $("#meRole").textContent = (ROL_LABEL[user.rol] || user.rol) + (user.is_admin ? " · Yönetici" : "");
+  applyRoleUI();
 
   // allSettled: setler_sema.sql henüz çalıştırılmadıysa (istek_setleri/cihazlar
   // tabloları yoksa) o sorgular başarısız olur ama temel katalog/uzman listesi
   // yine de yüklenir — tek bir eksik tablo tüm girişi kilitlemesin.
   const results = await Promise.allSettled([
-    Api.getTestKatalog(), Api.getIstekSetleri(), Api.getMySablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getTestGruplari(),
+    Api.getTestKatalog(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getTestGruplari(),
     Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id),
   ]);
-  const [catR, setlerR, mineR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR] = results;
+  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR] = results;
   if (catR.status === "fulfilled") CAT = catR.value; else toast("Test kataloğu yüklenemedi", true);
   if (setlerR.status === "fulfilled") { ISTEK_SETLERI = setlerR.value; SETS_INST = activeSetsInst(ISTEK_SETLERI); }
   else toast("İstek Setleri yüklenemedi — setler_sema.sql çalıştırıldı mı?", true);
-  if (mineR.status === "fulfilled") { MY_SABLONLAR = mineR.value; SETS_MINE = groupByGrup(MY_SABLONLAR); }
+  if (sablonR.status === "fulfilled") { SABLONLAR = sablonR.value; SETS_SABLON = groupByGrup(SABLONLAR); }
   if (uzmanlarR.status === "fulfilled") UZMANLAR = uzmanlarR.value;
   if (cihazlarR.status === "fulfilled") CIHAZLAR = cihazlarR.value;
   if (gruplarR.status === "fulfilled" && gruplarR.value.length) {
@@ -370,9 +439,9 @@ function scheduleReload() {
   reloadTimer = setTimeout(loadQueue, 150);
 }
 
-async function refreshMySablonlar() {
-  MY_SABLONLAR = await Api.getMySablonlar(session.id);
-  SETS_MINE = groupByGrup(MY_SABLONLAR);
+async function refreshSablonlar() {
+  SABLONLAR = await Api.getSablonlar(session.id);
+  SETS_SABLON = groupByGrup(SABLONLAR);
 }
 
 async function refreshGruplar() {
@@ -385,6 +454,7 @@ async function refreshGruplar() {
 
 // ---------------- Router ----------------
 function navigate(page) {
+  if (!pageAllowed(page)) page = "kuyruk";
   currentPage = page;
   $$("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.page === page));
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -448,7 +518,7 @@ function renderQueuePage() {
       <div class="grow"></div>
       <button class="act act-cihaza" id="bulkCihazaBtn">Cihaza Al</button>
       <button class="act act-tamamla" id="bulkTamamlaBtn">Tamamla</button>
-      <button class="btn-ghost btn-sm" id="bulkGeriBtn">↺ Geri Al</button>
+      ${canRevert() ? `<button class="btn-ghost btn-sm" id="bulkGeriBtn">↺ Geri Al</button>` : ""}
       <button class="btn-ghost btn-sm" id="bulkSilBtn">Sil</button>
       <button class="ub-x" id="bulkClearBtn" title="Seçimi temizle">×</button>
     </div>
@@ -476,10 +546,16 @@ function renderQueuePage() {
   });
   $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen", "Cihaza alındı"));
   $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda", "Tamamlandı"));
-  $("#bulkGeriBtn").addEventListener("click", bulkRevert);
+  $("#bulkGeriBtn")?.addEventListener("click", bulkRevert);
   $("#bulkSilBtn").addEventListener("click", bulkDelete);
   $("#bulkClearBtn").addEventListener("click", clearBulkSelection);
   $("#rows").addEventListener("click", (e) => {
+    const caseSel = e.target.closest("[data-case-sel]");
+    if (caseSel) {
+      e.stopPropagation();
+      toggleCaseSelection(caseSel.dataset.caseSel);
+      return;
+    }
     const patCell = e.target.closest(".c-pat");
     if (patCell) {
       e.stopPropagation();
@@ -570,6 +646,7 @@ function renderQueuePage() {
   // Checkbox'lar (Tip/Öncelik/Durum çoklu seçim) — "change" ile, popover
   // KAPANMAZ, art arda birden fazla değer işaretlenebilsin.
   $("#qhead").addEventListener("change", (e) => {
+    if (e.target.closest("[data-bulk-all]")) { toggleAllVisibleSelection(); return; }
     const chk = e.target.closest("[data-thcheck]");
     if (!chk) return;
     const key = chk.dataset.thcheck, val = chk.value;
@@ -648,8 +725,9 @@ function thSortOnly(key, label, sortState) {
 function renderQHead() {
   const head = $("#qhead");
   if (!head) return;
+  const bulkAllTh = `<th class="bulkcell"><input type="checkbox" data-bulk-all aria-label="Görünen tümünü seç/kaldır" title="Görünen tümünü seç/kaldır"></th>`;
   if (caseView !== null) {
-    head.innerHTML = `<tr><th></th><th>Aksiyon</th><th>Patoloji No</th><th>Blok</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Uzman Adına</th><th>Tarih</th><th>Öncelik</th><th>Durum</th><th>Not</th></tr>`;
+    head.innerHTML = `<tr>${bulkAllTh}<th>Aksiyon</th><th>Patoloji No</th><th>Blok</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Uzman Adına</th><th>Tarih</th><th>Öncelik</th><th>Durum</th><th>Not</th></tr>`;
     return;
   }
 
@@ -665,7 +743,7 @@ function renderQHead() {
 
   const sortOf = (key) => ({ active: sortCol === key, dir: sortDir });
   head.innerHTML = `<tr>
-    <th></th>
+    ${bulkAllTh}
     <th>Aksiyon</th>
     ${thTextFilter("pat", "Patoloji No", colFilters.pat, sortOf("pat"))}
     ${thTextFilter("blok", "Blok", colFilters.blok, sortOf("blok"))}
@@ -725,30 +803,48 @@ function renderTable() {
   tb.innerHTML = "";
 
   const list = getVisibleRows();
+  // Vaka (patoloji no) gruplaması sadece aynı vakanın satırlarını yan yana
+  // tutan sıralamalarda anlamlı: varsayılan sıra, Patoloji No sırası ve vaka
+  // görünümü. Başka bir sütuna göre sıralanınca vakalar dağılır — orada kalın
+  // ayraç çizilmez, "vakayı seç" kısayolu da vakanın ilk görünen satırında kalır.
+  const grouped = caseView !== null || sortCol === null || sortCol === "pat";
+  const seenPat = new Set();
+  const revertBtn = (id) => canRevert()
+    ? `<button class="act-revert-icon" data-id="${id}" data-revert="1" title="Geri al" aria-label="Geri al">↺</button>`
+    : "";
 
-  list.forEach((r) => {
+  list.forEach((r, i) => {
     const tr = document.createElement("tr");
     tr.dataset.kalem = r.kalem_id;
-    if (r.kalem_id === selId) tr.className = "sel";
+    const groupStart = i === 0 || list[i - 1].patoloji_no !== r.patoloji_no;
+    const showCaseSel = grouped ? groupStart : !seenPat.has(r.patoloji_no);
+    seenPat.add(r.patoloji_no);
+    tr.classList.add(`row-${r.durum}`);
+    if (grouped && groupStart && i > 0) tr.classList.add("case-start");
+    if (r.kalem_id === selId) tr.classList.add("sel");
     let act;
     if (r.durum === "bekleyen") {
       act = `<button class="act act-cihaza" data-id="${r.kalem_id}" data-to="cihazda">Cihaza al</button>`;
     } else if (r.durum === "cihazda") {
       act = `<div class="actrow">
         <button class="act act-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>
-        <button class="act-revert-icon" data-id="${r.kalem_id}" data-revert="1" title="Geri al" aria-label="Geri al">↺</button>
+        ${revertBtn(r.kalem_id)}
       </div>`;
     } else {
-      act = `<button class="act-revert-icon" data-id="${r.kalem_id}" data-revert="1" title="Geri al" aria-label="Geri al">↺</button>`;
+      act = revertBtn(r.kalem_id);
     }
     const notCell = r.not_metni
       ? `<span class="note-txt" title="${esc(r.not_metni)}">${esc(r.not_metni.length > 40 ? r.not_metni.slice(0, 40) + "…" : r.not_metni)}</span>`
       : "";
+    const caseSel = showCaseSel
+      ? `<button class="case-sel" data-case-sel="${esc(r.patoloji_no)}" title="Bu vakanın tümünü seç/kaldır" aria-label="Bu vakanın tümünü seç/kaldır"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7.5 12.5l3 3 6-6.5"/></svg></button>`
+      : "";
+    const tekrarTag = r.tekrar_kaynagi_id ? `<span class="badge-tekrar" title="Boya tekrarı">Tekrar</span>` : "";
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
       <td>${act}</td>
-      <td class="c-pat">${esc(r.patoloji_no)}</td>
+      <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span></td>
       <td class="c-blok">${esc(r.blok_no)}</td>
-      <td class="c-test">${esc(r.test_adi)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
+      <td class="c-test">${esc(r.test_adi)}${tekrarTag}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
       <td><span class="tag">${TIP[r.grup] || "Diğer"}</span></td>
       <td>${esc(r.isteyen_adi || "—")}</td>
       <td>${esc(r.uzman_adi || "—")}</td>
@@ -787,7 +883,7 @@ async function advance(kalemId, toDurum) {
 const REVERT_TO = { cihazda: "bekleyen", tamamlandi: "cihazda" };
 async function revertDurum(kalemId, fromDurum) {
   const toDurum = REVERT_TO[fromDurum];
-  if (!toDurum) return;
+  if (!toDurum || !canRevert()) return;
   if (!confirm(`"${PILL[fromDurum][1]}" durumu geri alınsın mı?`)) return;
   try {
     await Api.advanceDurum(kalemId, toDurum, session.id);
@@ -831,6 +927,7 @@ async function bulkAdvance(toDurum, fromDurum) {
 // Geri Al — her satır KENDİ durumuna göre bir önceki adıma döner
 // (REVERT_TO), tekli revertDurum ile aynı kural; tek bir toplu onay.
 async function bulkRevert() {
+  if (!canRevert()) return;
   const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && REVERT_TO[r.durum]);
   const skipped = bulkSelected.size - targets.length;
   if (!targets.length) { toast("Uygun satır yok", true); return; }
@@ -842,12 +939,15 @@ async function bulkRevert() {
   summarize("güncellendi", ok, skipped, results.length - ok);
 }
 
-// Sil — mevcut tekli kısıt AYNEN: Tamamlandı durumundaki kalemler silinemez.
+// Sil — tekli silmeyle aynı kural (canDeleteKalem): admin her kalemi
+// (Tamamlandı dahil), diğerleri kendi istemindeki Tamamlandı olmayanları.
 async function bulkDelete() {
-  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && r.durum !== "tamamlandi");
+  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && canDeleteKalem(r));
   const skipped = bulkSelected.size - targets.length;
   if (!targets.length) { toast("Uygun satır yok", true); return; }
-  if (!confirm(`${targets.length} kaydı silmek istediğinize emin misiniz? Bu geri alınamaz.`)) return;
+  const tamamlanan = targets.filter((r) => r.durum === "tamamlandi").length;
+  const ek = tamamlanan ? `\n\nDİKKAT: ${tamamlanan} tanesi Tamamlandı durumunda (yönetici yetkisiyle siliniyor).` : "";
+  if (!confirm(`${targets.length} kaydı silmek istediğinize emin misiniz? Bu geri alınamaz.${ek}`)) return;
   const results = await Promise.allSettled(targets.map((r) => Api.deleteIstemKalem(r.kalem_id)));
   const ok = results.filter((r) => r.status === "fulfilled").length;
   clearBulkSelection();
@@ -866,7 +966,32 @@ async function loadQueue() {
   renderTable();
   if (selId) {
     const cur = rows.find((r) => r.kalem_id === selId);
-    if (cur) showDetail(cur); else showEmpty();
+    // Kalite notu yazılırken paneli yeniden çizmek imleci/odağı koparır —
+    // yenileme, alan odaktan çıkınca yapılır (bkz. showDetail → kaliteNot blur).
+    if (cur && kaliteEditing()) detailStale = true;
+    else if (cur) showDetail(cur);
+    else showEmpty();
+  }
+}
+
+function kaliteEditing() {
+  const el = $("#kaliteNot");
+  return Boolean(el && document.activeElement === el);
+}
+
+// Detay panelindeki "Tekrar İste" — aynı test/klon/blok ile yeni bir
+// Bekleyen kalem (ayrı bir istem kaydı olarak) kuyruğa düşer. prompt():
+// hem onay (İptal = vazgeç) hem opsiyonel tekrar nedeni (yeni istemin notu).
+async function tekrarIste(r) {
+  const neden = prompt(`${r.patoloji_no} · ${r.blok_no || "—"} · ${r.test_adi}\n\nBu kalem için tekrar istensin mi?\nTekrar nedeni (opsiyonel, teknisyene not olarak gider):`, "");
+  if (neden === null) return;
+  try {
+    const yeniId = await Api.tekrarIste(r.kalem_id, neden.trim());
+    toast("Tekrar istendi — kuyruğa Bekleyen olarak eklendi");
+    selId = yeniId || selId;
+    await loadQueue();
+  } catch (e) {
+    toast("Tekrar istenemedi", true);
   }
 }
 
@@ -914,9 +1039,26 @@ async function showDetail(r) {
 
   const aktifCihazlar = CIHAZLAR.filter((c) => c.aktif || c.id === r.cihaz_id);
 
+  // Tekrar ilişkisi: bu satır bir tekrarsa kaynağı, kaynak bir satırsa
+  // kendisinden açılan tekrarlar (kuyrukta yüklü olanlar üzerinden).
+  const kaynak = r.tekrar_kaynagi_id ? rows.find((x) => x.kalem_id === r.tekrar_kaynagi_id) : null;
+  const tekrarlari = rows.filter((x) => x.tekrar_kaynagi_id === r.kalem_id);
+  const tekrarInfo = r.tekrar_kaynagi_id
+    ? `<div class="tekrar-info"><span class="badge-tekrar">Tekrar</span> ${kaynak
+        ? `Kaynak kalem: <a href="#" data-goto="${kaynak.kalem_id}">${formatDT(kaynak.created_at)} · ${esc(PILL[kaynak.durum]?.[1] || kaynak.durum)}</a>`
+        : "Kaynak kalem artık kuyrukta yok."}</div>`
+    : tekrarlari.length
+      ? `<div class="tekrar-info">Bu kalem için ${tekrarlari.length} kez tekrar istendi: ${tekrarlari
+          .map((t) => `<a href="#" data-goto="${t.kalem_id}">${formatDT(t.created_at)}</a>`).join(", ")}</div>`
+      : "";
+  const canTekrar = r.durum === "cihazda" || r.durum === "tamamlandi";
+  const kaliteVal = kaliteDrafts.has(r.kalem_id) ? kaliteDrafts.get(r.kalem_id) : (r.kalite_notu || "");
+
   $("#detailBody").innerHTML = `
     <div class="d-pat">${esc(r.patoloji_no)}</div><div class="d-blok">${esc(r.blok_no)}</div>
     <div class="d-test"><div class="n">${esc(r.test_adi)}</div>${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}</div>
+    ${tekrarInfo}
+    ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button></div>` : ""}
     <div class="d-grid">
       <div><div class="k">Tip</div><div class="v"><span class="tag">${TIP[r.grup] || "Diğer"}</span></div></div>
       <div><div class="k">Öncelik</div><div class="v"><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></div></div>
@@ -934,7 +1076,51 @@ async function showDetail(r) {
     <div class="tl">${tl}</div>
     ${revertNote}
     <div class="m-label">Not</div>
-    <div class="v" style="font-size:13px">${r.not_metni ? esc(r.not_metni) : "—"}</div>`;
+    <div class="v" style="font-size:13px">${r.not_metni ? esc(r.not_metni) : "—"}</div>
+    <div class="m-label" style="margin-top:18px">Kalite Değerlendirmesi</div>
+    <textarea id="kaliteNot" placeholder="Boyanın kalitesi — ör. zemin boyanması, zayıf boyanma, doku kalkması…">${esc(kaliteVal)}</textarea>
+    <div style="display:flex;justify-content:flex-end;margin-top:6px">
+      <button class="btn-ghost btn-sm" id="kaliteSaveBtn" ${kaliteVal === (r.kalite_notu || "") ? "disabled" : ""}>Kaydet</button>
+    </div>`;
+
+  $$("#detailBody [data-goto]").forEach((a) => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const hedef = rows.find((x) => x.kalem_id === a.dataset.goto);
+      if (hedef) showDetail(hedef);
+    };
+  });
+  if (canTekrar) $("#tekrarBtn").onclick = () => tekrarIste(r);
+
+  const kaliteEl = $("#kaliteNot"), kaliteBtn = $("#kaliteSaveBtn");
+  kaliteEl.addEventListener("input", () => {
+    const dirty = kaliteEl.value !== (r.kalite_notu || "");
+    if (dirty) kaliteDrafts.set(r.kalem_id, kaliteEl.value); else kaliteDrafts.delete(r.kalem_id);
+    kaliteBtn.disabled = !dirty;
+  });
+  kaliteEl.addEventListener("blur", () => {
+    // Kaydedilmemiş taslak varsa yeniden çizme: kullanıcı büyük ihtimalle
+    // Kaydet'e basıyor ve paneli şimdi yeniden kurmak butonu tıklama
+    // gerçekleşmeden DOM'dan söker (Safari'de buton odak almadığı için
+    // relatedTarget'a da güvenilemez). Kaydetme akışı zaten yeniler.
+    if (!detailStale || kaliteDrafts.has(r.kalem_id)) return;
+    detailStale = false;
+    const cur = rows.find((x) => x.kalem_id === r.kalem_id);
+    if (cur && selId === r.kalem_id) showDetail(cur);
+  });
+  kaliteBtn.onclick = async () => {
+    kaliteBtn.disabled = true;
+    try {
+      await Api.updateKaliteNotu(r.kalem_id, kaliteEl.value.trim());
+      kaliteDrafts.delete(r.kalem_id);
+      detailStale = false;
+      toast("Kalite notu kaydedildi");
+      await loadQueue();
+    } catch (err) {
+      kaliteBtn.disabled = false;
+      toast("Kalite notu kaydedilemedi", true);
+    }
+  };
 
   $("#cihazSel").onchange = async (e) => {
     try {
@@ -950,8 +1136,8 @@ async function showDetail(r) {
   if (r.durum === "bekleyen") toDurum = "cihazda";
   else if (r.durum === "cihazda") toDurum = "tamamlandi";
   const advLabel = toDurum === "cihazda" ? "Cihaza al" : toDurum === "tamamlandi" ? "Tamamla" : null;
-  const revertTo = REVERT_TO[r.durum] || null;
-  const canDelete = r.durum !== "tamamlandi"; // tamamlanmış kayıtlar kalıcıdır, silinemez
+  const revertTo = canRevert() ? REVERT_TO[r.durum] || null : null;
+  const canDelete = canDeleteKalem(r);
   if (canDelete || advLabel || revertTo) {
     rail.insertAdjacentHTML("beforeend", `<div class="rail-foot">
       ${canDelete ? `<button class="btn-ghost" id="delIstemBtn">Sil</button>` : ""}
@@ -961,8 +1147,10 @@ async function showDetail(r) {
     if (toDurum) $("#advBtn").onclick = () => advance(r.kalem_id, toDurum);
     if (revertTo) $("#revertBtn").onclick = () => revertDurum(r.kalem_id, r.durum);
     if (canDelete) {
-      $("#delIstemBtn").onclick = () => confirmAndDelete(`${r.patoloji_no} — ${r.test_adi}`, () => Api.deleteIstemKalem(r.kalem_id), async () => {
+      const label = `${r.patoloji_no} — ${r.test_adi}${r.durum === "tamamlandi" ? " (Tamamlandı — yönetici yetkisiyle)" : ""}`;
+      $("#delIstemBtn").onclick = () => confirmAndDelete(label, () => Api.deleteIstemKalem(r.kalem_id), async () => {
         toast("Kalem silindi");
+        kaliteDrafts.delete(r.kalem_id);
         showEmpty();
         await loadQueue();
       });
@@ -983,7 +1171,7 @@ function pickerSectionsHTML({ withQuickFill }) {
       <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
         <input id="setSearch" placeholder="Set ara…"></div>
       <div class="sets" id="sets"></div></div>
-    <div class="m-sec" id="mySetsSec"><p class="m-label">Şablonlarım</p><div class="sets" id="mySets"></div></div>` : ""}
+    <div class="m-sec" id="mySetsSec"><p class="m-label">Şablonlar</p><div class="sets" id="mySets"></div></div>` : ""}
     <div class="m-sec" id="antiSec"><p class="m-label">Tek Tek Seç <button type="button" class="bulkpick-toggle" id="bulkPickToggle">Toplu Seç</button></p>
       <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
         <input id="antiSearch" placeholder="Test ara… ER, HER2, CK7… (Enter ile hızlı ekle)"></div>
@@ -1045,15 +1233,22 @@ function renderSets() {
   });
 }
 
+// Kendi şablonların + başkalarının herkese açık şablonları (kendi
+// şablonların önce — bkz. Api.getSablonlar). Başkasınınki sahibinin adıyla.
 function renderMySets() {
   const s = $("#mySets"); if (!s) return;
-  const list = SETS_MINE[grp] || [];
+  const list = SETS_SABLON[grp] || [];
   $("#mySetsSec").style.display = list.length ? "" : "none";
   s.innerHTML = "";
   list.forEach((set) => {
     const el = document.createElement("button");
     el.className = "set";
+    const baskasi = set.sahip_id !== session.id;
     el.textContent = set.ad;
+    if (baskasi) {
+      el.classList.add("set-shared");
+      el.title = `Herkese açık — ${set.sahip_adi}`;
+    }
     el.onclick = () => { applySetTestler(set.testler); el.classList.add("hot"); renderAntis($("#antiSearch")?.value || ""); };
     s.appendChild(el);
   });
@@ -1251,6 +1446,8 @@ function collectPickedTestler() {
 // YENİ İSTEK FORMU
 // ================================================================
 function showForm(prefill) {
+  // Teknisyen sıfırdan istem giremez (RLS de reddeder) — tek yolu "Tekrar İste".
+  if (!canCreateIstem()) { toast("Teknisyen yeni istem giremez — mevcut bir kalem için \"Tekrar İste\"yi kullanın", true); return; }
   navigate("kuyruk");
   grp = "ihc"; prio = "rutin";
   selectedTests = new Map(); customItems = [];
@@ -1353,7 +1550,7 @@ function renderSetlerPage() {
       <h1>İstek Setleri</h1>
       <div class="sub">Kurumsal hazır setler — bir karta dokunup doğrudan istek ver.</div>
       <div class="spacer"></div>
-      <button class="btn-primary btn-sm" id="newSetBtn">+ Yeni Set</button>
+      ${canManageSets() ? `<button class="btn-primary btn-sm" id="newSetBtn">+ Yeni Set</button>` : ""}
     </div>
     <div class="setpage">
       <div class="setfilter" id="setFilter">
@@ -1373,14 +1570,20 @@ function renderSetlerPage() {
     if (b.dataset.gr !== undefined) setFilterGrup = b.dataset.gr;
     renderSetlerPage();
   });
-  $("#newSetBtn").onclick = () => showSetForm(null);
+  if (canManageSets()) $("#newSetBtn").onclick = () => showSetForm(null);
 
   renderSetGrid();
 }
 
+// Setleri sadece admin ekler/düzenler/siler (RLS de öyle). Diğerleri
+// sadece görür ve "İstek Ver" kullanır — pasif setler (yalnızca yönetimde
+// anlamlı) onlara gösterilmez. Teknisyen sıfırdan istem giremediği için
+// "İstek Ver" ona da gösterilmez (bkz. canCreateIstem).
 function renderSetGrid() {
   const grid = $("#setGrid"); if (!grid) return;
+  const manage = canManageSets();
   const list = ISTEK_SETLERI.filter((s) =>
+    (manage || s.aktif) &&
     (setFilterGrup === "all" || s.grup === setFilterGrup) &&
     (setFilterUzmanlik === "all" || s.uzmanlik === setFilterUzmanlik)
   );
@@ -1393,13 +1596,14 @@ function renderSetGrid() {
       <div class="nm">${esc(s.ad)} ${!s.aktif ? '<span class="status pasif" style="margin-left:6px">Pasif</span>' : ""}</div>
       <div class="meta">${TIP[s.grup] || "Diğer"}${s.uzmanlik ? " · " + esc(s.uzmanlik) : ""}</div>
       <div class="chips">${s.testler.length ? s.testler.map((t) => `<span class="chip">${esc(t.ad)}</span>`).join("") : '<span class="chip">—</span>'}</div>
-      <div class="btnrow">${s.aktif ? `<button class="btn-primary" data-act="ver">İstek Ver</button>` : ""}<button class="btn-ghost" data-act="duzenle">Düzenle</button></div>
+      <div class="btnrow">${s.aktif && canCreateIstem() ? `<button class="btn-primary" data-act="ver">İstek Ver</button>` : ""}${manage ? `<button class="btn-ghost" data-act="duzenle">Düzenle</button>` : ""}</div>
     </div>`).join("");
   grid.querySelectorAll(".tile").forEach((tile) => {
     const find = () => list.find((s) => s.id === tile.dataset.id);
     const verBtn = tile.querySelector('[data-act="ver"]');
     if (verBtn) verBtn.onclick = (e) => { e.stopPropagation(); showForm(find()); };
-    tile.querySelector('[data-act="duzenle"]').onclick = (e) => { e.stopPropagation(); showSetForm(find()); };
+    const duzBtn = tile.querySelector('[data-act="duzenle"]');
+    if (duzBtn) duzBtn.onclick = (e) => { e.stopPropagation(); showSetForm(find()); };
   });
 }
 
@@ -1409,6 +1613,7 @@ async function refreshIstekSetleri() {
 }
 
 function showSetForm(existing) {
+  if (!canManageSets()) return;
   grp = existing ? existing.grup : "ihc";
   selectedTests = new Map(); customItems = [];
   if (existing) existing.testler.forEach((t) => {
@@ -1476,43 +1681,65 @@ function showSetForm(existing) {
 }
 
 // ================================================================
-// ŞABLONLAR (kişiye özel)
+// ŞABLONLAR (kişisel / herkese açık — teknisyen erişemez)
 // ================================================================
 function renderSablonlarPage() {
   $("#mainView").innerHTML = `
     <div class="page-head">
-      <h1>Şablonlarım</h1>
-      <div class="sub">Kişiye özel test kombinasyonların — Yeni İstek formunda hızlıca kullanılır.</div>
+      <h1>Şablonlar</h1>
+      <div class="sub">Kendi test kombinasyonların ve başkalarının herkese açık paylaştıkları — Yeni İstek formunda hızlıca kullanılır.</div>
       <div class="spacer"></div>
       <button class="btn-primary btn-sm" id="newSablonBtn">+ Yeni Şablon</button>
     </div>
-    <div class="tilegrid" id="sablonGrid"></div>`;
+    <div class="sablonpage" id="sablonPage"></div>`;
   $("#newSablonBtn").onclick = () => showSablonForm(null);
   renderSablonGrid();
 }
 
-function renderSablonGrid() {
-  const grid = $("#sablonGrid"); if (!grid) return;
-  if (!MY_SABLONLAR.length) {
-    grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="t">Henüz şablonun yok</div><div class="d">"+ Yeni Şablon" ile ilk kombinasyonunu oluştur.</div></div>`;
-    return;
-  }
-  grid.innerHTML = MY_SABLONLAR.map((s) => `
-    <div class="tile" data-id="${s.id}">
+function sablonTileHTML(s) {
+  const mine = s.sahip_id === session.id;
+  const vis = s.herkese_acik
+    ? `<span class="vis-badge acik">Herkese açık</span>`
+    : `<span class="vis-badge ozel">Sadece bana özel</span>`;
+  const btns = [
+    canCreateIstem() ? `<button class="btn-primary" data-act="ver">İstek Ver</button>` : "",
+    canEditSablon(s) ? `<button class="btn-ghost" data-act="duzenle">Düzenle</button>` : "",
+  ].join("");
+  return `
+    <div class="tile${canEditSablon(s) ? "" : " tile-ro"}" data-id="${s.id}">
       <div class="nm">${esc(s.ad)}</div>
-      <div class="meta">${TIP[s.grup] || "Diğer"}</div>
+      <div class="meta">${TIP[s.grup] || "Diğer"}${mine ? "" : ` · ${esc(s.sahip_adi)}`} ${vis}</div>
       <div class="chips">${s.testler.length ? s.testler.map((t) => `<span class="chip">${esc(t.ad)}</span>`).join("") : '<span class="chip">—</span>'}</div>
-      <button class="btn-ghost">Düzenle</button>
-    </div>`).join("");
-  grid.querySelectorAll(".tile").forEach((tile) => {
-    const find = () => MY_SABLONLAR.find((s) => s.id === tile.dataset.id);
-    tile.querySelector("button").onclick = (e) => { e.stopPropagation(); showSablonForm(find()); };
-    tile.onclick = () => showSablonForm(find());
+      <div class="btnrow">${btns}</div>
+    </div>`;
+}
+
+function renderSablonGrid() {
+  const page = $("#sablonPage"); if (!page) return;
+  const mine = SABLONLAR.filter((s) => s.sahip_id === session.id);
+  const shared = SABLONLAR.filter((s) => s.sahip_id !== session.id);
+  page.innerHTML = `
+    <p class="gridlabel">Şablonlarım</p>
+    <div class="tilegrid">${mine.length
+      ? mine.map(sablonTileHTML).join("")
+      : `<div class="empty" style="grid-column:1/-1"><div class="t">Henüz şablonun yok</div><div class="d">"+ Yeni Şablon" ile ilk kombinasyonunu oluştur.</div></div>`}</div>
+    ${shared.length ? `<p class="gridlabel">Herkese açık (diğer kullanıcılar)</p><div class="tilegrid">${shared.map(sablonTileHTML).join("")}</div>` : ""}`;
+  page.querySelectorAll(".tile").forEach((tile) => {
+    const find = () => SABLONLAR.find((s) => s.id === tile.dataset.id);
+    const verBtn = tile.querySelector('[data-act="ver"]');
+    if (verBtn) verBtn.onclick = (e) => { e.stopPropagation(); showForm(find()); };
+    const duzBtn = tile.querySelector('[data-act="duzenle"]');
+    if (duzBtn) {
+      duzBtn.onclick = (e) => { e.stopPropagation(); showSablonForm(find()); };
+      tile.onclick = () => showSablonForm(find());
+    }
   });
 }
 
 function showSablonForm(existing) {
+  if (isTeknisyen() || (existing && !canEditSablon(existing))) return;
   grp = existing ? existing.grup : "ihc";
+  let herkeseAcik = existing ? existing.herkese_acik : false;
   selectedTests = new Map(); customItems = [];
   if (existing) existing.testler.forEach((t) => {
     if (t.custom) customItems.push({ ad: t.ad, sel: true, grup: t.grup });
@@ -1523,7 +1750,13 @@ function showSablonForm(existing) {
   rail.innerHTML = `
     <div class="rail-head"><h2>${existing ? "Şablonu Düzenle" : "Yeni Şablon"}</h2><button class="rx" id="closeSablon">×</button></div>
     <div class="rail-body">
+      ${existing && existing.sahip_id !== session.id ? `<div class="m-sec"><p class="m-label">Sahibi</p><div class="v" style="font-size:13px">${esc(existing.sahip_adi)} <span style="color:var(--ink-3)">— yönetici olarak düzenliyorsun</span></div></div>` : ""}
       <div class="m-sec"><p class="m-label">Ad</p><input class="finput" id="sablonAd" value="${existing ? esc(existing.ad) : ""}" placeholder="ör. fd meme 1"></div>
+      <div class="m-sec"><p class="m-label">Görünürlük</p>
+        <div class="segs" id="sablonVis">
+          <button type="button" data-vis="ozel" class="${herkeseAcik ? "" : "on"}">Sadece bana özel</button>
+          <button type="button" data-vis="acik" class="${herkeseAcik ? "on" : ""}">Herkese açık</button>
+        </div></div>
       ${pickerSectionsHTML({ withQuickFill: false })}
     </div>
     <div class="rail-foot">
@@ -1532,8 +1765,13 @@ function showSablonForm(existing) {
     </div>`;
 
   $("#closeSablon").onclick = showEmpty;
-  if (existing) $("#delSablon").onclick = () => deleteSablonFlow(existing.id);
+  if (existing) $("#delSablon").onclick = () => confirmAndDelete(existing.ad, () => Api.deleteSablon(existing.id), afterSablonChange("Şablon silindi"));
   else $("#cancelSablon").onclick = showEmpty;
+  $("#sablonVis").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-vis]"); if (!b) return;
+    herkeseAcik = b.dataset.vis === "acik";
+    $$("#sablonVis button").forEach((x) => x.classList.toggle("on", x === b));
+  });
 
   $$("#groups button").forEach((b) => b.classList.toggle("on", b.dataset.g === grp));
   bindPicker(false);
@@ -1545,30 +1783,24 @@ function showSablonForm(existing) {
     if (!testler.length) { toast("En az bir test seçin", true); return; }
     $("#saveSablon").disabled = true;
     try {
-      if (existing) await Api.updateSablon(existing.id, { ad, grup: grp, testler });
-      else await Api.createSablon({ sahip_id: session.id, grup: grp, ad, testler });
-      toast(existing ? "Şablon güncellendi" : "Şablon oluşturuldu");
-      await refreshMySablonlar();
-      showEmpty();
-      if (currentPage === "sablonlar") renderSablonlarPage();
+      if (existing) await Api.updateSablon(existing.id, { ad, grup: grp, herkese_acik: herkeseAcik, testler });
+      else await Api.createSablon({ sahip_id: session.id, grup: grp, ad, herkese_acik: herkeseAcik, testler });
+      await afterSablonChange(existing ? "Şablon güncellendi" : "Şablon oluşturuldu")();
     } catch (e) {
-      toast("Kaydedilemedi", true);
+      toast(e && e.isForbidden ? e.message : "Kaydedilemedi", true);
     } finally {
       const btn = $("#saveSablon"); if (btn) btn.disabled = false;
     }
   };
 }
 
-async function deleteSablonFlow(id) {
-  try {
-    await Api.deleteSablon(id);
-    toast("Şablon silindi");
-    await refreshMySablonlar();
+function afterSablonChange(msg) {
+  return async () => {
+    toast(msg);
+    await refreshSablonlar();
     showEmpty();
     if (currentPage === "sablonlar") renderSablonlarPage();
-  } catch (e) {
-    toast("Silinemedi", true);
-  }
+  };
 }
 
 // ================================================================
@@ -1666,8 +1898,12 @@ let hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
 let hizSortCol = null, hizSortDir = "asc";
 const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzman_adi", tarih: "created_at" };
 
-function hizOzetTxt(h) {
+function hizOzetSayilar(h) {
   return h.ozet.length ? h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") : "—";
+}
+// Özet sütunu filtresi "tekrar" yazarak tekrar istemlerini de bulabilsin.
+function hizOzetTxt(h) {
+  return h.tekrar ? `${hizOzetSayilar(h)} (tekrar)` : hizOzetSayilar(h);
 }
 function hizHasActiveFilters() {
   return Boolean(hizColFilters.pat || hizColFilters.isteyen || hizColFilters.uzman || hizColFilters.ozet);
@@ -1702,6 +1938,7 @@ const HIZMETLER_EXPORT_COLS = [
   { label: "İsteyen", value: (h) => h.isteyen_adi || "" },
   { label: "Uzman Adına", value: (h) => h.uzman_adi || "" },
   { label: "Özet", value: (h) => h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") },
+  { label: "Tekrar", value: (h) => (h.tekrar ? "Evet" : "") },
   { label: "Tarih", value: (h) => formatDT(h.created_at) },
   { label: "Fatura Durumu", value: (h) => (h.fatura_girildi ? "Girildi" : "Girilmedi") },
   { label: "Fatura Giren", value: (h) => h.fatura_giren_adi || "" },
@@ -1824,7 +2061,7 @@ function renderHizTable() {
     tr.innerHTML = `<td class="c-pat" data-pat="${esc(h.patoloji_no)}" style="cursor:pointer">${esc(h.patoloji_no)}</td>
       <td>${esc(h.isteyen_adi)}</td>
       <td>${esc(h.uzman_adi || "—")}</td>
-      <td>${esc(hizOzetTxt(h))}</td>
+      <td>${esc(hizOzetSayilar(h))}${h.tekrar ? `<span class="badge-tekrar" title="Tekrar İste ile açılan istem">Tekrar</span>` : ""}</td>
       <td style="color:var(--ink-3);font-size:12px">${formatDT(h.created_at)}</td>
       <td>${act}</td>`;
     tb.appendChild(tr);
@@ -1887,7 +2124,7 @@ function renderKullaniciList() {
   }
   wrap.innerHTML = KULLANICILAR_LIST.map((u) => `
     <div class="devrow" data-id="${u.id}">
-      <div><div class="nm">${esc(u.ad_soyad)}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
+      <div><div class="nm">${esc(u.ad_soyad)}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${u.is_admin ? " · Yönetici" : ""}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
       <div class="grow"></div>
       <span class="status ${u.aktif ? "aktif" : "pasif"}">${u.aktif ? "Aktif" : "Pasif"}</span>
     </div>`).join("");
@@ -1929,6 +2166,8 @@ function showKullaniciForm(existing) {
           <option value="asistan" ${existing && existing.rol === "asistan" ? "selected" : ""}>Asistan</option>
           <option value="teknisyen" ${existing && existing.rol === "teknisyen" ? "selected" : ""}>Teknisyen</option>
         </select></div>
+      <div class="m-sec"><label class="chkrow"><input type="checkbox" id="kAdmin" ${existing && existing.is_admin ? "checked" : ""} ${existing && existing.id === session.id ? "disabled" : ""}> Yönetici <span style="color:var(--ink-3);font-weight:400">— Yönetim sayfaları, her kalemi silme, tüm şablon/setleri düzenleme</span></label>
+        ${existing && existing.id === session.id ? `<div class="v" style="font-size:12px;color:var(--ink-3);margin-top:4px">Kendi yönetici yetkini kaldıramazsın (kilitlenmeyi önlemek için) — başka bir yönetici kaldırabilir.</div>` : ""}</div>
       ${existing
         ? `<div class="m-sec"><p class="m-label">PIN <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— değiştirilemez</span></p><div class="v" style="font-size:13px;color:var(--ink-3)">${existing.auth_user_id ? "Supabase Auth üzerinden yönetiliyor" : "Auth hesabı yok — \"Auth hesabı olmayanları taşı\" ile oluşturulur"}</div></div>`
         : `<div class="m-sec"><p class="m-label">PIN <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— Auth hesabının şifresi olacak</span></p><input class="finput" id="kPin" placeholder="ör. 1234" inputmode="numeric" maxlength="6"></div>`}
@@ -1963,14 +2202,16 @@ function showKullaniciForm(existing) {
     const ad_soyad = $("#kAd").value.trim();
     if (!ad_soyad) { toast("Ad soyad girin", true); return; }
     const rol = $("#kRol").value;
+    // Kendi satırında kutu kilitli — değer her zaman mevcut hali (true) kalır.
+    const is_admin = existing && existing.id === session.id ? existing.is_admin : $("#kAdmin").checked;
     $("#saveKullanici").disabled = true;
     try {
       if (existing) {
-        await Api.updateKullanici(existing.id, { ad_soyad, rol });
+        await Api.updateKullanici(existing.id, { ad_soyad, rol, is_admin });
       } else {
         const pin = $("#kPin").value.trim();
         if (!pin) { toast("PIN girin", true); $("#saveKullanici").disabled = false; return; }
-        await Api.createKullanici({ ad_soyad, rol, pin });
+        await Api.createKullanici({ ad_soyad, rol, is_admin, pin });
       }
       toast(existing ? "Kullanıcı güncellendi" : "Kullanıcı eklendi");
       UZMANLAR = await Api.getUzmanlar();

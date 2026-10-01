@@ -13,6 +13,10 @@
   --amber-i:#9a6410; --amber-b:#f7eeda;
   --blue-i:#2f6690;  --blue-b:#e8f0f6;
   --green-i:#2f7d52; --green-b:#e7f3ec;
+  --violet-i:#6a46a8; --violet-b:#efe8f8;
+  --line-strong:#a9b6b0;  /* vaka (patoloji no) ayracı */
+  --row-cihazda:#f2f7fc; --row-cihazda-h:#e6eff8;
+  --row-tamam:#f3f4f3;   --row-tamam-h:#eaecea;
   --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,sans-serif;
   --mono:ui-monospace,'SF Mono',Menlo,monospace;
 }
@@ -99,20 +103,32 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .thcheck:hover{background:var(--line-2);color:var(--ink)}
 .thcheck input{margin:0;accent-color:var(--accent)}
 .thcol.filtered{background:var(--accent-soft)}
-.note-txt{color:var(--ink-3);font-size:12px;cursor:default;white-space:nowrap}
+.note-txt{color:var(--ink-3);font-size:12.5px;cursor:default;white-space:nowrap}
 .exportbox{position:relative}
 .barrow.dimmed{opacity:.45;pointer-events:none}
 .case-banner{display:flex;align-items:center;gap:14px;padding:10px 26px;background:var(--accent-soft);border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)}
 .case-banner b{color:var(--accent)}
-tbody td{padding:11px 10px;border-bottom:1px solid var(--line-2);font-size:13px;vertical-align:middle}
+tbody td{padding:6px 10px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
 tbody tr{cursor:pointer}
 tbody tr:hover{background:var(--line-2)}
-tbody tr.sel{background:var(--accent-soft)}
+/* Durum tonu — rozetin yanında satırın tamamı: Cihazda hafif mavi,
+   Tamamlandı hafif gri + soluk metin. */
+tbody tr.row-cihazda{background:var(--row-cihazda)}
+tbody tr.row-cihazda:hover{background:var(--row-cihazda-h)}
+tbody tr.row-tamamlandi{background:var(--row-tamam)}
+tbody tr.row-tamamlandi:hover{background:var(--row-tamam-h)}
+tbody tr.row-tamamlandi > td{color:var(--ink-2)}
+tbody tr.row-tamamlandi .c-test{font-weight:560}
+/* Yeni vaka (patoloji no değişimi) — aynı vakanın kalemleri gruplanmış
+   görünsün diye kalın ayraç. border-collapse'ta geniş olan kenar kazanır. */
+tbody tr.case-start > td{border-top:2px solid var(--line-strong)}
+tbody tr.sel, tbody tr.sel:hover{background:var(--accent-soft)}
 /* Çoklu seçim (checkbox) — tr.sel'den (detay paneli açık satırı) bilerek
    ayrı bir görsel dil: sol kenarda ince bir şerit. Bir satır aynı anda hem
    detayda açık hem toplu seçili olabilir, ikisi birlikte okunabilir kalsın. */
 tr.bulk-checked{box-shadow:inset 3px 0 0 var(--accent)}
 .bulkcell{width:1%; padding-right:0!important}
+thead .bulkcell input[type=checkbox]{margin:0}
 .bulkcell input[type=checkbox]{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);vertical-align:middle}
 
 /* ---------------- Toplu aksiyon çubuğu ---------------- */
@@ -120,22 +136,30 @@ tr.bulk-checked{box-shadow:inset 3px 0 0 var(--accent)}
 .bulkbar.hidden{display:none}
 .bulkbar #bulkCount{font-size:13px;font-weight:600}
 .bulkbar .ub-x{color:#fff}
-.c-blok{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600;white-space:nowrap}
-.c-pat{font-family:var(--mono);font-size:12px;color:var(--ink-2);font-weight:600;white-space:nowrap}
-.c-pat:hover{text-decoration:underline;color:var(--accent)}
+.c-blok{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600;white-space:nowrap}
+.c-pat{font-family:var(--mono);font-size:13px;color:var(--ink-2);font-weight:600;white-space:nowrap}
+.c-pat .pat-no:hover{text-decoration:underline;color:var(--accent)}
+/* "Bu vakanın tümünü seç" — vaka grubunun ilk satırında, patoloji no'nun solunda */
+.case-sel{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin:0 6px 0 -2px;padding:0;vertical-align:-4px;border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--ink-3);cursor:pointer}
+.case-sel:hover{border-color:var(--accent);color:var(--accent)}
+.case-sel.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .c-test{font-weight:600}
-.c-test small{display:block;font-weight:400;color:var(--ink-3);font-family:var(--mono);font-size:10.5px;margin-top:1px}
-.tag{display:inline-block;font-size:11px;font-weight:560;padding:2px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.c-test small{display:block;font-weight:400;color:var(--ink-3);font-family:var(--mono);font-size:11px;margin-top:1px}
+.badge-tekrar{display:inline-block;margin-left:6px;font-family:var(--sans);font-size:10.5px;font-weight:700;letter-spacing:.02em;padding:1px 6px;border-radius:5px;background:var(--violet-b);color:var(--violet-i);vertical-align:1px;white-space:nowrap}
+.tekrar-info{font-size:12.5px;color:var(--ink-2);margin:-6px 0 14px;line-height:1.6}
+.tekrar-info .badge-tekrar{margin-left:0;margin-right:4px}
+.tekrar-info a{color:var(--accent)}
+.tag{display:inline-block;font-size:11.5px;font-weight:560;padding:2px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%}
 .st-bekleyen{background:var(--amber-b);color:var(--amber-i)} .st-bekleyen::before{background:var(--amber-i)}
 .st-cihazda{background:var(--blue-b);color:var(--blue-i)} .st-cihazda::before{background:var(--blue-i)}
 .st-tamamlandi{background:var(--green-b);color:var(--green-i)} .st-tamamlandi::before{background:var(--green-i)}
-.prio{font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;white-space:nowrap}
+.prio{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:6px;white-space:nowrap}
 .p-rutin{background:var(--paper);color:var(--ink-2);border:1px solid var(--line)}
 .p-acil{background:var(--amber-b);color:var(--amber-i)}
 .p-stat{background:var(--accent-soft);color:var(--accent)}
-.act{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:7px;padding:5px 10px;font-size:12px;font-weight:560;cursor:pointer;font-family:var(--sans);white-space:nowrap}
+.act{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:7px;padding:3px 9px;font-size:12px;font-weight:560;cursor:pointer;font-family:var(--sans);white-space:nowrap}
 .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .act:disabled{opacity:.5;cursor:not-allowed}
 .actrow{display:flex;gap:6px}
@@ -147,7 +171,7 @@ tr.bulk-checked{box-shadow:inset 3px 0 0 var(--accent)}
 /* Durum geri alma — küçük, yuvarlak, sadece ikonlu; ileri aksiyonların
    (mavi/yeşil) renginden bilerek ayrışan nötr gri — karışmasın diye. */
 .act-revert-icon{
-  width:28px;height:28px;flex:none;padding:0;border-radius:50%;
+  width:24px;height:24px;flex:none;padding:0;border-radius:50%;
   border:1px solid var(--line);background:var(--card);color:var(--ink-3);
   font-size:14px;line-height:1;cursor:pointer;font-family:var(--sans);
   display:inline-flex;align-items:center;justify-content:center;
@@ -273,6 +297,20 @@ tr.bulk-checked{box-shadow:inset 3px 0 0 var(--accent)}
 .tile .chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;min-height:22px}
 .tile .chip{font-size:11px;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:2px 7px;color:var(--ink-2)}
 .tile button{width:100%}
+.tile.tile-ro{cursor:default}
+.tile.tile-ro:hover{border-color:var(--line)}
+.vis-badge{display:inline-block;margin-left:4px;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:5px;white-space:nowrap}
+.vis-badge.acik{background:var(--green-b);color:var(--green-i)}
+.vis-badge.ozel{background:var(--line-2);color:var(--ink-3)}
+.sablonpage{flex:1;overflow-y:auto;padding-bottom:22px}
+.sablonpage .tilegrid{overflow:visible;padding-bottom:8px}
+.gridlabel{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:10px 26px 8px}
+.set.set-shared{border-style:dashed}
+.segs{display:flex;gap:7px}
+.segs button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:8px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans);color:var(--ink-2)}
+.segs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.chkrow{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;flex-wrap:wrap}
+.chkrow input{width:16px;height:16px;margin:0;accent-color:var(--accent)}
 .tile .btnrow{display:flex;gap:6px}
 .tile .btnrow button{flex:1;width:auto}
 
@@ -287,8 +325,8 @@ tr.bulk-checked{box-shadow:inset 3px 0 0 var(--accent)}
 .devrow .status.pasif{background:var(--line-2);color:var(--ink-3)}
 
 @media (min-width:1400px){
-  thead th{padding:12px 16px}
-  tbody td{padding:13px 16px}
+  thead th{padding:10px 14px}
+  tbody td{padding:7px 14px}
 }
 @media (max-width:900px){
   .app{height:auto;max-height:none}

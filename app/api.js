@@ -26,6 +26,15 @@
     return data;
   }
 
+  // RLS bir DELETE'i reddettiğinde PostgREST hata DÖNMEZ — sadece 0 satır
+  // siler. Silme çağrıları bu yüzden .select("id") ile dönen satırları
+  // kontrol eder; hiç satır dönmediyse bu hatayı fırlatır.
+  function forbiddenError() {
+    const e = new Error("Bu işlem için yetkiniz yok");
+    e.isForbidden = true;
+    return e;
+  }
+
   // Yönetim ekranlarındaki "Sil" aksiyonlarının ortak yolu. Hiçbir tabloda
   // ON DELETE CASCADE yok (istek_seti_kalemleri hariç — o da bir setin
   // kendi alt kalemleri, başka bir yerdeki gerçek veri değil), bu yüzden
@@ -34,7 +43,7 @@
   // anlamlı bir hataya çeviriyoruz. Ayrı "kullanılıyor mu" ön-kontrol
   // sorgusu YAZILMIYOR; veritabanının kendi referans bütünlüğüne güveniliyor.
   async function deleteRow(table, id) {
-    const { error } = await client.from(table).delete().eq("id", id);
+    const { data, error } = await client.from(table).delete().eq("id", id).select("id");
     if (error) {
       if (error.code === "23503") {
         const e = new Error("Bu kayıt kullanımda, önce pasifleştirin");
@@ -43,24 +52,18 @@
       }
       throw error;
     }
+    if (!data || !data.length) throw forbiddenError();
   }
 
-  // Yöneticinin email+PIN'i — YALNIZCA bellekte (localStorage'a yazılmaz).
-  // signUp() çağrıldığı an tarayıcının aktif Supabase Auth oturumunu YENİ
-  // oluşturulan kullanıcıya çevirir; bunu hemen sonra bu bilgiyle
-  // signInWithPassword ile yöneticinin kendi hesabına geri dönmek için
-  // kullanılır. Sayfa yenilenince kaybolur.
-  let _adminEmail = null;
-  let _adminPin = null;
-
-  async function restoreAdminSession() {
-    if (!_adminEmail || !_adminPin) return;
-    try {
-      await client.auth.signInWithPassword({ email: _adminEmail, password: toAuthPassword(_adminPin) });
-    } catch (e) {
-      // sessizce geç — olursa kullanıcı oturumunu kaybettiğini görüp
-      // yeniden giriş yapar, uygulamayı çökertmeye değmez.
-    }
+  // Yeni kullanıcının Auth hesabı AYRI, oturum saklamayan bir client ile
+  // açılır: signUp() ana client'ta çağrılsaydı tarayıcının oturumu yeni
+  // kullanıcıya geçerdi (ve kullanicilar insert'i — artık sadece admin'e
+  // açık — yeni kullanıcının yetkisiyle yapılırdı). Böylece yöneticinin
+  // oturumuna hiç dokunulmaz.
+  function signupClient() {
+    return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "istem-signup-tmp" },
+    });
   }
 
   // Yönetilen Supabase'de şifre minimum uzunluğu sabit 6 (dashboard'dan
@@ -116,15 +119,13 @@
       if (row.email) {
         const { error: e2 } = await client.auth.signInWithPassword({ email: row.email, password: toAuthPassword(pin) });
         if (!e2) {
-          _adminEmail = row.email;
-          _adminPin = String(pin ?? "");
           const { data: profile, error: e3 } = await client
             .from("kullanicilar")
-            .select("id,ad_soyad,rol")
+            .select("id,ad_soyad,rol,is_admin")
             .eq("id", kullaniciId)
             .maybeSingle();
           if (e3 || !profile) return null;
-          return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol };
+          return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin) };
         }
       }
 
@@ -140,7 +141,7 @@
           .eq("aktif", true)
           .maybeSingle();
         if (error || !data || String(data.pin ?? "") !== String(pin ?? "")) return null;
-        return { id: data.id, ad_soyad: data.ad_soyad, rol: data.rol };
+        return { id: data.id, ad_soyad: data.ad_soyad, rol: data.rol, is_admin: false };
       } catch (e) {
         return null;
       }
@@ -148,8 +149,6 @@
 
     async signOut() {
       try { await client.auth.signOut(); } catch (e) { /* zaten çıkışta, önemli değil */ }
-      _adminEmail = null;
-      _adminPin = null;
     },
 
     // Boot'ta gerçek Supabase Auth oturumu var mı diye bakar (localStorage'a
@@ -160,11 +159,11 @@
       if (!session) return null;
       const { data: profile, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,rol")
+        .select("id,ad_soyad,rol,is_admin")
         .eq("auth_user_id", session.user.id)
         .maybeSingle();
       if (error || !profile) return null;
-      return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol };
+      return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin) };
     },
 
     // ---------------- Kullanıcılar (yönetim) ----------------
@@ -173,38 +172,38 @@
     async getAllKullanicilar() {
       const { data, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,rol,pin,email,auth_user_id,aktif")
+        .select("id,ad_soyad,rol,is_admin,pin,email,auth_user_id,aktif")
         .order("ad_soyad");
       return must(data, error);
     },
 
     // PIN burada artık kullanicilar.pin'e YAZILMIYOR — parola kaynağı
-    // sadece Supabase Auth. signUp() geçici olarak tarayıcının Auth
-    // oturumunu bu yeni kullanıcıya çevirir; hemen ardından yöneticinin
-    // kendi oturumu geri yüklenir (restoreAdminSession).
-    async createKullanici({ ad_soyad, rol, pin }) {
+    // sadece Supabase Auth. Auth hesabı ayrı bir client'ta açılır (bkz.
+    // signupClient), kullanicilar satırı yöneticinin kendi oturumuyla yazılır.
+    async createKullanici({ ad_soyad, rol, is_admin, pin }) {
       const email = await uniqueEmailFor(ad_soyad);
-      const { data: signUpData, error: e1 } = await client.auth.signUp({ email, password: toAuthPassword(pin) });
+      const { data: signUpData, error: e1 } = await signupClient().auth.signUp({ email, password: toAuthPassword(pin) });
       if (e1) throw e1;
       const authUserId = signUpData?.user?.id || null;
       const { data, error: e2 } = await client
         .from("kullanicilar")
-        .insert({ ad_soyad, rol, email, auth_user_id: authUserId })
+        .insert({ ad_soyad, rol, is_admin: Boolean(is_admin), email, auth_user_id: authUserId })
         .select()
         .single();
       if (e2) throw e2;
-      await restoreAdminSession();
       return data;
     },
 
     // PIN artık düzenlenemiyor (başka birinin şifresini service_role
-    // olmadan değiştiremeyiz) — sadece ad/rol.
-    async updateKullanici(id, { ad_soyad, rol }) {
-      const { error } = await client
+    // olmadan değiştiremeyiz) — sadece ad/rol/yönetici.
+    async updateKullanici(id, { ad_soyad, rol, is_admin }) {
+      const { data, error } = await client
         .from("kullanicilar")
-        .update({ ad_soyad, rol })
-        .eq("id", id);
+        .update({ ad_soyad, rol, is_admin: Boolean(is_admin) })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      if (!data || !data.length) throw forbiddenError();
     },
 
     async setKullaniciAktif(id, aktif) {
@@ -233,7 +232,7 @@
     async migrateKullaniciToAuth(row) {
       if (row.auth_user_id) return { skipped: true };
       const email = row.email || (await uniqueEmailFor(row.ad_soyad));
-      const { data: signUpData, error: e1 } = await client.auth.signUp({ email, password: toAuthPassword(row.pin) });
+      const { data: signUpData, error: e1 } = await signupClient().auth.signUp({ email, password: toAuthPassword(row.pin) });
       if (e1) throw e1;
       const authUserId = signUpData?.user?.id || null;
       const { error: e2 } = await client
@@ -241,7 +240,6 @@
         .update({ email, auth_user_id: authUserId })
         .eq("id", row.id);
       if (e2) throw e2;
-      await restoreAdminSession();
       return { skipped: false };
     },
 
@@ -440,16 +438,19 @@
       return deleteRow("istek_setleri", id);
     },
 
-    // Kişiye özel şablonlar (sahip_id = giriş yapan kullanıcı).
-    async getMySablonlar(userId) {
+    // Şablonlar — kullanıcının kendi şablonları + başkalarının herkese
+    // açık işaretledikleri (kendi şablonları önce). RLS admin'e başkalarının
+    // özel şablonlarını da gösterir; burada bilerek listelenmez.
+    async getSablonlar(userId) {
       const { data, error } = await client
         .from("sablonlar")
-        .select("id,grup,ad,sablon_kalemleri(test_id,ozel_test,test_katalog(id,ad,klon))")
-        .eq("sahip_id", userId)
+        .select("id,grup,ad,sahip_id,herkese_acik,kullanicilar(ad_soyad),sablon_kalemleri(test_id,ozel_test,test_katalog(id,ad,klon))")
+        .or(`sahip_id.eq.${userId},herkese_acik.eq.true`)
         .order("ad");
       must(data, error);
       return data.map((s) => ({
         id: s.id, grup: s.grup, ad: s.ad,
+        sahip_id: s.sahip_id, sahip_adi: s.kullanicilar?.ad_soyad || "—", herkese_acik: Boolean(s.herkese_acik),
         testler: (s.sablon_kalemleri || [])
           .map((k) =>
             k.test_katalog
@@ -457,13 +458,13 @@
               : { ad: k.ozel_test, grup: s.grup, custom: true }
           )
           .filter((t) => t.ad),
-      }));
+      })).sort((a, b) => Number(b.sahip_id === userId) - Number(a.sahip_id === userId));
     },
 
-    async createSablon({ sahip_id, grup, ad, testler }) {
+    async createSablon({ sahip_id, grup, ad, herkese_acik, testler }) {
       const { data: s, error: e1 } = await client
         .from("sablonlar")
-        .insert({ sahip_id, grup, ad })
+        .insert({ sahip_id, grup, ad, herkese_acik: Boolean(herkese_acik) })
         .select()
         .single();
       if (e1) throw e1;
@@ -475,9 +476,14 @@
       return s;
     },
 
-    async updateSablon(id, { ad, grup, testler }) {
-      const { error: e1 } = await client.from("sablonlar").update({ ad, grup }).eq("id", id);
+    async updateSablon(id, { ad, grup, herkese_acik, testler }) {
+      const { data: upd, error: e1 } = await client
+        .from("sablonlar")
+        .update({ ad, grup, herkese_acik: Boolean(herkese_acik) })
+        .eq("id", id)
+        .select("id");
       if (e1) throw e1;
+      if (!upd || !upd.length) throw forbiddenError();
       const { error: e2 } = await client.from("sablon_kalemleri").delete().eq("sablon_id", id);
       if (e2) throw e2;
       if (testler.length) {
@@ -488,8 +494,9 @@
     },
 
     async deleteSablon(id) {
-      const { error } = await client.from("sablonlar").delete().eq("id", id);
+      const { data, error } = await client.from("sablonlar").delete().eq("id", id).select("id");
       if (error) throw error;
+      if (!data || !data.length) throw forbiddenError();
     },
 
     // ---------------- Cihazlar ----------------
@@ -596,7 +603,7 @@
       const [istemRes, kullaniciMap] = await Promise.all([
         client
           .from("istemler")
-          .select("id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani,istem_kalemleri(grup)")
+          .select("id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani,istem_kalemleri(grup,tekrar_kaynagi_id)")
           .order("created_at", { ascending: false }),
         this.getKullaniciMap(),
       ]);
@@ -609,7 +616,11 @@
         const ozet = Object.entries(counts)
           .sort((a, b) => (grupSira[a[0]] ?? 99) - (grupSira[b[0]] ?? 99))
           .map(([grup, count]) => ({ grup, count }));
+        const kalemler = i.istem_kalemleri || [];
         return {
+          // "Tekrar İste" ile açılan istem (tüm kalemleri bir tekrar) —
+          // Hizmetler'de ayrıca işaretlenir.
+          tekrar: kalemler.length > 0 && kalemler.every((k) => k.tekrar_kaynagi_id),
           istem_id: i.id,
           patoloji_no: i.patoloji_no,
           isteyen_adi: kullaniciMap[i.istem_yapan_id] || "—",
@@ -738,11 +749,29 @@
       return istem;
     },
 
+    // Boya tekrarı — yeni istem başlığı + Bekleyen kalem + log tek
+    // transaction'da, sunucuda (bkz. yetki_sema.sql → tekrar_iste).
+    // Dönen değer yeni kalemin id'si.
+    async tekrarIste(kalemId, neden) {
+      const { data, error } = await client.rpc("tekrar_iste", { p_kalem_id: kalemId, p_not: neden || null });
+      if (error) throw error;
+      return data;
+    },
+
+    async updateKaliteNotu(kalemId, metin) {
+      const { error } = await client
+        .from("istem_kalemleri")
+        .update({ kalite_notu: metin || null, updated_at: new Date().toISOString() })
+        .eq("id", kalemId);
+      if (error) throw error;
+    },
+
     // İstem detay panelindeki "Sil" — yanlış girilen tek bir kalemi düzeltmek
     // için. Sadece o istem_kalemleri satırı (ve ON DELETE CASCADE ile onun
     // istem_log kayıtları) silinir; kardeş kalemlere ve istemler üst kaydına
     // dokunulmaz. İstemin son kalemi silinmişse (artık boş kaldığı için)
-    // üst istemler kaydı da ayrıca silinir.
+    // üst istemler kaydı da ayrıca silinir. Kimin neyi silebileceği RLS'te
+    // (admin her şeyi; diğerleri kendi istemindeki Tamamlandı olmayanları).
     async deleteIstemKalem(kalemId) {
       const { data: kalem, error: e0 } = await client
         .from("istem_kalemleri")
@@ -752,8 +781,9 @@
       if (e0) throw e0;
       if (!kalem) return;
 
-      const { error: e1 } = await client.from("istem_kalemleri").delete().eq("id", kalemId);
+      const { data: silinen, error: e1 } = await client.from("istem_kalemleri").delete().eq("id", kalemId).select("id");
       if (e1) throw e1;
+      if (!silinen || !silinen.length) throw forbiddenError();
 
       const { count, error: e2 } = await client
         .from("istem_kalemleri")
