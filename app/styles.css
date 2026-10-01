@@ -548,3 +548,36 @@ td.c-act{width:1%}
 .pinform{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .pinform .err{color:var(--danger);font-size:12px;min-height:1em}
 .pinform .btnrow{display:flex;gap:6px;justify-content:flex-end}
+
+/* ---------------- Patoloji No OCR (ocr.js) ---------------- */
+/* Kameradan doldurulan alan: kullanıcı görsün/kontrol etsin diye vurgulu;
+   alana yazınca vurgu kalkar. */
+.patrow input.ocr-dolu{border-color:var(--amber-i);background:var(--amber-b)}
+.ocr-not{font-size:12px;color:var(--amber-i);font-weight:600;margin-top:6px}
+/* Kamera ekranı — temadan bağımsız koyu (kamera görüntüsü üstünde okunur) */
+.ocr-ov{position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;background:#000}
+.ocr-stage{position:relative;flex:1;min-height:0;overflow:hidden}
+.ocr-stage video{width:100%;height:100%;object-fit:cover;display:block}
+/* Sabit kırpma çerçevesi: geniş dikdörtgen; dışı karartılır */
+.ocr-frame{position:absolute;left:50%;top:50%;width:min(84%, 640px);aspect-ratio:5/1;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:8px;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);pointer-events:none}
+.ocr-ov.donuk .ocr-frame{border-color:#f7c35c}
+.ocr-panel{background:var(--card);color:var(--ink);padding:14px 16px max(14px, env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+.ocr-ipucu{font-size:13px;color:var(--ink-2)}
+.ocr-onizleme{max-width:100%;max-height:70px;align-self:flex-start;border:1px solid var(--line);border-radius:6px;background:#fff}
+.ocr-sonuc{display:flex;flex-direction:column;gap:6px}
+.ocr-sonuc label{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--amber-i)}
+.ocr-sonuc input{font-family:var(--mono);font-size:20px;font-weight:700;border-color:var(--amber-i)}
+.ocr-durum{font-size:13px;color:var(--ink-2);min-height:1em}
+.ocr-durum.hata{color:var(--danger);font-weight:600}
+.ocr-btns{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.ocr-btns .btn-primary{flex:none;min-width:120px}
+@media (min-width:901px){
+  .ocr-ov{background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:24px}
+  .ocr-stage{flex:none;width:min(760px, 100%);aspect-ratio:16/9;border-radius:12px 12px 0 0}
+  .ocr-panel{width:min(760px, 100%);border-radius:0 0 12px 12px}
+}
+@media (max-width:900px){
+  /* kısa ekranlarda kamera alanı ezilmesin; panel kendi içinde kaysın */
+  .ocr-stage{min-height:42vh}
+  .ocr-panel{max-height:58vh;overflow-y:auto}
+}

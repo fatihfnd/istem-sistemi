@@ -1572,7 +1572,8 @@ function showForm(prefill) {
         <select class="onbehalf" id="mUzman">${UZMANLAR.map((u) => `<option value="${u.id}">${esc(u.ad_soyad)}</option>`).join("")}</select></div>
       <div class="m-sec"><p class="m-label">Patoloji No</p>
         <div class="patrow"><input id="mPat" placeholder="ör. 11240/26">
-          <button class="scan" disabled title="Yakında: barkod ile tarama"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button></div></div>
+          <button type="button" class="scan" id="scanBtn" title="Kameradan oku (lam etiketi)" aria-label="Patoloji No'yu kameradan oku"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button></div>
+        <div class="ocr-not hidden" id="mPatOcr">Kameradan okundu — İstek Ver'den önce kontrol edin.</div></div>
       ${pickerSectionsHTML({ withQuickFill: true })}
       <div class="m-sec"><p class="m-label">Blok Seçimi <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— manuel, opsiyonel</span></p>
         <div class="blocks" id="blocks"><input class="bin" id="blockin" placeholder="+ blok"></div></div>
@@ -1583,6 +1584,26 @@ function showForm(prefill) {
     <div class="rail-foot"><button class="btn-ghost" id="cancelForm">İptal</button><button class="btn-primary" id="submitForm">İstek Ver</button></div>`;
 
   $("#closeForm").onclick = showEmpty;
+  // Kameradan OCR (ocr.js): sonuç ancak kullanıcı "Kullan" deyince alana
+  // yazılır; alan düzenlenebilir kalır, form kendiliğinden gönderilmez.
+  // Blok No'ya dokunulmaz.
+  $("#scanBtn").onclick = () => {
+    if (!window.PatolojiOCR) { toast("Tarama bileşeni yüklenemedi — Patoloji No'yu elle girin", true); return; }
+    PatolojiOCR.ac({
+      onSonuc: (deger) => {
+        const inp = $("#mPat");
+        if (!inp) return; // form bu arada kapatıldı
+        inp.value = deger;
+        inp.classList.add("ocr-dolu");
+        $("#mPatOcr").classList.remove("hidden");
+        inp.focus();
+      },
+    });
+  };
+  $("#mPat").addEventListener("input", () => {
+    $("#mPat").classList.remove("ocr-dolu");
+    $("#mPatOcr").classList.add("hidden");
+  });
   $("#cancelForm").onclick = showEmpty;
   $$("#groups button").forEach((b) => b.classList.toggle("on", b.dataset.g === grp));
   bindPicker(true);

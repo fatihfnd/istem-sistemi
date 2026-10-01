@@ -10,7 +10,7 @@
 // yol açabilir (bkz. boot() — eski app.js'te oturum doğrulaması olmayabilir).
 // styles.css bilerek cache-first kalıyor: en kötü ihtimalle bayat bir görsel
 // verir, davranışı bozmaz.
-const CACHE = "istem-shell-v20";
+const CACHE = "istem-shell-v21";
 const ASSETS = [
   "./",
   "./index.html",
@@ -18,6 +18,7 @@ const ASSETS = [
   "./app.js",
   "./api.js",
   "./tema.js",
+  "./ocr.js",
   "./manifest.json",
   "./icons/icon.svg",
   "./icons/icon-maskable.svg",
