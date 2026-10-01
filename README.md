@@ -63,7 +63,7 @@ npx serve app
 Repo kökünde `netlify.toml` zaten `base/publish = app` olarak ayarlı. Netlify'a bağlayıp deploy etmeniz yeterli.
 
 ## Notlar
-- Patoloji No tarama (`app/ocr.js`): Yeni İstek formundaki tara butonu kamerayı açar, çerçeve içi tarayıcıda Tesseract.js ile okunur (görüntü sunucuya gitmez). Sonuç `/^\d+\/\d{2}$/` kalıbına uymazsa hiçbir şey doldurulmaz; uyarsa kullanıcı onaylayınca alana yazılır, form asla kendiliğinden gönderilmez. Kamera HTTPS ister (Netlify'da var). Tesseract ilk kullanımda CDN'den (~birkaç MB) yüklenir.
+- Patoloji No tarama (`app/ocr.js`): Yeni İstek formundaki tara butonu kamerayı açar, çerçeve içi tarayıcıda Tesseract.js ile okunur (görüntü sunucuya gitmez). Bulanık kare OCR'a gönderilmez ("biraz uzaklaşın"); net karede 3 ön işleme stratejisi (aydınlatma düzeltme, uyarlanabilir eşik, gri ton) sırayla denenir. Sonuç `/^\d+\/\d{2,3}$/` kalıbına uymazsa hiçbir şey doldurulmaz ("Elle Gir" ile manuel girişe geçilir); uyarsa kullanıcı onaylayınca alana yazılır, form asla kendiliğinden gönderilmez. Kamera HTTPS ister (Netlify'da var); destekleyen cihazda fener butonu ve sürekli otomatik odak. Tesseract ilk kullanımda CDN'den (~birkaç MB) yüklenir.
 - Auth: "ad seç + PIN" görünümü aynı kalır ama artık arka planda gerçek Supabase Auth (`signInWithPassword`) çalışır — bkz. "1b) Supabase Auth'a geçiş".
 - Başka bir kullanıcının PIN'ini admin ekrandan sıfırlama şu an desteklenmiyor (service_role/Edge Function gerektirir) — PIN sadece hesap oluşturulurken belirlenir.
 - `secure_rls_authenticated.sql` çalıştırıldıktan sonra RLS `authenticated`-only olur; `policies.sql`/`setler_sema.sql`/`hizmetler_sema.sql`/`yonetim_sema.sql`'deki `anon_full_access` politikaları bu dosyayla değiştirilir.

@@ -581,3 +581,7 @@ td.c-act{width:1%}
   .ocr-stage{min-height:42vh}
   .ocr-panel{max-height:58vh;overflow-y:auto}
 }
+/* Fener (torch) — kamera görüntüsünün sağ üstünde; sadece destekleyen cihazda görünür */
+.ocr-fener{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.5);background:rgba(0,0,0,.45);color:#fff;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer}
+.ocr-fener.on{background:#f7c35c;border-color:#f7c35c;color:#2a1d00}
+.ocr-fener[hidden]{display:none}

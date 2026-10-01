@@ -1598,6 +1598,13 @@ function showForm(prefill) {
         $("#mPatOcr").classList.remove("hidden");
         inp.focus();
       },
+      // "Elle Gir": kamera kapanır, doğrudan Patoloji No alanında yazmaya devam edilir.
+      onElle: () => {
+        const inp = $("#mPat");
+        if (!inp) return;
+        inp.focus();
+        inp.select();
+      },
     });
   };
   $("#mPat").addEventListener("input", () => {
