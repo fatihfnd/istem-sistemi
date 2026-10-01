@@ -333,16 +333,18 @@ create policy test_katalog_insert on test_katalog for insert to authenticated wi
 create policy test_katalog_update on test_katalog for update to authenticated using ((select public.is_admin())) with check ((select public.is_admin()));
 create policy test_katalog_delete on test_katalog for delete to authenticated using ((select public.is_admin()));
 
--- İSTEK SETLERİ (kurumsal) — okuma herkese, yazma sadece admin.
+-- İSTEK SETLERİ (kurumsal) — okuma herkese; ekleme/düzenleme/silme
+-- teknisyen DIŞINDA herkese (admin, uzman, asistan). Teknisyen setleri
+-- sadece görür.
 create policy istek_setleri_select on istek_setleri for select to authenticated using (true);
-create policy istek_setleri_insert on istek_setleri for insert to authenticated with check ((select public.is_admin()));
-create policy istek_setleri_update on istek_setleri for update to authenticated using ((select public.is_admin())) with check ((select public.is_admin()));
-create policy istek_setleri_delete on istek_setleri for delete to authenticated using ((select public.is_admin()));
+create policy istek_setleri_insert on istek_setleri for insert to authenticated with check (not (select public.is_teknisyen()));
+create policy istek_setleri_update on istek_setleri for update to authenticated using (not (select public.is_teknisyen())) with check (not (select public.is_teknisyen()));
+create policy istek_setleri_delete on istek_setleri for delete to authenticated using (not (select public.is_teknisyen()));
 
 create policy istek_seti_kalemleri_select on istek_seti_kalemleri for select to authenticated using (true);
-create policy istek_seti_kalemleri_insert on istek_seti_kalemleri for insert to authenticated with check ((select public.is_admin()));
-create policy istek_seti_kalemleri_update on istek_seti_kalemleri for update to authenticated using ((select public.is_admin())) with check ((select public.is_admin()));
-create policy istek_seti_kalemleri_delete on istek_seti_kalemleri for delete to authenticated using ((select public.is_admin()));
+create policy istek_seti_kalemleri_insert on istek_seti_kalemleri for insert to authenticated with check (not (select public.is_teknisyen()));
+create policy istek_seti_kalemleri_update on istek_seti_kalemleri for update to authenticated using (not (select public.is_teknisyen())) with check (not (select public.is_teknisyen()));
+create policy istek_seti_kalemleri_delete on istek_seti_kalemleri for delete to authenticated using (not (select public.is_teknisyen()));
 
 -- İSTEMLER — herkes yalnızca KENDİ adına istem açar. Güncelleme sadece
 -- fatura kolonlarına açık (kolon bazlı izin, aşağıda) — aksi halde biri

@@ -121,11 +121,11 @@
         if (!e2) {
           const { data: profile, error: e3 } = await client
             .from("kullanicilar")
-            .select("id,ad_soyad,rol,is_admin")
+            .select("id,ad_soyad,rol,is_admin,avatar_url")
             .eq("id", kullaniciId)
             .maybeSingle();
           if (e3 || !profile) return null;
-          return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin) };
+          return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin), avatar_url: profile.avatar_url || null };
         }
       }
 
@@ -159,11 +159,75 @@
       if (!session) return null;
       const { data: profile, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,rol,is_admin")
+        .select("id,ad_soyad,rol,is_admin,avatar_url")
         .eq("auth_user_id", session.user.id)
         .maybeSingle();
       if (error || !profile) return null;
-      return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin) };
+      return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin), avatar_url: profile.avatar_url || null };
+    },
+
+    // ---------------- Kendi profilim (herkes, sadece kendi hesabı) ----------------
+    // PIN değiştir: eski PIN, giriş akışıyla AYNI yoldan doğrulanır (aynı
+    // e-posta + toAuthPassword(eskiPin) ile signInWithPassword) — bu aynı
+    // zamanda oturumu tazeler, Supabase'in "yakın zamanda giriş" şartı
+    // açıksa updateUser reddedilmez. Yanlış PIN'de mevcut oturum değişmez.
+    // kullanicilar.pin'e yeni PIN YAZILMAZ (bkz. profil_sema.sql başı).
+    async changePin(eskiPin, yeniPin) {
+      const { data: s0 } = await client.auth.getSession();
+      const email = s0?.session?.user?.email;
+      if (!email) throw new Error("Oturum bulunamadı — çıkış yapıp tekrar girin");
+      const { error: e1 } = await client.auth.signInWithPassword({ email, password: toAuthPassword(eskiPin) });
+      if (e1) {
+        const e = new Error("Eski PIN hatalı");
+        e.isWrongPin = true;
+        throw e;
+      }
+      const { error: e2 } = await client.auth.updateUser({ password: toAuthPassword(yeniPin) });
+      if (e2) throw e2;
+      // Kendi satırında eski düz-metin PIN kopyası kaldıysa temizle (best-effort).
+      await client.rpc("profil_pin_degisti").then(() => {}, () => {});
+    },
+
+    // Avatar: Storage "avatarlar" (private) bucket'ında "<auth_uid>/avatar-<zaman>.jpg".
+    // Her yüklemede yeni dosya adı → tarayıcı önbelleği eski fotoğrafı
+    // göstermez; eski dosya ardından silinir.
+    async uploadAvatar(blob, eskiYol) {
+      const { data: s0 } = await client.auth.getSession();
+      const uid = s0?.session?.user?.id;
+      if (!uid) throw new Error("Oturum bulunamadı — çıkış yapıp tekrar girin");
+      const yol = `${uid}/avatar-${Date.now()}.jpg`;
+      const { error: e1 } = await client.storage.from("avatarlar").upload(yol, blob, { contentType: "image/jpeg", upsert: false });
+      if (e1) throw e1;
+      const { error: e2 } = await client.rpc("profil_avatar_ayarla", { p_yol: yol });
+      if (e2) {
+        await client.storage.from("avatarlar").remove([yol]).then(() => {}, () => {});
+        throw e2;
+      }
+      if (eskiYol) await client.storage.from("avatarlar").remove([eskiYol]).then(() => {}, () => {});
+      return yol;
+    },
+
+    async removeAvatar(eskiYol) {
+      const { error } = await client.rpc("profil_avatar_ayarla", { p_yol: null });
+      if (error) throw error;
+      if (eskiYol) await client.storage.from("avatarlar").remove([eskiYol]).then(() => {}, () => {});
+    },
+
+    // Fotoğrafı olan kullanıcılar → kısa ömürlü imzalı URL'ler (bucket private).
+    // Tek istekte toplu imzalanır. Dönen: { byId: {id: url}, byName: {ad: url} }.
+    async getAvatarlar(sureSn) {
+      const { data, error } = await client.from("kullanicilar").select("id,ad_soyad,avatar_url").not("avatar_url", "is", null);
+      must(data, error);
+      const out = { byId: {}, byName: {} };
+      if (!data.length) return out;
+      const { data: imzali, error: e2 } = await client.storage.from("avatarlar").createSignedUrls(data.map((u) => u.avatar_url), sureSn);
+      must(imzali, e2);
+      const byPath = Object.fromEntries(imzali.filter((x) => x.signedUrl).map((x) => [x.path, x.signedUrl]));
+      data.forEach((u) => {
+        const url = byPath[u.avatar_url];
+        if (url) { out.byId[u.id] = url; out.byName[u.ad_soyad] = url; }
+      });
+      return out;
     },
 
     // ---------------- Kullanıcılar (yönetim) ----------------
@@ -172,7 +236,7 @@
     async getAllKullanicilar() {
       const { data, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,rol,is_admin,pin,email,auth_user_id,aktif")
+        .select("id,ad_soyad,rol,is_admin,avatar_url,pin,email,auth_user_id,aktif")
         .order("ad_soyad");
       return must(data, error);
     },

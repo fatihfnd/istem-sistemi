@@ -6,6 +6,8 @@
 <title>İstem</title>
 
 <link rel="stylesheet" href="styles.css">
+<!-- Tema/mod/yoğunluk tercihi ilk boyamadan ÖNCE uygulansın diye senkron (bkz. tema.js). -->
+<script src="tema.js"></script>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1f4d47">
 <meta name="mobile-web-app-capable" content="yes">
@@ -22,13 +24,13 @@
      localStorage işaretiyle doğrudan uygulama gösterilir. -->
 <div class="authoverlay" id="authOverlay">
   <div class="authcard" id="bootLoadCard">
-    <div class="wordmark" style="justify-content:center"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+    <div class="wordmark" style="justify-content:center"><img class="logo-img" src="icons/selcuk-logo.png" alt="Selçuk Üniversitesi"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
     <p style="text-align:center;color:var(--ink-3);font-size:13px;padding:18px 0 4px">Yükleniyor…</p>
   </div>
 
   <!-- GİRİŞ EKRANI (ad seç + PIN) -->
   <div class="authcard hidden" id="authCard">
-    <div class="wordmark"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+    <div class="wordmark"><img class="logo-img" src="icons/selcuk-logo.png" alt="Selçuk Üniversitesi"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
     <p class="m-label">Kullanıcı</p>
     <select id="authUser"></select>
     <p class="m-label">PIN</p>
@@ -44,8 +46,8 @@
 
     <!-- SIDEBAR -->
     <aside class="side">
-      <div class="wordmark"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
-      <button class="new" id="newBtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg> Yeni İstek</button>
+      <div class="wordmark"><img class="logo-img" src="icons/selcuk-logo.png" alt="Selçuk Üniversitesi"><span class="logo">İstem</span><span class="beta">PATOLOJİ</span></div>
+      <button class="new" id="newBtn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg> Yeni İstek</button>
       <nav class="nav" id="nav">
         <a class="on" data-page="kuyruk"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M3 12h18M3 18h18"/></svg> İş Kuyruğu</a>
         <a data-page="setler"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> İstek Setleri</a>
@@ -60,8 +62,11 @@
       </nav>
       <div class="spacer"></div>
       <div class="sideuser">
-        <div class="av" id="meAv">--</div>
-        <div><div class="nm" id="meName">—</div><div class="rl" id="meRole">—</div></div>
+        <button class="me" id="meBtn" title="Görünüm ayarları" aria-haspopup="true" aria-expanded="false">
+          <div class="av" id="meAv">--</div>
+          <div style="min-width:0"><div class="nm" id="meName">—</div><div class="rl" id="meRole">—</div></div>
+        </button>
+        <div class="prefs" id="prefsPanel" role="dialog" aria-label="Görünüm ayarları"></div>
         <button class="gear" id="logoutBtn" title="Çıkış yap"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
       </div>
     </aside>

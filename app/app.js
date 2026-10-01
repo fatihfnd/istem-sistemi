@@ -43,6 +43,56 @@ const EMPTY_MSG = {
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 
+// ---------------- Piksel ikonlar (tip rozetleri + Tekrar) ----------------
+// "#" = dolu piksel; 12×12 ızgara, 1 birim = 1 CSS px (retina'da tam 2× —
+// bulanıklaşmaz). fill=currentColor: rozetin rengini (tip × tema × mod) alır.
+const PIXEL_ICONS = {
+  ihc:   ["##........##", "###......###", ".###....###.", "..###..###..", "...######...", "....####....", ".....##.....", ".....##.....", ".....##.....", ".....##.....", "....####....", "............"],
+  hk:    ["............", ".....##.....", ".....##.....", "....####....", "....####....", "...######...", "..########..", "..##.#####..", "..#.######..", "..########..", "...######...", "....####...."],
+  mol:   [".##.####.##.", "..##....##..", "...##..##...", ".....##.....", "...##..##...", "..##....##..", ".##.####.##.", "..##....##..", "...##..##...", ".....##.....", "...##..##...", "..##....##.."],
+  fish:  ["............", "............", "............", "...#####...#", ".########.##", "##.#########", "############", ".########.##", "...#####...#", "............", "............", "............"],
+  kesit: ["............", ".........###", "........####", ".......####.", "......####..", ".....###....", "....#.......", "...##.......", "..##........", ".##.........", "##..........", "............"],
+  hucre: ["............", ".##########.", ".#........#.", ".#.##..#..#.", ".#.##.....#.", ".#.....##.#.", ".#..#..##.#.", ".#........#.", ".#.##..#..#.", ".#.##.....#.", ".##########.", "............"],
+  yayma: ["............", "............", "............", "############", "#...##...###", "#..####..###", "#...##...###", "############", "............", "............", "............", "............"],
+  diger: ["............", "............", "............", "............", "............", ".##..##..##.", ".##..##..##.", "............", "............", "............", "............", "............"],
+  tekrar: ["...####...", ".##....#.#", ".#.....###", "#.....####", "#.........", ".........#", "####.....#", "###.....#.", "#.#....##.", "...####..."],
+};
+function pixelSvg(rows) {
+  const h = rows.length, w = rows[0].length;
+  let rects = "";
+  rows.forEach((row, y) => {
+    for (let x = 0; x < w; x++) {
+      if (row[x] !== "#") continue;
+      let x2 = x;
+      while (x2 < w && row[x2] === "#") x2++;
+      rects += `<rect x="${x}" y="${y}" width="${x2 - x}" height="1"/>`;
+      x = x2;
+    }
+  });
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
+}
+const PIXEL_SVG = Object.fromEntries(Object.entries(PIXEL_ICONS).map(([k, v]) => [k, pixelSvg(v)]));
+// Test grupları dinamik (Test Grupları sayfasından yenisi eklenebilir) —
+// tanınmayan kod Diğer'in ikonu + rengiyle gösterilir.
+const TIP_KODLARI = new Set(["ihc", "hk", "mol", "fish", "kesit", "hucre", "yayma", "diger"]);
+function tipKey(grup) {
+  const k = String(grup || "").toLowerCase();
+  return TIP_KODLARI.has(k) ? k : "diger";
+}
+function tipTag(grup) {
+  const k = tipKey(grup);
+  return `<span class="tag" data-g="${k}">${PIXEL_SVG[k]}${esc(TIP[grup] || "Diğer")}</span>`;
+}
+const TEKRAR_BADGE = `<span class="badge-tekrar" title="Boya tekrarı">${PIXEL_SVG.tekrar}Tekrar</span>`;
+
+// İş Kuyruğu aksiyon ikonları (çizgi ikon — nav ikonlarıyla aynı dil).
+const ACT_ICON = {
+  cihaza: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/></svg>`,
+  tamamla: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
+  geri: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>`,
+};
+const SEARCH_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>`;
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -60,9 +110,39 @@ function formatDT(iso) {
 function formatDateFull(iso) {
   return new Date(iso).toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+// Unvanlar ("Öğr. Gör. Dr.", "Prof.Dr.", "Arş. Gör.") atlanır, ilk ve son adın
+// baş harfleri alınır: "Öğr. Gör. Dr. Fatih Demir" → "FD", "M. Urgancı" → "MU".
+const UNVANLAR = new Set(["prof", "doç", "doc", "dr", "öğr", "ogr", "gör", "gor", "arş", "ars", "yrd", "uzm", "op"]);
 function initials(name) {
-  const parts = name.replace(/^Dr\.?\s*/i, "").split(/\s+/).filter(Boolean);
-  return parts.slice(0, 2).map((p) => p[0].toUpperCase()).join("") || "?";
+  const parts = String(name || "").split(/\s+/).filter((tok) => {
+    const parcalar = tok.split(".").filter(Boolean);
+    return parcalar.length && !parcalar.every((x) => UNVANLAR.has(x.toLocaleLowerCase("tr")));
+  });
+  const pick = parts.length > 1 ? [parts[0], parts[parts.length - 1]] : parts;
+  return pick.map((p) => p[0].toLocaleUpperCase("tr")).join("") || "?";
+}
+
+// ---------------- Avatarlar ----------------
+// Bucket private → imzalı URL'ler (24 saat) girişte toplu alınır, 6 saatte
+// bir ve kendi fotoğrafını değiştirince tazelenir. Fotoğraf yoksa baş harf.
+const AVATAR_URL_SURE_SN = 24 * 3600;
+let AVATAR_BY_ID = {}, AVATAR_BY_NAME = {};
+let avatarTimer = null;
+async function refreshAvatarlar() {
+  try {
+    const a = await Api.getAvatarlar(AVATAR_URL_SURE_SN);
+    AVATAR_BY_ID = a.byId; AVATAR_BY_NAME = a.byName;
+  } catch (e) { /* profil_sema.sql yoksa ya da geçici hata — baş harflerle devam */ }
+}
+function avatarHTML({ id, ad }, cls = "av") {
+  const url = (id && AVATAR_BY_ID[id]) || (ad && AVATAR_BY_NAME[ad]);
+  return url
+    ? `<span class="${cls} has-img"><img src="${esc(url)}" alt=""></span>`
+    : `<span class="${cls}">${esc(initials(ad || "?"))}</span>`;
+}
+function renderMe() {
+  if (!session) return;
+  $("#meAv").outerHTML = avatarHTML({ id: session.id, ad: session.ad_soyad }, "av").replace('class="av', 'id="meAv" class="av');
 }
 function groupByGrup(list) {
   const out = {};
@@ -193,6 +273,7 @@ function freshColFilters() {
   return {
     pat: "", blok: "", test: "", isteyen: "", uzman: "",
     tip: new Set(), oncelik: new Set(), durum: new Set(),
+    tekrar: new Set(), // "tekrar" | "normal" — İstek sütununun filtre panelinde
   };
 }
 let colFilters = freshColFilters();
@@ -215,7 +296,8 @@ const canRevert = () => isAdmin() || Boolean(session && session.rol === "teknisy
 // Admin her kalemi (Tamamlandı dahil); diğerleri kendi istemindeki,
 // Tamamlandı olmayan kalemleri.
 const canDeleteKalem = (r) => isAdmin() || (r.istem_yapan_id === session.id && r.durum !== "tamamlandi");
-const canManageSets = () => isAdmin();
+// İstek Setleri: teknisyen dışında herkes ekler/düzenler/siler (RLS de öyle).
+const canManageSets = () => !isTeknisyen();
 const canEditSablon = (s) => isAdmin() || (!isTeknisyen() && s.sahip_id === session.id);
 const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "test-katalogu", "yedekler"]);
 function pageAllowed(page) {
@@ -240,7 +322,7 @@ function setDurumTab(f) {
 }
 function hasActiveFilters() {
   return Boolean(searchQ) || Boolean(colFilters.pat || colFilters.blok || colFilters.test || colFilters.isteyen || colFilters.uzman)
-    || colFilters.tip.size > 0 || colFilters.oncelik.size > 0 || colFilters.durum.size > 0;
+    || colFilters.tip.size > 0 || colFilters.oncelik.size > 0 || colFilters.durum.size > 0 || colFilters.tekrar.size > 0;
 }
 function clearAllFilters() {
   colFilters = freshColFilters();
@@ -380,6 +462,8 @@ async function handleAuthSubmit() {
 }
 
 async function handleLogout() {
+  togglePrefs(false);
+  if (window.Tema) Tema.cikis();
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -395,9 +479,10 @@ async function handleLogout() {
 // ---------------- App init ----------------
 async function initApp(user) {
   session = user;
+  if (window.Tema) Tema.kullaniciYukle(user.id); // kişisel tema/mod/yoğunluk
   $("#authOverlay").classList.add("hidden");
   $("#appRoot").classList.remove("hidden");
-  $("#meAv").textContent = initials(user.ad_soyad);
+  renderMe();
   $("#meName").textContent = user.ad_soyad;
   $("#meRole").textContent = (ROL_LABEL[user.rol] || user.rol) + (user.is_admin ? " · Yönetici" : "");
   applyRoleUI();
@@ -405,6 +490,7 @@ async function initApp(user) {
   // allSettled: setler_sema.sql henüz çalıştırılmadıysa (istek_setleri/cihazlar
   // tabloları yoksa) o sorgular başarısız olur ama temel katalog/uzman listesi
   // yine de yüklenir — tek bir eksik tablo tüm girişi kilitlemesin.
+  const avatarP = refreshAvatarlar(); // paralel — gelince sol alttaki baş harf fotoğrafa döner
   const results = await Promise.allSettled([
     Api.getTestKatalog(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getTestGruplari(),
     Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id),
@@ -426,6 +512,9 @@ async function initApp(user) {
   // olur — sessizce eski (tam liste) davranışa düşülür, hata gösterilmez.
   if (sonTestR.status === "fulfilled") RECENT_TESTS = buildRecentTests(sonTestR.value);
   if (sonSetR.status === "fulfilled") RECENT_SETLER = buildRecentSetlerMap(sonSetR.value);
+  await avatarP;
+  renderMe();
+  if (!avatarTimer) avatarTimer = setInterval(async () => { await refreshAvatarlar(); renderMe(); }, 6 * 3600 * 1000);
 
   wireStaticUI();
   if (unsub) unsub();
@@ -507,8 +596,13 @@ function renderQueuePage() {
       <div class="grow"></div>
       <button class="btn-ghost btn-sm hidden" id="clearFiltersBtn">Filtreleri Temizle</button>
       <div id="qExport">${EXPORT_MENU_HTML}</div>
+      <div class="zoomctl" id="zoomCtl">
+        <button type="button" data-zoom="-1" aria-label="Tabloyu sıkılaştır">A−</button>
+        <span class="lvl"></span>
+        <button type="button" data-zoom="1" aria-label="Tabloyu genişlet">A+</button>
+      </div>
       <div class="msearch">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        ${SEARCH_ICON}
         <input id="qSearch" placeholder="Blok, patoloji no…" value="${esc(searchQ)}">
       </div>
     </div>
@@ -539,6 +633,14 @@ function renderQueuePage() {
     renderTable();
   });
   $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderTable(); });
+  $("#zoomCtl").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-zoom]");
+    if (!b || !window.Tema) return;
+    const list = Tema.YOGUNLUKLAR;
+    const i = list.indexOf(Tema.get().yogunluk) + Number(b.dataset.zoom);
+    if (i >= 0 && i < list.length) Tema.set({ yogunluk: list[i] });
+  });
+  renderZoomCtl();
   $("#clearFiltersBtn").addEventListener("click", clearAllFilters);
   bindExportMenu("#qExport", (which) => {
     const list = which === "tum" ? rows : getVisibleRows();
@@ -564,7 +666,7 @@ function renderQueuePage() {
       if (r) openCaseView(r.patoloji_no);
       return;
     }
-    const btn = e.target.closest(".act[data-id], .act-revert-icon[data-id]");
+    const btn = e.target.closest(".ia[data-id]");
     if (btn) {
       e.stopPropagation();
       if (btn.dataset.revert) {
@@ -747,7 +849,11 @@ function renderQHead() {
     <th>Aksiyon</th>
     ${thTextFilter("pat", "Patoloji No", colFilters.pat, sortOf("pat"))}
     ${thTextFilter("blok", "Blok", colFilters.blok, sortOf("blok"))}
-    ${thTextFilter("test", "İstek", colFilters.test, sortOf("test"))}
+    ${thHead("test", "İstek", sortOf("test"), Boolean(colFilters.test) || colFilters.tekrar.size > 0, `
+      <input type="text" class="thsearch" data-thsearch="test" placeholder="İstek ara…" value="${esc(colFilters.test || "")}">
+      <div class="thsep"></div><div class="thsub">Tekrar</div>
+      ${[["tekrar", "Sadece tekrarlar"], ["normal", "Tekrar olmayanlar"]].map(([v, l]) => `
+        <label class="thcheck"><input type="checkbox" data-thcheck="tekrar" value="${v}" ${colFilters.tekrar.has(v) ? "checked" : ""}> ${l}</label>`).join("")}`)}
     ${thMultiFilter("tip", "Tip", GROUPS.map(([k, l]) => ({ value: k, label: l })), colFilters.tip, sortOf("tip"))}
     ${thTextFilter("isteyen", "İsteyen", colFilters.isteyen, sortOf("isteyen"))}
     ${thTextFilter("uzman", "Uzman Adına", colFilters.uzman, sortOf("uzman"))}
@@ -768,6 +874,7 @@ function passesFilter(r) {
   if (colFilters.durum.size && !colFilters.durum.has(r.durum)) return false;
   if (colFilters.tip.size && !colFilters.tip.has(r.grup)) return false;
   if (colFilters.oncelik.size && !colFilters.oncelik.has(r.oncelik)) return false;
+  if (colFilters.tekrar.size && !colFilters.tekrar.has(r.tekrar_kaynagi_id ? "tekrar" : "normal")) return false;
   if (colFilters.pat && !r.patoloji_no.toLowerCase().includes(colFilters.pat)) return false;
   if (colFilters.blok && !r.blok_no.toLowerCase().includes(colFilters.blok)) return false;
   if (colFilters.test && !r.test_adi.toLowerCase().includes(colFilters.test)) return false;
@@ -809,8 +916,10 @@ function renderTable() {
   // ayraç çizilmez, "vakayı seç" kısayolu da vakanın ilk görünen satırında kalır.
   const grouped = caseView !== null || sortCol === null || sortCol === "pat";
   const seenPat = new Set();
+  // Aksiyonlar ikon-only ve yan yana (sütun dar kalsın); renk hedef durumun
+  // rengi (mavi = Cihaza al, yeşil = Tamamla), Geri al nötr gri.
   const revertBtn = (id) => canRevert()
-    ? `<button class="act-revert-icon" data-id="${id}" data-revert="1" title="Geri al" aria-label="Geri al">↺</button>`
+    ? `<button class="ia" data-id="${id}" data-revert="1" title="Geri al" aria-label="Geri al">${ACT_ICON.geri}</button>`
     : "";
 
   list.forEach((r, i) => {
@@ -824,30 +933,29 @@ function renderTable() {
     if (r.kalem_id === selId) tr.classList.add("sel");
     let act;
     if (r.durum === "bekleyen") {
-      act = `<button class="act act-cihaza" data-id="${r.kalem_id}" data-to="cihazda">Cihaza al</button>`;
+      act = `<button class="ia ia-cihaza" data-id="${r.kalem_id}" data-to="cihazda" title="Cihaza al" aria-label="Cihaza al">${ACT_ICON.cihaza}</button>`;
     } else if (r.durum === "cihazda") {
-      act = `<div class="actrow">
-        <button class="act act-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi">Tamamla</button>
-        ${revertBtn(r.kalem_id)}
-      </div>`;
+      act = `<button class="ia ia-tamamla" data-id="${r.kalem_id}" data-to="tamamlandi" title="Tamamla" aria-label="Tamamla">${ACT_ICON.tamamla}</button>${revertBtn(r.kalem_id)}`;
     } else {
       act = revertBtn(r.kalem_id);
     }
     const notCell = r.not_metni
-      ? `<span class="note-txt" title="${esc(r.not_metni)}">${esc(r.not_metni.length > 40 ? r.not_metni.slice(0, 40) + "…" : r.not_metni)}</span>`
+      // Tam metin, kesilmeden — teknisyene talimat; fareyle üzerine gelmeye
+      // (dokunmatik ekranda mümkün değil) bağlı kalmasın.
+      ? `<span class="note-txt">${esc(r.not_metni)}</span>`
       : "";
     const caseSel = showCaseSel
       ? `<button class="case-sel" data-case-sel="${esc(r.patoloji_no)}" title="Bu vakanın tümünü seç/kaldır" aria-label="Bu vakanın tümünü seç/kaldır"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7.5 12.5l3 3 6-6.5"/></svg></button>`
       : "";
-    const tekrarTag = r.tekrar_kaynagi_id ? `<span class="badge-tekrar" title="Boya tekrarı">Tekrar</span>` : "";
+    const tekrarTag = r.tekrar_kaynagi_id ? TEKRAR_BADGE : "";
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
-      <td>${act}</td>
+      <td class="c-act"><div class="iacts">${act}</div></td>
       <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span></td>
       <td class="c-blok">${esc(r.blok_no)}</td>
       <td class="c-test">${esc(r.test_adi)}${tekrarTag}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
-      <td><span class="tag">${TIP[r.grup] || "Diğer"}</span></td>
-      <td>${esc(r.isteyen_adi || "—")}</td>
-      <td>${esc(r.uzman_adi || "—")}</td>
+      <td>${tipTag(r.grup)}</td>
+      <td class="c-kisi" title="${esc(r.isteyen_adi || "")}">${esc(r.isteyen_adi || "—")}</td>
+      <td class="c-kisi" title="${esc(r.uzman_adi || "")}">${esc(r.uzman_adi || "—")}</td>
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
       <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></td>
       <td><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></td>
@@ -1044,7 +1152,7 @@ async function showDetail(r) {
   const kaynak = r.tekrar_kaynagi_id ? rows.find((x) => x.kalem_id === r.tekrar_kaynagi_id) : null;
   const tekrarlari = rows.filter((x) => x.tekrar_kaynagi_id === r.kalem_id);
   const tekrarInfo = r.tekrar_kaynagi_id
-    ? `<div class="tekrar-info"><span class="badge-tekrar">Tekrar</span> ${kaynak
+    ? `<div class="tekrar-info">${TEKRAR_BADGE} ${kaynak
         ? `Kaynak kalem: <a href="#" data-goto="${kaynak.kalem_id}">${formatDT(kaynak.created_at)} · ${esc(PILL[kaynak.durum]?.[1] || kaynak.durum)}</a>`
         : "Kaynak kalem artık kuyrukta yok."}</div>`
     : tekrarlari.length
@@ -1060,10 +1168,10 @@ async function showDetail(r) {
     ${tekrarInfo}
     ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button></div>` : ""}
     <div class="d-grid">
-      <div><div class="k">Tip</div><div class="v"><span class="tag">${TIP[r.grup] || "Diğer"}</span></div></div>
+      <div><div class="k">Tip</div><div class="v">${tipTag(r.grup)}</div></div>
       <div><div class="k">Öncelik</div><div class="v"><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></div></div>
-      <div><div class="k">İsteyen</div><div class="v">${esc(r.isteyen_adi || "—")}</div></div>
-      <div><div class="k">Uzman adına</div><div class="v">${esc(r.uzman_adi || "—")}</div></div>
+      <div><div class="k">İsteyen</div><div class="v pchip">${r.isteyen_adi ? avatarHTML({ id: r.istem_yapan_id, ad: r.isteyen_adi }, "av-sm") : ""}<span>${esc(r.isteyen_adi || "—")}</span></div></div>
+      <div><div class="k">Uzman adına</div><div class="v pchip">${r.uzman_adi ? avatarHTML({ ad: r.uzman_adi }, "av-sm") : ""}<span>${esc(r.uzman_adi || "—")}</span></div></div>
     </div>
     <div class="m-label">Cihaz</div>
     <div class="m-sec">
@@ -1168,12 +1276,12 @@ function pickerSectionsHTML({ withQuickFill }) {
     </div></div>
     ${withQuickFill ? `
     <div class="m-sec" id="setsSec"><p class="m-label">Hazır Setler</p>
-      <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      <div class="antisearch">${SEARCH_ICON}
         <input id="setSearch" placeholder="Set ara…"></div>
       <div class="sets" id="sets"></div></div>
     <div class="m-sec" id="mySetsSec"><p class="m-label">Şablonlar</p><div class="sets" id="mySets"></div></div>` : ""}
     <div class="m-sec" id="antiSec"><p class="m-label">Tek Tek Seç <button type="button" class="bulkpick-toggle" id="bulkPickToggle">Toplu Seç</button></p>
-      <div class="antisearch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26221d" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      <div class="antisearch">${SEARCH_ICON}
         <input id="antiSearch" placeholder="Test ara… ER, HER2, CK7… (Enter ile hızlı ekle)"></div>
       <div class="bulkpick-box" id="bulkPickBox">
         <textarea id="bulkPickText" placeholder="Her satıra bir test adı, opsiyonel olarak virgülle klon…&#10;ER, SP1&#10;PR"></textarea>
@@ -1575,10 +1683,10 @@ function renderSetlerPage() {
   renderSetGrid();
 }
 
-// Setleri sadece admin ekler/düzenler/siler (RLS de öyle). Diğerleri
-// sadece görür ve "İstek Ver" kullanır — pasif setler (yalnızca yönetimde
-// anlamlı) onlara gösterilmez. Teknisyen sıfırdan istem giremediği için
-// "İstek Ver" ona da gösterilmez (bkz. canCreateIstem).
+// Setleri teknisyen dışında herkes ekler/düzenler/siler (RLS de öyle).
+// Teknisyen sadece görür — pasif setler (yalnızca düzenleyende anlamlı)
+// ona gösterilmez; sıfırdan istem giremediği için "İstek Ver" de
+// gösterilmez (bkz. canCreateIstem).
 function renderSetGrid() {
   const grid = $("#setGrid"); if (!grid) return;
   const manage = canManageSets();
@@ -2061,7 +2169,7 @@ function renderHizTable() {
     tr.innerHTML = `<td class="c-pat" data-pat="${esc(h.patoloji_no)}" style="cursor:pointer">${esc(h.patoloji_no)}</td>
       <td>${esc(h.isteyen_adi)}</td>
       <td>${esc(h.uzman_adi || "—")}</td>
-      <td>${esc(hizOzetSayilar(h))}${h.tekrar ? `<span class="badge-tekrar" title="Tekrar İste ile açılan istem">Tekrar</span>` : ""}</td>
+      <td>${esc(hizOzetSayilar(h))}${h.tekrar ? TEKRAR_BADGE : ""}</td>
       <td style="color:var(--ink-3);font-size:12px">${formatDT(h.created_at)}</td>
       <td>${act}</td>`;
     tb.appendChild(tr);
@@ -2124,6 +2232,7 @@ function renderKullaniciList() {
   }
   wrap.innerHTML = KULLANICILAR_LIST.map((u) => `
     <div class="devrow" data-id="${u.id}">
+      ${avatarHTML({ id: u.id, ad: u.ad_soyad }, "av-sm av-md")}
       <div><div class="nm">${esc(u.ad_soyad)}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${u.is_admin ? " · Yönetici" : ""}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
       <div class="grow"></div>
       <span class="status ${u.aktif ? "aktif" : "pasif"}">${u.aktif ? "Aktif" : "Pasif"}</span>
@@ -2511,10 +2620,184 @@ function showTestKatalogBulkForm(defaultGrup) {
   };
 }
 
+// ---------------- Görünüm: tema / mod / tablo yoğunluğu ----------------
+// Tercihin kendisi tema.js'te (Tema.*) — localStorage'da kullanıcı başına.
+// Burası sadece kontrolleri (A−/A+ ve sol alttaki ayarlar paneli) çizer.
+const MOD_LABEL = [["acik", "Açık"], ["koyu", "Koyu"], ["sistem", "Sistem"]];
+const YOG_LABEL = [["kompakt", "Kompakt"], ["normal", "Normal"], ["genis", "Geniş"]];
+
+function renderZoomCtl() {
+  const box = $("#zoomCtl");
+  if (!box || !window.Tema) return;
+  const cur = Tema.get().yogunluk;
+  const i = Tema.YOGUNLUKLAR.indexOf(cur);
+  box.querySelector(".lvl").innerHTML = Tema.YOGUNLUKLAR.map((_, j) => `<i class="${j === i ? "on" : ""}"></i>`).join("");
+  box.querySelector('[data-zoom="-1"]').disabled = i <= 0;
+  box.querySelector('[data-zoom="1"]').disabled = i >= Tema.YOGUNLUKLAR.length - 1;
+  box.title = `Tablo yoğunluğu: ${(YOG_LABEL.find(([k]) => k === cur) || [])[1] || cur}`;
+}
+
+function renderPrefs() {
+  const el = $("#prefsPanel");
+  if (!el || !window.Tema) return;
+  const p = Tema.get();
+  const mod = document.documentElement.dataset.mod === "koyu" ? "koyu" : "acik";
+  const segs = (attr, opts, val) => opts.map(([k, l]) =>
+    `<button type="button" data-${attr}="${k}" class="${k === val ? "on" : ""}" aria-pressed="${k === val}">${l}</button>`).join("");
+  const profil = session ? `
+    <div class="m-sec"><p class="m-label">Profil</p>
+      <div class="prof-row">
+        ${avatarHTML({ id: session.id, ad: session.ad_soyad }, "av")}
+        <div class="prof-acts">
+          <label class="btn-ghost btn-sm" for="avatarFile">Fotoğraf Yükle</label>
+          <input type="file" id="avatarFile" accept="image/jpeg,image/png" hidden>
+          ${session.avatar_url ? `<button type="button" class="btn-ghost btn-sm" data-avatar-kaldir>Fotoğrafı Kaldır</button>` : ""}
+        </div>
+      </div>
+      <button type="button" class="linkbtn" data-pin-ac aria-expanded="${prefsPinOpen}">PIN'imi Değiştir</button>
+      ${prefsPinOpen ? `
+      <form class="pinform" id="pinForm" autocomplete="off" novalidate>
+        <input class="finput pinmask" id="pinEski" type="text" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="Eski PIN" aria-label="Eski PIN">
+        <input class="finput pinmask" id="pinYeni" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="Yeni PIN (4 hane)" aria-label="Yeni PIN">
+        <input class="finput pinmask" id="pinYeni2" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="Yeni PIN (tekrar)" aria-label="Yeni PIN tekrar">
+        <div class="err" id="pinErr" role="alert"></div>
+        <div class="btnrow"><button type="button" class="btn-ghost btn-sm" data-pin-kapat>Vazgeç</button><button type="submit" class="btn-primary btn-sm" id="pinKaydet">Kaydet</button></div>
+      </form>` : ""}
+    </div>` : "";
+  el.innerHTML = `${profil}
+    <div class="m-sec"><p class="m-label">Tema</p>
+      <div class="temalar">${Tema.TEMALAR.map((t) => `
+        <button type="button" class="tema-opt ${t.id === p.tema ? "on" : ""}" data-tema-sec="${t.id}" aria-pressed="${t.id === p.tema}">
+          <span class="sw" style="background:${t.renk[mod]}"></span>${esc(t.ad)}</button>`).join("")}</div></div>
+    <div class="m-sec"><p class="m-label">Mod</p><div class="segs">${segs("mod-sec", MOD_LABEL, p.mod)}</div></div>
+    <div class="m-sec"><p class="m-label">Tablo yoğunluğu</p><div class="segs">${segs("yog-sec", YOG_LABEL, p.yogunluk)}</div></div>`;
+}
+
+// ---------------- Kendi profilim: PIN + fotoğraf (herkes, sadece kendi hesabı) ----------------
+let prefsPinOpen = false;
+
+async function handlePinSubmit() {
+  const eski = $("#pinEski").value.trim(), yeni = $("#pinYeni").value.trim(), yeni2 = $("#pinYeni2").value.trim();
+  const hata = (m) => { $("#pinErr").textContent = m; };
+  if (!/^\d{4,6}$/.test(eski)) return hata("Eski PIN'inizi girin");
+  if (!/^\d{4}$/.test(yeni)) return hata("Yeni PIN 4 haneli bir sayı olmalı");
+  if (yeni !== yeni2) return hata("Yeni PIN'ler eşleşmiyor");
+  if (yeni === eski) return hata("Yeni PIN eskisiyle aynı olamaz");
+  hata("");
+  $("#pinKaydet").disabled = true;
+  try {
+    await Api.changePin(eski, yeni);
+    prefsPinOpen = false;
+    renderPrefs();
+    toast("PIN güncellendi — oturumunuz açık kalıyor; bir sonraki girişte yeni PIN'i kullanın");
+  } catch (e) {
+    if ($("#pinErr")) {
+      hata(e && e.isWrongPin ? "Eski PIN hatalı"
+        : e && e.code === "same_password" ? "Yeni PIN eskisiyle aynı olamaz"
+        : `PIN güncellenemedi${e && e.message ? ` (${e.message})` : ""}`);
+      $("#pinKaydet").disabled = false;
+    }
+  }
+}
+
+// Seçilen fotoğrafı ortadan kare kırpıp 256×256 JPEG'e küçültür (tarayıcıda).
+// createImageBitmap EXIF yönünü uygular; desteklemeyen tarayıcıda <img>'e düşer.
+async function kareKirp(file, size = 256) {
+  let src, objUrl = null;
+  try {
+    src = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (e) {
+    objUrl = URL.createObjectURL(file);
+    src = await new Promise((res, rej) => { const img = new Image(); img.onload = () => res(img); img.onerror = rej; img.src = objUrl; });
+  }
+  const w = src.width, h = src.height, k = Math.min(w, h);
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff"; // saydam PNG → beyaz zemin (JPEG saydamlık taşımaz)
+  ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(src, (w - k) / 2, (h - k) / 2, k, k, 0, 0, size, size);
+  if (objUrl) URL.revokeObjectURL(objUrl);
+  return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error("Görüntü işlenemedi"))), "image/jpeg", 0.86));
+}
+
+async function handleAvatarFile(file) {
+  if (!file) return;
+  if (!["image/jpeg", "image/png"].includes(file.type)) { toast("Sadece JPG veya PNG yükleyebilirsiniz", true); return; }
+  if (file.size > 2 * 1024 * 1024) { toast("Fotoğraf en fazla 2 MB olabilir", true); return; }
+  toast("Fotoğraf yükleniyor…");
+  try {
+    const blob = await kareKirp(file);
+    session.avatar_url = await Api.uploadAvatar(blob, session.avatar_url);
+    await refreshAvatarlar();
+    renderMe();
+    renderPrefs();
+    toast("Fotoğraf güncellendi");
+  } catch (e) {
+    toast("Fotoğraf yüklenemedi", true);
+  }
+}
+
+async function handleAvatarRemove() {
+  if (!confirm("Profil fotoğrafınız kaldırılsın mı?")) return;
+  try {
+    await Api.removeAvatar(session.avatar_url);
+    session.avatar_url = null;
+    delete AVATAR_BY_ID[session.id];
+    delete AVATAR_BY_NAME[session.ad_soyad];
+    renderMe();
+    renderPrefs();
+    toast("Fotoğraf kaldırıldı");
+  } catch (e) {
+    toast("Fotoğraf kaldırılamadı", true);
+  }
+}
+
+function togglePrefs(open) {
+  const el = $("#prefsPanel"), btn = $("#meBtn");
+  if (!el || !btn) return;
+  const willOpen = open === undefined ? !el.classList.contains("open") : open;
+  if (!willOpen) prefsPinOpen = false;
+  if (willOpen) renderPrefs();
+  el.classList.toggle("open", willOpen);
+  btn.setAttribute("aria-expanded", String(willOpen));
+}
+
 // ---------------- Statik UI (sadece bir kez bağlanır) ----------------
 function wireStaticUI() {
   if (uiWired) return;
   uiWired = true;
+
+  $("#meBtn").addEventListener("click", (e) => { e.stopPropagation(); togglePrefs(); });
+  $("#prefsPanel").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!window.Tema) return;
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.temaSec) Tema.set({ tema: b.dataset.temaSec });
+    else if (b.dataset.modSec) Tema.set({ mod: b.dataset.modSec });
+    else if (b.dataset.yogSec) Tema.set({ yogunluk: b.dataset.yogSec });
+    else if (b.hasAttribute("data-pin-ac") || b.hasAttribute("data-pin-kapat")) {
+      prefsPinOpen = b.hasAttribute("data-pin-ac") ? !prefsPinOpen : false;
+      renderPrefs();
+      if (prefsPinOpen) $("#pinEski")?.focus();
+    } else if (b.hasAttribute("data-avatar-kaldir")) handleAvatarRemove();
+  });
+  $("#prefsPanel").addEventListener("change", (e) => {
+    if (e.target.id === "avatarFile") handleAvatarFile(e.target.files && e.target.files[0]);
+  });
+  $("#prefsPanel").addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (e.target.id === "pinForm") handlePinSubmit();
+  });
+  document.addEventListener("click", () => togglePrefs(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") togglePrefs(false); });
+  // tema.js her değişiklikte yayınlar (ayarlar paneli, A−/A+, "Sistem" modunda
+  // işletim sistemi açık/koyu geçişi) — açık kontrolleri tazele.
+  document.addEventListener("tema-degisti", () => {
+    renderZoomCtl();
+    if ($("#prefsPanel")?.classList.contains("open")) renderPrefs();
+  });
 
   $("#nav").addEventListener("click", (e) => {
     const a = e.target.closest("a[data-page]"); if (!a) return;

@@ -26,15 +26,23 @@ Prototipte RLS `anon` rolüne tam açıktı — bu, giriş ekranını hiç görm
 3. Kodu deploy edin.
 
 Getirdikleri:
-- **Yönetici (`is_admin`)**: Yönetim sayfaları (Kullanıcılar, Test Grupları, Test Kataloğu, Yedekler) sadece yöneticiye görünür; `kullanicilar`/`test_gruplari` yazma, `test_katalog` düzenleme/silme, `istek_setleri` yazma ve yedek indirme RLS'te de sadece yönetici. Yeni yöneticiyi Kullanıcılar formundaki "Yönetici" kutusuyla atayın.
+- **Yönetici (`is_admin`)**: Yönetim sayfaları (Kullanıcılar, Test Grupları, Test Kataloğu, Yedekler) sadece yöneticiye görünür; `kullanicilar`/`test_gruplari` yazma, `test_katalog` düzenleme/silme ve yedek indirme RLS'te de sadece yönetici.
+- **İstek Setleri**: teknisyen dışında herkes ekler/düzenler/siler; teknisyen sadece görür. Yeni yöneticiyi Kullanıcılar formundaki "Yönetici" kutusuyla atayın.
 - **Kalem silme**: yönetici her kalemi (Tamamlandı dahil); diğerleri sadece kendi açtığı istemdeki, Tamamlandı olmayan kalemleri.
 - **Durum geri alma** (Tamamlandı→Cihazda, Cihazda→Bekleyen): sadece yönetici + teknisyen (veritabanında trigger ile).
-- **Teknisyen**: sıfırdan istem giremez, Şablonlar'a erişemez; tek istem yolu detay panelindeki "Tekrar İste".
+- **Teknisyen**: sıfırdan istem giremez, Şablonlar'a erişemez, İstek Setleri'ni düzenleyemez; tek istem yolu detay panelindeki "Tekrar İste".
 - **Tekrar İste**: aynı test/blok için yeni bir istem kaydı + Bekleyen kalem (`istem_kalemleri.tekrar_kaynagi_id` kaynağa bağlı). Hizmetler'de "Tekrar" rozetiyle görünür.
 - **Kalite notu** (`istem_kalemleri.kalite_notu`) ve **herkese açık şablon** (`sablonlar.herkese_acik`).
 - `istemler` ve `istem_kalemleri`'nde UPDATE kolon bazlıdır (sadece fatura / durum-cihaz-kalite notu kolonları).
 
 ⚠️ Bu dosyadan SONRA `policies.sql`, `setler_sema.sql`, `yonetim_sema.sql` ya da `secure_rls_authenticated.sql`'i yeniden çalıştırmayın — eski "herkese açık" politikaları geri ekler. Çalıştırırsanız ardından `yetki_sema.sql`'i tekrar çalıştırın.
+
+## 1d) Kendi profilim: PIN + fotoğraf (`profil_sema.sql`)
+`yetki_sema.sql`'den sonra, **kod deploy edilmeden önce** çalıştırın (idempotent). Yeni kod girişte `kullanicilar.avatar_url`'i okur.
+
+- Herkes (rol farkı yok) sol alttaki kullanıcı alanından **kendi** PIN'ini değiştirir: eski PIN, girişle aynı yoldan doğrulanır, yeni PIN doğrudan Supabase Auth şifresi olur. `kullanicilar.pin`'e yeni PIN **yazılmaz** (o kolonu giriş yapan herkes okuyabilir; Auth hesabı olanlar için hiçbir yerde kullanılmıyor) — sadece varsa eski kopya temizlenir.
+- Profil fotoğrafı: private `avatarlar` bucket'ı, herkes yalnızca kendi klasörüne (`<auth_uid>/…`) yazar, giriş yapan herkes okur (uygulama imzalı URL kullanır). Tarayıcıda 256×256 kare JPEG'e küçültülür; JPG/PNG, en fazla 2 MB.
+- Tema / mod / tablo yoğunluğu tercihleri veritabanında değil, tarayıcının localStorage'ında kullanıcı başına tutulur (`app/tema.js`).
 
 **Yeni kullanıcı eklerken / oluştururken:** Auth hesabı oturum saklamayan ayrı bir Supabase client ile açılır — yöneticinin kendi oturumu hiç değişmez.
 

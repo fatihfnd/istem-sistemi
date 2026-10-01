@@ -10,16 +10,18 @@
 // yol açabilir (bkz. boot() — eski app.js'te oturum doğrulaması olmayabilir).
 // styles.css bilerek cache-first kalıyor: en kötü ihtimalle bayat bir görsel
 // verir, davranışı bozmaz.
-const CACHE = "istem-shell-v19";
+const CACHE = "istem-shell-v20";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
   "./api.js",
+  "./tema.js",
   "./manifest.json",
   "./icons/icon.svg",
   "./icons/icon-maskable.svg",
+  "./icons/selcuk-logo.png",
 ];
 
 self.addEventListener("install", (e) => {

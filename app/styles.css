@@ -1,25 +1,88 @@
+/* ================================================================
+   TEMA SİSTEMİ — tema.js, <html>'e data-tema / data-mod / data-yogunluk
+   yazar; renkler SADECE buradaki değişkenlerden gelir.
+   Katmanlar:
+    1) Nötrler (zemin/kart/yazı) — tema × mod. Ara tonlar (ink-2, line…)
+       ink ile paper karışımından türetilir → her temada tutarlı.
+    2) Vurgu (accent) — tema × mod; hover/soft tonları karışımla türetilir.
+    3) Anlamsal sabitler — durum renkleri, Tekrar moru, 8 tip rengi:
+       TEMADAN BAĞIMSIZ, sadece açık/koyu varyantı var (personel "mavi =
+       Cihazda" diye öğrendi; tema değişince anlam değişmemeli).
+   Yeni tema eklemek: aşağıya bir [data-tema="x"] + [data-tema="x"][data-mod="koyu"]
+   çifti (6 değişken) ve tema.js'teki TEMALAR'a bir satır.
+   ================================================================ */
 :root{
-  --paper:#f1f4f2;         /* main canvas — soğuk nötr yeşilimsi gri */
-  --side:#e8ece9;          /* sidebar */
-  --card:#ffffff;
-  --ink:#1b2422;
-  --ink-2:#5b6864;
-  --ink-3:#96a19c;
-  --line:#dbe3df;
-  --line-2:#eaf0ed;
-  --accent:#1f4d47;        /* koyu mürekkep-çam */
-  --accent-h:#163934;
-  --accent-soft:#e3ece9;
-  --amber-i:#9a6410; --amber-b:#f7eeda;
-  --blue-i:#2f6690;  --blue-b:#e8f0f6;
-  --green-i:#2f7d52; --green-b:#e7f3ec;
-  --violet-i:#6a46a8; --violet-b:#efe8f8;
-  --line-strong:#a9b6b0;  /* vaka (patoloji no) ayracı */
-  --row-cihazda:#f2f7fc; --row-cihazda-h:#e6eff8;
-  --row-tamam:#f3f4f3;   --row-tamam-h:#eaecea;
+  /* 1-2) Zeytin · açık (varsayılan) */
+  --paper:#f1f4f2; --side:#e8ece9; --card:#ffffff; --ink:#1b2422;
+  --accent:#1f4d47; --on-accent:#ffffff;
+
+  /* türetilmiş nötrler / vurgu tonları (açık mod oranları) */
+  --ink-2:color-mix(in srgb, var(--ink) 68%, var(--paper));
+  --ink-3:color-mix(in srgb, var(--ink) 41%, var(--paper));
+  --line:color-mix(in srgb, var(--ink) 10%, var(--paper));
+  --line-2:color-mix(in srgb, var(--ink) 4%, var(--paper));
+  --line-strong:color-mix(in srgb, var(--ink) 32%, var(--paper));  /* vaka (patoloji no) ayracı */
+  --accent-h:color-mix(in srgb, var(--accent) 80%, #000);
+  --accent-soft:color-mix(in srgb, var(--accent) 11%, var(--card));
+  --tint:12%;                                   /* renkli rozet zeminlerinin yoğunluğu */
+  --bar-bg:var(--ink); --bar-ink:var(--paper);  /* toplu seçim çubuğu, toast — ters renk */
+  --shadow:0 6px 20px rgba(20,30,26,.14);
+  --danger:#a3401f; --on-danger:#ffffff;
+
+  /* 3) anlamsal — açık */
+  --amber-i:#9a6410; --blue-i:#2f6690; --green-i:#2f7d52; --violet-i:#6a46a8;
+  --t-ihc:#4553c9; --t-hk:#b02f73; --t-mol:#0e7f74; --t-fish:#b85412;
+  --t-kesit:#8a5a2b; --t-hucre:#5c7a10; --t-yayma:#1b78a6; --t-diger:#5f6563;
+
+  /* tablo yoğunluğu — Normal (A−/A+ ile değişir, bkz. [data-yogunluk]) */
+  --cell-py:4px; --cell-px:6px; --fs-cell:13.5px; --fs-id:15px; --fs-small:11px; --act-size:26px;
+
+  color-scheme:light;
   --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,sans-serif;
   --mono:ui-monospace,'SF Mono',Menlo,monospace;
 }
+/* Koyu mod — Zeytin nötrleri + koyu moda özgü oranlar ve anlamsal renkler */
+:root[data-mod="koyu"]{
+  --paper:#121816; --side:#0e1412; --card:#18201d; --ink:#e3ebe7;
+  --accent:#5fb3a3; --on-accent:#08130f;
+  --ink-2:color-mix(in srgb, var(--ink) 70%, var(--paper));
+  --ink-3:color-mix(in srgb, var(--ink) 46%, var(--paper));
+  --line:color-mix(in srgb, var(--ink) 14%, var(--paper));
+  --line-2:color-mix(in srgb, var(--ink) 7%, var(--paper));
+  --line-strong:color-mix(in srgb, var(--ink) 34%, var(--paper));
+  --accent-h:color-mix(in srgb, var(--accent) 82%, #fff);
+  --accent-soft:color-mix(in srgb, var(--accent) 18%, var(--card));
+  --tint:20%;
+  --shadow:0 6px 20px rgba(0,0,0,.5);
+  --danger:#f0815e; --on-danger:#1d0b04;
+  --amber-i:#e2ad55; --blue-i:#7db4e6; --green-i:#6cc795; --violet-i:#b99cf0;
+  --t-ihc:#9aa6ff; --t-hk:#f08dc0; --t-mol:#5fd1c3; --t-fish:#f4a066;
+  --t-kesit:#d6ab7e; --t-hucre:#b5d860; --t-yayma:#6cc3ec; --t-diger:#b3bab7;
+  color-scheme:dark;
+}
+/* Temalar — her biri açık + koyu (zemin/kenar/kart/yazı/vurgu). */
+:root[data-tema="gunbatimi"]{ --paper:#f6f1ec; --side:#efe7df; --card:#ffffff; --ink:#2a1f1a; --accent:#b4532a; --on-accent:#ffffff }
+:root[data-tema="gunbatimi"][data-mod="koyu"]{ --paper:#19130f; --side:#140f0c; --card:#221a15; --ink:#f1e6dd; --accent:#f08a5d; --on-accent:#1a0c05 }
+:root[data-tema="okyanus"]{ --paper:#eef3f7; --side:#e4ecf2; --card:#ffffff; --ink:#16222e; --accent:#1d5c8c; --on-accent:#ffffff }
+:root[data-tema="okyanus"][data-mod="koyu"]{ --paper:#0f161d; --side:#0b1117; --card:#151e27; --ink:#e1eaf2; --accent:#5aa9e6; --on-accent:#04111c }
+:root[data-tema="elektron"]{ --paper:#f2f2f6; --side:#e9e9f0; --card:#ffffff; --ink:#16161f; --accent:#c0187a; --on-accent:#ffffff }
+:root[data-tema="elektron"][data-mod="koyu"]{ --paper:#0a0b10; --side:#07080c; --card:#12131b; --ink:#e8e8f2; --accent:#ff3ea5; --on-accent:#12020b }
+:root[data-tema="grafit"]{ --paper:#f3f3f2; --side:#eaeae8; --card:#ffffff; --ink:#1c1c1b; --accent:#3d3d3a; --on-accent:#ffffff }
+:root[data-tema="grafit"][data-mod="koyu"]{ --paper:#141414; --side:#101010; --card:#1c1c1c; --ink:#e8e8e6; --accent:#d6d6d2; --on-accent:#111111 }
+/* Türetilmiş durum zeminleri ve satır tonları — her tema/modda otomatik. */
+:root{
+  --amber-b:color-mix(in srgb, var(--amber-i) var(--tint), var(--card));
+  --blue-b:color-mix(in srgb, var(--blue-i) var(--tint), var(--card));
+  --green-b:color-mix(in srgb, var(--green-i) var(--tint), var(--card));
+  --violet-b:color-mix(in srgb, var(--violet-i) var(--tint), var(--card));
+  --row-cihazda:color-mix(in srgb, var(--blue-i) 7%, var(--paper));
+  --row-cihazda-h:color-mix(in srgb, var(--blue-i) 12%, var(--paper));
+  --row-tamam:color-mix(in srgb, var(--ink) 4%, var(--paper));
+  --row-tamam-h:color-mix(in srgb, var(--ink) 8%, var(--paper));
+}
+/* Tablo yoğunluğu — Kompakt / Normal (varsayılan, :root) / Geniş */
+:root[data-yogunluk="kompakt"]{ --cell-py:2px; --cell-px:5px; --fs-cell:12.5px; --fs-id:14px; --fs-small:10.5px; --act-size:22px }
+:root[data-yogunluk="genis"]{ --cell-py:8px; --cell-px:10px; --fs-cell:14px; --fs-id:16px; --fs-small:11.5px; --act-size:30px }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{
@@ -27,6 +90,8 @@ body{
   background:var(--paper); height:100%;
   -webkit-font-smoothing:antialiased;
 }
+/* Form elemanları rengini kendiliğinden miras almaz — koyu modda okunur kalsın. */
+button,input,select,textarea{color:var(--ink)}
 
 /* window */
 .app{
@@ -44,7 +109,7 @@ body{
 .wordmark .beta{font-size:10px; color:var(--ink-3); border:1px solid var(--line); border-radius:20px; padding:1px 7px; font-weight:600; letter-spacing:.04em}
 .new{
   display:flex; align-items:center; gap:9px; width:100%; margin-bottom:12px;
-  border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:9px;
+  border:1px solid var(--accent); background:var(--accent); color:var(--on-accent); border-radius:9px;
   padding:10px 12px; font-size:13.5px; font-weight:600; cursor:pointer; font-family:var(--sans);
 }
 .new:hover{background:var(--accent-h)}
@@ -54,12 +119,12 @@ body{
   font-size:13.5px; color:var(--ink-2); font-weight:500; text-decoration:none; margin-bottom:1px;
 }
 .nav a svg{opacity:.6}
-.nav a:hover{background:rgba(31,77,71,.06); color:var(--ink)}
+.nav a:hover{background:color-mix(in srgb, var(--accent) 7%, transparent); color:var(--ink)}
 .nav a.on{background:var(--card); color:var(--ink); font-weight:600; border:1px solid var(--line)}
 .nav a.on svg{opacity:.9; color:var(--accent)}
 .side .spacer{flex:1}
 .sideuser{display:flex; align-items:center; gap:9px; padding:9px 8px; border-top:1px solid var(--line); margin-top:8px}
-.sideuser .av{width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11.5px;font-weight:640}
+.sideuser .av{width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:11.5px;font-weight:640}
 .sideuser .nm{font-size:13px;font-weight:600;line-height:1.15}
 .sideuser .rl{font-size:11px;color:var(--ink-2)}
 .sideuser .gear{margin-left:auto;color:var(--ink-3);cursor:pointer;border:0;background:transparent}
@@ -70,7 +135,8 @@ body{
 .main-head h1{font-weight:700; font-size:22px; margin:0; letter-spacing:-.01em}
 .main-head .sub{font-size:13px; color:var(--ink-2); margin-top:5px}
 .main-head .sub b{color:var(--accent); font-weight:600}
-.barrow{display:flex; align-items:center; gap:10px; padding:0 26px 12px}
+.barrow{display:flex; align-items:center; flex-wrap:wrap; gap:10px; row-gap:8px; padding:0 26px 12px}
+.barrow .btn-sm{white-space:nowrap}
 .tabs{display:flex; gap:2px; background:var(--side); padding:3px; border-radius:9px; border:1px solid var(--line-2)}
 .tabs button{border:0;background:transparent;cursor:pointer;font-family:var(--sans);font-size:12.5px;font-weight:540;color:var(--ink-2);padding:6px 12px;border-radius:7px;display:flex;align-items:center;gap:6px}
 .tabs button.on{background:var(--card);color:var(--ink);border:1px solid var(--line);font-weight:640}
@@ -84,14 +150,14 @@ body{
 
 .tablewrap{flex:1; overflow-y:auto; padding:0 18px 18px}
 table{width:100%; border-collapse:collapse}
-thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:10px 10px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:8px var(--cell-px);border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
 .thcol{position:relative}
 .thlabel{cursor:pointer;user-select:none}
 .thlabel:hover{color:var(--ink)}
 .thcaret{border:0;background:transparent;color:var(--ink-3);cursor:pointer;font-size:9px;margin-left:3px;padding:2px 4px;border-radius:4px;vertical-align:middle}
 .thcaret:hover{background:var(--line-2);color:var(--ink)}
 .thcaret.on{color:var(--accent)}
-.thfilter{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(20,30,26,.14);padding:4px;min-width:150px;max-height:220px;overflow-y:auto;z-index:2}
+.thfilter{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:4px;min-width:150px;max-height:220px;overflow-y:auto;z-index:2}
 .thfilter.open{display:block}
 .thopt{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--ink-2);font-size:12.5px;font-weight:500;font-family:var(--sans);text-transform:none;letter-spacing:0;padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap}
 .thopt:hover{background:var(--line-2);color:var(--ink)}
@@ -103,12 +169,13 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .thcheck:hover{background:var(--line-2);color:var(--ink)}
 .thcheck input{margin:0;accent-color:var(--accent)}
 .thcol.filtered{background:var(--accent-soft)}
-.note-txt{color:var(--ink-3);font-size:12.5px;cursor:default;white-space:nowrap}
+/* Not (teknisyene) — tam metin, sarmalanır; çok uzun notlar sütunu sonsuz genişletmesin diye üst sınır */
+.note-txt{display:block;width:max-content;max-width:320px;color:var(--ink-2);font-size:12.5px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
 .exportbox{position:relative}
 .barrow.dimmed{opacity:.45;pointer-events:none}
 .case-banner{display:flex;align-items:center;gap:14px;padding:10px 26px;background:var(--accent-soft);border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)}
 .case-banner b{color:var(--accent)}
-tbody td{padding:6px 10px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
+tbody td{padding:var(--cell-py) var(--cell-px);border-bottom:1px solid var(--line);font-size:var(--fs-cell);vertical-align:middle}
 tbody tr{cursor:pointer}
 tbody tr:hover{background:var(--line-2)}
 /* Durum tonu — rozetin yanında satırın tamamı: Cihazda hafif mavi,
@@ -132,24 +199,35 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .bulkcell input[type=checkbox]{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);vertical-align:middle}
 
 /* ---------------- Toplu aksiyon çubuğu ---------------- */
-.bulkbar{display:flex;align-items:center;gap:10px;padding:10px 26px;background:var(--ink);color:#fff}
+.bulkbar{display:flex;align-items:center;gap:10px;padding:10px 26px;background:var(--bar-bg);color:var(--bar-ink)}
 .bulkbar.hidden{display:none}
 .bulkbar #bulkCount{font-size:13px;font-weight:600}
-.bulkbar .ub-x{color:#fff}
-.c-blok{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600;white-space:nowrap}
-.c-pat{font-family:var(--mono);font-size:13px;color:var(--ink-2);font-weight:600;white-space:nowrap}
+.bulkbar .ub-x{color:var(--bar-ink)}
+/* Patoloji No + Blok — satırın birincil kimliği: büyük ve kalın */
+.c-blok{font-family:var(--mono);font-size:var(--fs-id);color:var(--accent);font-weight:700;white-space:nowrap}
+.c-pat{font-family:var(--mono);font-size:var(--fs-id);color:var(--ink);font-weight:700;white-space:nowrap;letter-spacing:-.01em}
 .c-pat .pat-no:hover{text-decoration:underline;color:var(--accent)}
 /* "Bu vakanın tümünü seç" — vaka grubunun ilk satırında, patoloji no'nun solunda */
 .case-sel{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin:0 6px 0 -2px;padding:0;vertical-align:-4px;border:1px solid var(--line);border-radius:5px;background:var(--card);color:var(--ink-3);cursor:pointer}
 .case-sel:hover{border-color:var(--accent);color:var(--accent)}
-.case-sel.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.case-sel.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+/* İsteyen / Uzman — uzun unvanlı isimler satırı 2-3 kat uzatmasın: tek satır,
+   taşan kısım "…", tam ad title ile. */
+.c-kisi{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .c-test{font-weight:600}
-.c-test small{display:block;font-weight:400;color:var(--ink-3);font-family:var(--mono);font-size:11px;margin-top:1px}
-.badge-tekrar{display:inline-block;margin-left:6px;font-family:var(--sans);font-size:10.5px;font-weight:700;letter-spacing:.02em;padding:1px 6px;border-radius:5px;background:var(--violet-b);color:var(--violet-i);vertical-align:1px;white-space:nowrap}
+.c-test small{display:block;font-weight:400;color:var(--ink-3);font-family:var(--mono);font-size:var(--fs-small);margin-top:1px}
+/* Tekrar rozeti — kenarlık + piksel ↻ ikonu ile belirgin, ama düz (flat) */
+.badge-tekrar{display:inline-flex;align-items:center;gap:3px;margin-left:6px;font-family:var(--sans);font-size:11px;font-weight:700;letter-spacing:.02em;padding:1px 6px 1px 4px;border-radius:5px;background:var(--violet-b);color:var(--violet-i);border:1px solid color-mix(in srgb, var(--violet-i) 45%, transparent);vertical-align:1px;white-space:nowrap;line-height:1.35}
+.badge-tekrar svg{flex:none}
 .tekrar-info{font-size:12.5px;color:var(--ink-2);margin:-6px 0 14px;line-height:1.6}
 .tekrar-info .badge-tekrar{margin-left:0;margin-right:4px}
 .tekrar-info a{color:var(--accent)}
-.tag{display:inline-block;font-size:11.5px;font-weight:560;padding:2px 8px;border-radius:6px;background:var(--paper);border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+/* Tip rozetleri — her tipin kendi rengi (--tc) + piksel ikon. Köşeli + ikonlu:
+   yuvarlak + noktalı durum haplarıyla karışmasın diye. Tanınmayan grup → Diğer. */
+.tag{--tc:var(--t-diger);display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;padding:1px 7px 1px 5px;border-radius:5px;background:color-mix(in srgb, var(--tc) var(--tint), var(--card));border:1px solid color-mix(in srgb, var(--tc) 28%, transparent);color:var(--tc);white-space:nowrap;line-height:1.4}
+.tag svg{flex:none}
+.tag[data-g=ihc]{--tc:var(--t-ihc)} .tag[data-g=hk]{--tc:var(--t-hk)} .tag[data-g=mol]{--tc:var(--t-mol)} .tag[data-g=fish]{--tc:var(--t-fish)}
+.tag[data-g=kesit]{--tc:var(--t-kesit)} .tag[data-g=hucre]{--tc:var(--t-hucre)} .tag[data-g=yayma]{--tc:var(--t-yayma)} .tag[data-g=diger]{--tc:var(--t-diger)}
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%}
 .st-bekleyen{background:var(--amber-b);color:var(--amber-i)} .st-bekleyen::before{background:var(--amber-i)}
@@ -163,6 +241,16 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .act:disabled{opacity:.5;cursor:not-allowed}
 .actrow{display:flex;gap:6px}
+/* İş Kuyruğu aksiyon sütunu — ikon-only, yan yana; renk hedef durumun rengi */
+.iacts{display:flex;gap:4px;align-items:center}
+.ia{width:var(--act-size);height:var(--act-size);flex:none;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink-3);cursor:pointer}
+.ia svg{width:calc(var(--act-size) * .56);height:calc(var(--act-size) * .56)}
+.ia:hover{border-color:var(--ink-3);color:var(--ink-2);background:var(--line-2)}
+.ia-cihaza{border-color:color-mix(in srgb, var(--blue-i) 55%, transparent);background:var(--blue-b);color:var(--blue-i)}
+.ia-tamamla{border-color:color-mix(in srgb, var(--green-i) 55%, transparent);background:var(--green-b);color:var(--green-i)}
+.ia-cihaza:hover{border-color:var(--blue-i);background:var(--blue-b);color:var(--blue-i);filter:brightness(.96)}
+.ia-tamamla:hover{border-color:var(--green-i);background:var(--green-b);color:var(--green-i);filter:brightness(.96)}
+td.c-act{width:1%}
 /* Kuyruk aksiyon butonları — hedef durumun rozet rengiyle eşleşir */
 .act-cihaza{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b)}
 .act-cihaza:hover{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b);filter:brightness(0.96)}
@@ -213,7 +301,7 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .tl .step:not(.done):not(.cur) .lbl{color:var(--ink-3)}
 .tl .time{font-size:11px;color:var(--ink-3);margin-top:1px}
 .rail-foot{padding:14px 18px;border-top:1px solid var(--line-2);display:flex;gap:10px}
-.btn-primary{flex:1;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:9px;padding:11px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:var(--sans)}
+.btn-primary{flex:1;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);border-radius:9px;padding:11px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:var(--sans)}
 .btn-primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
 .btn-primary:disabled{opacity:.6;cursor:not-allowed}
 .btn-danger{border:1px solid var(--amber-i);background:var(--card);color:var(--amber-i);border-radius:9px;padding:11px 16px;font-size:13.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
@@ -234,7 +322,7 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .scan:disabled:hover{border-color:var(--line);color:var(--ink-2)}
 .groups{display:flex;flex-wrap:wrap;gap:6px}
 .groups button{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:20px;padding:6px 12px;font-size:12px;font-weight:540;cursor:pointer;font-family:var(--sans)}
-.groups button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.groups button.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
 .sets{display:flex;flex-wrap:wrap;gap:6px}
 .set{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:7px 10px;font-size:12.5px;cursor:pointer;font-family:var(--sans);font-weight:540}
 .set:hover{border-color:var(--accent);background:var(--accent-soft)}
@@ -250,7 +338,7 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .anti.sel small{color:var(--accent);opacity:.7}
 .anti.sel::before{content:"✓";font-size:10.5px;font-weight:700}
 .anti-add{display:inline-flex;align-items:center;gap:6px;border:1px dashed var(--accent);background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:7px 10px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--sans)}
-.anti-add:hover{background:var(--accent);color:#fff;border-style:solid}
+.anti-add:hover{background:var(--accent);color:var(--on-accent);border-style:solid}
 .bulkpick-toggle{text-transform:none;letter-spacing:0;font-weight:600;font-size:11px;color:var(--accent);border:0;background:transparent;cursor:pointer;font-family:var(--sans);margin-left:8px;padding:0;text-decoration:underline}
 .bulkpick-box{display:none;flex-direction:column;gap:6px;margin-bottom:10px}
 .bulkpick-box.show{display:flex}
@@ -259,7 +347,7 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .otherbox{display:none;gap:7px;margin-top:6px}
 .otherbox.show{display:flex}
 .otherbox input{flex:1;border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:13px;outline:0;font-family:var(--sans)}
-.otherbox .add{border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:9px;padding:0 13px;font-size:17px;cursor:pointer}
+.otherbox .add{border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);border-radius:9px;padding:0 13px;font-size:17px;cursor:pointer}
 .blocks{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
 .bchip{display:inline-flex;align-items:center;gap:7px;background:var(--accent-soft);border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:12.5px;font-weight:600}
 .bchip .x{cursor:pointer;opacity:.6}
@@ -267,9 +355,9 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .bin:focus{border-style:solid;border-color:var(--accent)}
 .prios{display:flex;gap:7px}
 .prios button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:8px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
-.prios button[data-p=rutin].on{background:var(--accent);border-color:var(--accent);color:#fff}
-.prios button[data-p=acil].on{background:var(--amber-i);border-color:var(--amber-i);color:#fff}
-.prios button[data-p=stat].on{background:var(--accent-h);border-color:var(--accent-h);color:#fff}
+.prios button[data-p=rutin].on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.prios button[data-p=acil].on{background:var(--amber-i);border-color:var(--amber-i);color:var(--card)}
+.prios button[data-p=stat].on{background:var(--accent-h);border-color:var(--accent-h);color:var(--on-accent)}
 .rail textarea{width:100%;min-height:52px;resize:vertical;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;font-family:var(--sans);outline:0}
 .rail textarea:focus{border-color:var(--accent)}
 .onbehalf,.finput{width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:9px 11px;outline:0}
@@ -308,7 +396,7 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .set.set-shared{border-style:dashed}
 .segs{display:flex;gap:7px}
 .segs button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:8px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans);color:var(--ink-2)}
-.segs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.segs button.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .chkrow{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;flex-wrap:wrap}
 .chkrow input{width:16px;height:16px;margin:0;accent-color:var(--accent)}
 .tile .btnrow{display:flex;gap:6px}
@@ -324,10 +412,6 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .devrow .status.aktif{background:var(--green-b);color:var(--green-i)}
 .devrow .status.pasif{background:var(--line-2);color:var(--ink-3)}
 
-@media (min-width:1400px){
-  thead th{padding:10px 14px}
-  tbody td{padding:7px 14px}
-}
 @media (max-width:900px){
   .app{height:auto;max-height:none}
   .shell{flex-direction:column}
@@ -379,28 +463,88 @@ thead .bulkcell input[type=checkbox]{margin:0}
 /* type=password DEĞİL — tarayıcı şifre yöneticisini tetiklemesin diye
    type=text + görsel olarak noktalarla maskeleme (bkz. index.html #authPin). */
 .pinmask{-webkit-text-security:disc; text-security:disc; letter-spacing:2px}
-.authcard .err{color:#a3401f; font-size:12.5px; margin-top:10px; min-height:1em}
+.authcard .err{color:var(--danger); font-size:12.5px; margin-top:10px; min-height:1em}
 .authcard button{margin-top:18px}
 .hidden{display:none!important}
 
 /* ---------------- Toast (kısa bildirim) ---------------- */
 .toast{
   position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
-  background:var(--ink); color:#fff; font-size:13px; font-weight:560;
+  background:var(--bar-bg); color:var(--bar-ink); font-size:13px; font-weight:560;
   padding:10px 18px; border-radius:9px; box-shadow:0 6px 20px rgba(0,0,0,.18);
   z-index:100; opacity:0; pointer-events:none; transition:opacity .2s ease;
 }
 .toast.show{opacity:1}
-.toast.err{background:#a3401f}
+.toast.err{background:var(--danger);color:var(--on-danger)}
 
 /* ---------------- Yeni sürüm bandosu ---------------- */
 .update-banner{
   position:fixed; left:50%; bottom:26px; transform:translate(-50%, 130%);
   display:flex; align-items:center; gap:12px;
-  background:var(--ink); color:#fff; font-size:13px; font-weight:560;
+  background:var(--bar-bg); color:var(--bar-ink); font-size:13px; font-weight:560;
   padding:10px 12px 10px 16px; border-radius:9px; box-shadow:0 6px 20px rgba(0,0,0,.18);
   z-index:100; opacity:0; pointer-events:none; transition:transform .25s ease, opacity .25s ease;
 }
 .update-banner.show{transform:translate(-50%, 0); opacity:1; pointer-events:auto}
-.ub-x{border:0;background:transparent;color:#fff;opacity:.6;font-size:16px;cursor:pointer;line-height:1;padding:2px 4px}
+.ub-x{border:0;background:transparent;color:var(--bar-ink);opacity:.6;font-size:16px;cursor:pointer;line-height:1;padding:2px 4px}
 .ub-x:hover{opacity:1}
+
+/* ---------------- Logo (Selçuk Üniversitesi) ---------------- */
+.wordmark .logo-img{height:26px;width:auto;align-self:center;flex:none}
+.authcard .wordmark .logo-img{height:34px}
+
+/* ---------------- Ayarlar paneli (sol alttaki kullanıcı alanı) ---------------- */
+.sideuser{position:relative}
+.sideuser .me{display:flex;align-items:center;gap:9px;flex:1;min-width:0;border:0;background:transparent;padding:4px;margin:-4px;border-radius:8px;cursor:pointer;text-align:left;font-family:var(--sans)}
+.sideuser .me:hover{background:color-mix(in srgb, var(--accent) 7%, transparent)}
+.prefs{display:none;position:absolute;left:0;bottom:calc(100% + 8px);width:276px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px;z-index:70}
+.prefs.open{display:block}
+.prefs .m-sec{margin-bottom:14px}
+.prefs .m-sec:last-child{margin-bottom:0}
+.prefs .segs button{padding:6px 4px;font-size:12px}
+.temalar{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.tema-opt{display:flex;flex-direction:column;align-items:center;gap:4px;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:6px 2px 5px;cursor:pointer;font-family:var(--sans);font-size:10.5px;font-weight:560;color:var(--ink-2);line-height:1.15;text-align:center}
+.tema-opt .sw{width:22px;height:22px;border-radius:50%;border:3px solid var(--paper);box-shadow:0 0 0 1px var(--line)}
+.tema-opt:hover{border-color:var(--ink-3)}
+.tema-opt.on{border-color:var(--accent);background:var(--accent-soft);color:var(--ink)}
+
+/* ---------------- Tablo yoğunluğu kontrolü (A− / A+) ---------------- */
+.zoomctl{display:flex;align-items:center;border:1px solid var(--line);border-radius:9px;background:var(--card);overflow:hidden;flex:none}
+.zoomctl button{border:0;background:transparent;padding:6px 9px;font-size:12px;font-weight:700;cursor:pointer;font-family:var(--sans);color:var(--ink-2);line-height:1}
+.zoomctl button:hover:not(:disabled){background:var(--line-2);color:var(--ink)}
+.zoomctl button:disabled{opacity:.35;cursor:default}
+.zoomctl .lvl{display:flex;gap:3px;padding:0 1px}
+.zoomctl .lvl i{width:5px;height:5px;border-radius:50%;background:var(--line-strong)}
+.zoomctl .lvl i.on{background:var(--accent)}
+
+/* ---------------- Sütun filtresi içi ayrı bölüm (İstek → Tekrar) ---------------- */
+.thsep{height:1px;background:var(--line);margin:6px 4px}
+.thsub{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:4px 8px 2px}
+
+@media (max-width:900px){
+  /* ayarlar paneli: dar ekranda alttan açılan sayfa */
+  .prefs{position:fixed;left:8px;right:8px;bottom:8px;width:auto;z-index:80;padding-bottom:max(14px, env(safe-area-inset-bottom))}
+  .barrow{flex-wrap:wrap;padding:0 16px 10px}
+  /* mobilde ekrana daha çok veri sığsın — yatay boşluk bir kademe daha az */
+  thead th, tbody td{padding-left:max(3px, calc(var(--cell-px) - 2px));padding-right:max(3px, calc(var(--cell-px) - 2px))}
+  .tablewrap{padding:0 6px 12px}
+}
+
+/* ---------------- Avatarlar (fotoğraf varsa o, yoksa baş harf) ---------------- */
+.sideuser .av{overflow:hidden;flex:none}
+.av-sm{width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:inline-grid;place-items:center;font-size:9px;font-weight:700;flex:none;overflow:hidden;vertical-align:middle;letter-spacing:0}
+.av-md{width:30px;height:30px;font-size:11px}
+.has-img{background:var(--line-2)}
+.av img, .av-sm img{width:100%;height:100%;object-fit:cover;display:block}
+.pchip{display:flex;align-items:center;gap:6px;min-width:0}
+
+/* ---------------- Ayarlar paneli: Profil (fotoğraf + PIN) ---------------- */
+.prefs{max-height:calc(100vh - 24px);overflow-y:auto}
+.prefs .av{width:48px;height:48px;font-size:16px}
+.prof-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.prof-acts{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.prof-acts .btn-sm{padding:6px 10px!important;cursor:pointer;display:inline-block}
+.linkbtn{border:0;background:transparent;color:var(--accent);font-weight:600;font-size:12.5px;cursor:pointer;padding:0;font-family:var(--sans);text-decoration:underline}
+.pinform{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.pinform .err{color:var(--danger);font-size:12px;min-height:1em}
+.pinform .btnrow{display:flex;gap:6px;justify-content:flex-end}
