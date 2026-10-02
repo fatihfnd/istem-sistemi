@@ -1,6 +1,7 @@
 // daily-backup — pg_cron tarafından her gece tetiklenir (bkz. yedekler_sema.sql).
-// 1) istemler + istem_kalemleri + istem_log (+ ad çözmek için istem_kuyruk_v,
-//    kullanicilar, test_gruplari) service_role ile (RLS'yi atlayarak) TAM okunur.
+// 1) istemler + istem_kalemleri + istem_log + istem_notlari (+ ad çözmek için
+//    istem_kuyruk_v, kullanicilar, test_gruplari) service_role ile (RLS'yi
+//    atlayarak) TAM okunur.
 // 2) Okunabilir sayfalar (ID yerine ad) + ham sayfalar içeren .xlsx üretilir
 //    (dönüşümler: yedek.ts).
 // 3) İki BAĞIMSIZ çıkış — biri başarısız olursa diğeri yine denenir:
@@ -52,15 +53,21 @@ Deno.serve(async () => {
   // Veri okunamaz ya da dosya üretilemezse iki çıkış da imkânsız — tek ölümcül hata bu.
   let veri: YedekVerisi, bytes: ArrayBuffer;
   try {
-    const [istemler, kalemler, log, kuyruk, kullanicilar, gruplar] = await Promise.all([
+    const [istemler, kalemler, log, kuyruk, kullanicilar, gruplar, notlar] = await Promise.all([
       hepsiniOku(client, "istemler", "*", ["created_at", "id"]),
       hepsiniOku(client, "istem_kalemleri", "*", ["created_at", "id"]),
       hepsiniOku(client, "istem_log", "*", ["created_at", "id"]),
       hepsiniOku(client, "istem_kuyruk_v", "*", ["created_at", "kalem_id"]),
       hepsiniOku(client, "kullanicilar", "id,ad_soyad", ["id"]), // pin vb. yedeğe girmez
       hepsiniOku(client, "test_gruplari", "kod,ad", ["kod"]),
+      // Not tablosu okunamazsa (şema henüz kurulmadıysa) yedek İPTAL OLMAZ —
+      // notlar eski tekil not_metni'nden yazılır, e-postada belirtilir.
+      hepsiniOku(client, "istem_notlari", "*", ["created_at", "id"]).catch((e) => {
+        console.error("[daily-backup] istem_notlari okunamadı:", e);
+        return null;
+      }),
     ]);
-    veri = { istemler, kalemler, log, kuyruk, kullanicilar, gruplar };
+    veri = { istemler, kalemler, log, kuyruk, kullanicilar, gruplar, notlar };
     bytes = XLSX.write(calismaKitabi(XLSX, veri), { type: "array", bookType: "xlsx" });
   } catch (e) {
     console.error("[daily-backup] Yedek üretilemedi:", e);

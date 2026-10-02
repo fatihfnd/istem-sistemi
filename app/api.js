@@ -236,7 +236,7 @@
     async getAllKullanicilar() {
       const { data, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,rol,is_admin,avatar_url,pin,email,auth_user_id,aktif")
+        .select("id,ad_soyad,kisaltma,rol,is_admin,avatar_url,pin,email,auth_user_id,aktif")
         .order("ad_soyad");
       return must(data, error);
     },
@@ -244,14 +244,14 @@
     // PIN burada artık kullanicilar.pin'e YAZILMIYOR — parola kaynağı
     // sadece Supabase Auth. Auth hesabı ayrı bir client'ta açılır (bkz.
     // signupClient), kullanicilar satırı yöneticinin kendi oturumuyla yazılır.
-    async createKullanici({ ad_soyad, rol, is_admin, pin }) {
+    async createKullanici({ ad_soyad, kisaltma, rol, is_admin, pin }) {
       const email = await uniqueEmailFor(ad_soyad);
       const { data: signUpData, error: e1 } = await signupClient().auth.signUp({ email, password: toAuthPassword(pin) });
       if (e1) throw e1;
       const authUserId = signUpData?.user?.id || null;
       const { data, error: e2 } = await client
         .from("kullanicilar")
-        .insert({ ad_soyad, rol, is_admin: Boolean(is_admin), email, auth_user_id: authUserId })
+        .insert({ ad_soyad, kisaltma: kisaltma || null, rol, is_admin: Boolean(is_admin), email, auth_user_id: authUserId })
         .select()
         .single();
       if (e2) throw e2;
@@ -260,10 +260,10 @@
 
     // PIN artık düzenlenemiyor (başka birinin şifresini service_role
     // olmadan değiştiremeyiz) — sadece ad/rol/yönetici.
-    async updateKullanici(id, { ad_soyad, rol, is_admin }) {
+    async updateKullanici(id, { ad_soyad, kisaltma, rol, is_admin }) {
       const { data, error } = await client
         .from("kullanicilar")
-        .update({ ad_soyad, rol, is_admin: Boolean(is_admin) })
+        .update({ ad_soyad, kisaltma: kisaltma || null, rol, is_admin: Boolean(is_admin) })
         .eq("id", id)
         .select("id");
       if (error) throw error;
@@ -652,29 +652,39 @@
     // ---------------- Hizmetler (faturalama) ----------------
     // Tüm kullanıcılar (aktif filtresi yok — geçmişte pasif olmuş
     // kullanıcının adı da eski kayıtlarda görünmeye devam etsin).
+    // id -> { ad, kisaltma }
     async getKullaniciMap() {
-      const { data, error } = await client.from("kullanicilar").select("id,ad_soyad");
+      const { data, error } = await client.from("kullanicilar").select("id,ad_soyad,kisaltma");
       must(data, error);
       const map = {};
-      data.forEach((u) => { map[u.id] = u.ad_soyad; });
+      data.forEach((u) => { map[u.id] = { ad: u.ad_soyad, kisaltma: u.kisaltma || null }; });
       return map;
     },
 
     // istemler.istem_yapan_id VE fatura_giren_id ikisi de kullanicilar'a
     // referans veriyor — PostgREST nested embed bu durumda belirsiz olur,
     // bu yüzden isimler burada client-side çözülüyor (getKullaniciMap ile).
+    // Sayfa sayfa okunur (PostgREST 1000 satır sınırı — bkz. listQueue).
     async getHizmetler() {
-      const [istemRes, kullaniciMap] = await Promise.all([
-        client
-          .from("istemler")
-          .select("id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani,istem_kalemleri(grup,tekrar_kaynagi_id)")
-          .order("created_at", { ascending: false }),
-        this.getKullaniciMap(),
-      ]);
-      must(istemRes.data, istemRes.error);
+      const istemleriOku = async () => {
+        const satirlar = [];
+        for (;;) {
+          const { data, error } = await client
+            .from("istemler")
+            .select("id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani,istem_kalemleri(grup,tekrar_kaynagi_id)")
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(satirlar.length, satirlar.length + 999);
+          must(data, error);
+          if (!data.length) return satirlar;
+          satirlar.push(...data);
+        }
+      };
+      const [istemler, kullaniciMap] = await Promise.all([istemleriOku(), this.getKullaniciMap()]);
+      const ad = (id) => kullaniciMap[id]?.ad || "—";
 
       const grupSira = Object.fromEntries(["ihc", "hk", "mol", "kesit", "hucre", "yayma", "diger"].map((g, i) => [g, i]));
-      return istemRes.data.map((i) => {
+      return istemler.map((i) => {
         const counts = {};
         (i.istem_kalemleri || []).forEach((k) => { counts[k.grup] = (counts[k.grup] || 0) + 1; });
         const ozet = Object.entries(counts)
@@ -687,12 +697,14 @@
           tekrar: kalemler.length > 0 && kalemler.every((k) => k.tekrar_kaynagi_id),
           istem_id: i.id,
           patoloji_no: i.patoloji_no,
-          isteyen_adi: kullaniciMap[i.istem_yapan_id] || "—",
-          uzman_adi: i.uzman_id ? kullaniciMap[i.uzman_id] || "—" : "—",
+          isteyen_adi: ad(i.istem_yapan_id),
+          isteyen_kisaltma: kullaniciMap[i.istem_yapan_id]?.kisaltma || null,
+          uzman_adi: i.uzman_id ? ad(i.uzman_id) : "—",
+          uzman_kisaltma: i.uzman_id ? kullaniciMap[i.uzman_id]?.kisaltma || null : null,
           created_at: i.created_at,
           ozet,
           fatura_girildi: i.fatura_girildi,
-          fatura_giren_adi: i.fatura_giren_id ? kullaniciMap[i.fatura_giren_id] || "—" : null,
+          fatura_giren_adi: i.fatura_giren_id ? ad(i.fatura_giren_id) : null,
           fatura_zamani: i.fatura_zamani,
         };
       });
@@ -731,13 +743,55 @@
     // sadece created_at'e göre sıralamak eşit değerlerde Postgres'in
     // fiziksel satır sırasına bağlı kalır — bir UPDATE (durum değişimi)
     // o satırın fiziksel konumunu değiştirip sırayı bozabilir.
-    async listQueue() {
-      const { data, error } = await client
+    //
+    // eskiSinir (ISO zaman) verilirse: Bekleyen/Cihazda HER ZAMAN, Tamamlandı
+    // yalnız created_at >= eskiSinir olanlar gelir (eski tamamlananlar
+    // sunucuda elenir). Verilmezse hepsi.
+    // Sayfa sayfa okunur: PostgREST tek istekte en fazla "max rows" (1000)
+    // satır döner — eskiden kayıt sayısı büyüyünce en eski satırlar SESSİZCE
+    // kayboluyordu. Dönen satır sayısı kadar ilerlenir, boş sayfada durulur.
+    async listQueue({ eskiSinir } = {}) {
+      const satirlar = [];
+      for (;;) {
+        let q = client.from("istem_kuyruk_v").select("*");
+        if (eskiSinir) q = q.or(`durum.neq.tamamlandi,created_at.gte."${eskiSinir}"`);
+        const { data, error } = await q
+          .order("created_at", { ascending: false })
+          .order("kalem_id", { ascending: true })
+          .range(satirlar.length, satirlar.length + 999);
+        must(data, error);
+        if (!data.length) return satirlar;
+        satirlar.push(...data);
+      }
+    },
+
+    // "Eski kayıtları göster (N)" için: gizlenen eski Tamamlandı sayısı.
+    async gizliEskiSayisi(eskiSinir) {
+      const { count, error } = await client
         .from("istem_kuyruk_v")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .order("kalem_id", { ascending: true });
-      return must(data, error);
+        .select("kalem_id", { count: "exact", head: true })
+        .eq("durum", "tamamlandi")
+        .lt("created_at", eskiSinir);
+      if (error) throw error;
+      return count || 0;
+    },
+
+    // Vaka görünümü "tüm geçmiş"tir: gizli eski kayıtlar dahil o patoloji
+    // no'nun bütün kalemleri.
+    async vakaKalemleri(patolojiNo) {
+      const satirlar = [];
+      for (;;) {
+        const { data, error } = await client
+          .from("istem_kuyruk_v")
+          .select("*")
+          .eq("patoloji_no", patolojiNo)
+          .order("created_at", { ascending: true })
+          .order("kalem_id", { ascending: true })
+          .range(satirlar.length, satirlar.length + 999);
+        must(data, error);
+        if (!data.length) return satirlar;
+        satirlar.push(...data);
+      }
     },
 
     async getTimeline(kalemId) {
@@ -774,13 +828,20 @@
 
     // items: [{test_id}|{ozel_test}], bloklar: ["1","2",...]
     // -> her blok x her test için ayrı bir istem_kalemi satırı
+    // Not (varsa) istemler.not_metni'ye DEĞİL, istem_notlari'na yazılır
+    // (yazan + zaman damgalı liste; bkz. ek_ozellikler_sema.sql).
     async createIstem({ patoloji_no, istem_yapan_id, uzman_id, oncelik, not_metni, bloklar, testler }) {
       const { data: istem, error: e1 } = await client
         .from("istemler")
-        .insert({ patoloji_no, istem_yapan_id, uzman_id, oncelik, not_metni })
+        .insert({ patoloji_no, istem_yapan_id, uzman_id, oncelik })
         .select()
         .single();
       if (e1) throw e1;
+
+      if (not_metni) {
+        const { error: eN } = await client.from("istem_notlari").insert({ istem_id: istem.id, yazan_id: istem_yapan_id, metin: not_metni });
+        if (eN) throw eN;
+      }
 
       const kalemler = [];
       bloklar.forEach((blok_no) => {
@@ -818,6 +879,36 @@
     // Dönen değer yeni kalemin id'si.
     async tekrarIste(kalemId, neden) {
       const { data, error } = await client.rpc("tekrar_iste", { p_kalem_id: kalemId, p_not: neden || null });
+      if (error) throw error;
+      return data;
+    },
+
+    // Toplu Tekrar İste — aynı kaynak istemden gelenler tek yeni istemde
+    // toplanır (sunucuda). Dönen: { istem, kalem, atlanan }.
+    async tekrarIsteToplu(kalemIdleri, neden) {
+      const { data, error } = await client.rpc("tekrar_iste_toplu", { p_kalem_ids: kalemIdleri, p_not: neden || null });
+      if (error) throw error;
+      return data;
+    },
+
+    // ---------------- İstem notları (çoklu, yazan + zaman damgalı) ----------------
+    async notEkle(istemId, yazanId, metin) {
+      const { error } = await client.from("istem_notlari").insert({ istem_id: istemId, yazan_id: yazanId, metin });
+      if (error) throw error;
+    },
+
+    // RLS: yazan kendi notunu, admin her notu siler — reddedilirse 0 satır döner.
+    async notSil(notId) {
+      const { data, error } = await client.from("istem_notlari").delete().eq("id", notId).select("id");
+      if (error) throw error;
+      if (!data || !data.length) throw forbiddenError();
+    },
+
+    // ---------------- İstatistikler (canlı, yalnız admin) ----------------
+    // bas / bit: "YYYY-AA-GG" (Türkiye yerel tarihi, ikisi de dahil);
+    // periyot: "week" | "month". Hesap sunucuda (bkz. istatistik()).
+    async istatistik(bas, bit, periyot) {
+      const { data, error } = await client.rpc("istatistik", { p_bas: bas, p_bit: bit, p_periyot: periyot });
       if (error) throw error;
       return data;
     },
@@ -869,6 +960,7 @@
         .channel("istem-kuyruk-realtime")
         .on("postgres_changes", { event: "*", schema: "public", table: "istem_kalemleri" }, onChange)
         .on("postgres_changes", { event: "*", schema: "public", table: "istem_log" }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "istem_notlari" }, onChange)
         .subscribe();
       return () => client.removeChannel(channel);
     },

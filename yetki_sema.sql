@@ -1,4 +1,8 @@
 -- ============================================================
+-- NOT: Geri alma kuralı, tekrar_iste ve istem_kuyruk_v'nin SON hali
+-- ek_ozellikler_sema.sql'dedir. Bu dosyayı yeniden çalıştırırsanız
+-- ardından ek_ozellikler_sema.sql'i de çalıştırın.
+-- ============================================================
 -- yetki_sema.sql — Admin / rol bazlı yetkiler + boya tekrarı +
 -- kalite notu + şablon paylaşımı
 --
@@ -239,9 +243,13 @@ declare
 begin
   if auth.uid() is not null
      and eski is not null and yeni is not null and yeni < eski
-     and not (public.is_admin() or coalesce(public.current_rol(), '') = 'teknisyen')
+     and not (
+       public.is_admin()
+       or coalesce(public.current_rol(), '') = 'teknisyen'
+       or exists (select 1 from istemler i where i.id = new.istem_id and i.istem_yapan_id = public.current_kullanici_id())
+     )
   then
-    raise exception 'Durumu geri alma yetkiniz yok (sadece teknisyen veya yönetici)' using errcode = '42501';
+    raise exception 'Bu kalemin durumunu geri alma yetkiniz yok (yalnız kendi istemleriniz; teknisyen/yönetici hepsini)' using errcode = '42501';
   end if;
   return new;
 end $$;
@@ -255,6 +263,15 @@ create trigger istem_kalemleri_geri_alma_kontrol
 -- 6) Kuyruk görünümü — yeni kolonlar SONA eklenir (CREATE OR REPLACE
 -- VIEW mevcut kolon sırasını değiştiremez).
 -- ------------------------------------------------------------
+-- ek_ozellikler_sema.sql çalıştıysa görünüm daha fazla kolonludur
+-- (notlar, kısaltmalar) — o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'notlar'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -282,7 +299,10 @@ join istemler i             on i.id = ik.istem_id
 left join test_katalog tk   on tk.id = ik.test_id
 left join kullanicilar isteyen on isteyen.id = i.istem_yapan_id
 left join kullanicilar uzman   on uzman.id   = i.uzman_id
-left join cihazlar c        on c.id = ik.cihaz_id;
+left join cihazlar c        on c.id = ik.cihaz_id
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

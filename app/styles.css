@@ -171,6 +171,8 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .thcol.filtered{background:var(--accent-soft)}
 /* Not (teknisyene) — tam metin, sarmalanır; çok uzun notlar sütunu sonsuz genişletmesin diye üst sınır */
 .note-txt{display:block;width:max-content;max-width:320px;color:var(--ink-2);font-size:12.5px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
+.note-by{display:inline-block;margin-right:5px;padding:0 4px;border-radius:4px;background:var(--line-2);color:var(--ink-3);font-size:10.5px;font-weight:700;letter-spacing:.02em;vertical-align:1px}
+.note-more{display:inline-block;margin-left:6px;padding:0 6px;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:700;white-space:nowrap;vertical-align:1px}
 .exportbox{position:relative}
 .barrow.dimmed{opacity:.45;pointer-events:none}
 .case-banner{display:flex;align-items:center;gap:14px;padding:10px 26px;background:var(--accent-soft);border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)}
@@ -241,30 +243,23 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .act:disabled{opacity:.5;cursor:not-allowed}
 .actrow{display:flex;gap:6px}
-/* İş Kuyruğu aksiyon sütunu — ikon-only, yan yana; renk hedef durumun rengi */
-.iacts{display:flex;gap:4px;align-items:center}
-.ia{width:var(--act-size);height:var(--act-size);flex:none;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink-3);cursor:pointer}
-.ia svg{width:calc(var(--act-size) * .56);height:calc(var(--act-size) * .56)}
-.ia:hover{border-color:var(--ink-3);color:var(--ink-2);background:var(--line-2)}
-.ia-cihaza{border-color:color-mix(in srgb, var(--blue-i) 55%, transparent);background:var(--blue-b);color:var(--blue-i)}
-.ia-tamamla{border-color:color-mix(in srgb, var(--green-i) 55%, transparent);background:var(--green-b);color:var(--green-i)}
-.ia-cihaza:hover{border-color:var(--blue-i);background:var(--blue-b);color:var(--blue-i);filter:brightness(.96)}
-.ia-tamamla:hover{border-color:var(--green-i);background:var(--green-b);color:var(--green-i);filter:brightness(.96)}
-td.c-act{width:1%}
+/* İş Kuyruğu Durum sütunu — gerçek durum rozeti HER ZAMAN + yazılı aksiyonlar.
+   İleri aksiyonun rengi hedef durumun rengi; Geri Al nötr gri. */
+td.c-durum{width:1%}
+.dacts{display:flex;gap:5px;align-items:center;white-space:nowrap}
+.dacts .pill{min-width:7.4em}
+.ab{height:var(--act-size);flex:none;padding:0 9px;display:inline-flex;align-items:center;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.ab:hover{border-color:var(--ink-3);background:var(--line-2);color:var(--ink)}
+.ab-cihaza{border-color:color-mix(in srgb, var(--blue-i) 55%, transparent);background:var(--blue-b);color:var(--blue-i)}
+.ab-tamamla{border-color:color-mix(in srgb, var(--green-i) 55%, transparent);background:var(--green-b);color:var(--green-i)}
+.ab-cihaza:hover{border-color:var(--blue-i);background:var(--blue-b);color:var(--blue-i);filter:brightness(.96)}
+.ab-tamamla:hover{border-color:var(--green-i);background:var(--green-b);color:var(--green-i);filter:brightness(.96)}
+.ab-geri{color:var(--ink-3)}
 /* Kuyruk aksiyon butonları — hedef durumun rozet rengiyle eşleşir */
 .act-cihaza{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b)}
 .act-cihaza:hover{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b);filter:brightness(0.96)}
 .act-tamamla{border-color:var(--green-i);color:var(--green-i);background:var(--green-b)}
 .act-tamamla:hover{border-color:var(--green-i);color:var(--green-i);background:var(--green-b);filter:brightness(0.96)}
-/* Durum geri alma — küçük, yuvarlak, sadece ikonlu; ileri aksiyonların
-   (mavi/yeşil) renginden bilerek ayrışan nötr gri — karışmasın diye. */
-.act-revert-icon{
-  width:24px;height:24px;flex:none;padding:0;border-radius:50%;
-  border:1px solid var(--line);background:var(--card);color:var(--ink-3);
-  font-size:14px;line-height:1;cursor:pointer;font-family:var(--sans);
-  display:inline-flex;align-items:center;justify-content:center;
-}
-.act-revert-icon:hover{border-color:var(--ink-3);color:var(--ink-2);background:var(--line-2)}
 
 /* right panel */
 .rail{width:372px; flex:none; background:var(--card); border-left:1px solid var(--line); display:flex; flex-direction:column; min-height:0}
@@ -596,3 +591,68 @@ td.c-act{width:1%}
 .ocr-tani code{background:var(--card);padding:0 3px;border-radius:3px}
 /* display:flex [hidden]'ı ezmesin — kamera açıkken boş sonuç kutusu görünmesin */
 .ocr-sonuc[hidden], .ocr-onizleme[hidden], .ocr-tani[hidden]{display:none}
+
+/* ---------------- Kısaltma (İsteyen / Uzman Adına) ---------------- */
+.c-kisi.kisa{font-weight:600;letter-spacing:.02em}
+.kisa-chip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink-2);font-size:11px;font-weight:700;letter-spacing:.03em;vertical-align:1px}
+
+/* ---------------- Eski kayıtlar (İş Kuyruğu) ---------------- */
+.eski-btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.eski-ipucu{margin:10px 8px 0;padding:9px 12px;border:1px dashed var(--line-strong);border-radius:9px;font-size:12.5px;color:var(--ink-2)}
+.eski-ipucu b{color:var(--ink)}
+
+/* ---------------- Notlar (detay paneli) ---------------- */
+.notlar{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.not-item{padding:8px 10px;border:1px solid var(--line-2);border-radius:9px;background:var(--paper)}
+.not-meta{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-3)}
+.not-meta b{color:var(--ink-2);font-weight:640}
+.not-sil{margin-left:auto;border:0;background:transparent;color:var(--ink-3);font-size:16px;line-height:1;cursor:pointer;padding:0 4px;border-radius:5px}
+.not-sil:hover{color:var(--danger);background:var(--line-2)}
+.not-metin{font-size:13px;color:var(--ink);margin-top:3px;white-space:pre-wrap;overflow-wrap:anywhere}
+.not-bos{font-size:13px;color:var(--ink-3)}
+
+/* ---------------- Hizmetler (boş bölüm) ---------------- */
+tbody tr.bos-satir{cursor:default}
+tbody tr.bos-satir:hover{background:transparent}
+tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-align:center}
+
+/* ---------------- İstatistikler ---------------- */
+.ist-ozel{display:flex;align-items:center;gap:6px}
+.ist-ozel .finput{width:auto;padding:6px 9px;font-size:12.5px}
+.ist-wrap{flex:1;min-height:0;overflow-y:auto;padding:0 26px 26px;transition:opacity .15s ease}
+.ist-wrap.yukleniyor{opacity:.5}
+.ist-aralik{font-size:12.5px;color:var(--ink-2);margin:2px 0 12px}
+.ist-kartlar{display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:10px;margin-bottom:18px}
+.ist-kart{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:12px 14px}
+.ist-kart .k{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.ist-kart .v{font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.ist-kart .a{font-size:11.5px;color:var(--ink-3);margin-top:2px}
+.ist-blok{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:14px;margin-bottom:14px;min-width:0}
+.ist-tablo{overflow-x:auto}
+.ist-tablo table{width:100%}
+.ist-tablo thead th{position:static;background:var(--card)}
+.ist-tablo tbody tr{cursor:default}
+.ist-tablo td.sayi, .ist-tablo th.sayi{text-align:right;font-variant-numeric:tabular-nums}
+.ist-tablo .sifir{color:var(--ink-3);opacity:.6}
+.ist-tablo td:first-child{white-space:nowrap}
+.ist-iki{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.ist-iki .ist-blok{margin-bottom:0}
+.ist-bar{display:grid;grid-template-columns:minmax(0, 190px) 1fr 76px;align-items:center;gap:10px;padding:4px 0}
+.ist-bar .l{min-width:0;overflow:hidden}
+.ist-bar .l .ad{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.ist-bar .b{height:10px;border-radius:5px;background:var(--line-2);overflow:hidden}
+.ist-bar .b i{display:block;height:100%;border-radius:5px;background:var(--accent)}
+.ist-bar .n{text-align:right;font-size:13px;font-weight:640;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ist-bar .n span{font-weight:500;color:var(--ink-3);font-size:11.5px}
+.ist-mesaj{font-size:13px;color:var(--ink-3);padding:6px 0}
+.ist-mesaj.hata{color:var(--danger);font-weight:600}
+.ist-not{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin-top:14px}
+@media (max-width:900px){
+  .ist-wrap{padding:0 16px 20px}
+  .ist-iki{grid-template-columns:1fr;gap:14px}
+  .ist-bar{grid-template-columns:minmax(0, 130px) 1fr 64px}
+  /* Durum sütunu dar ekranda daha az yer kaplasın (rozet yine her zaman görünür) */
+  .dacts{gap:4px}
+  .dacts .pill{min-width:0;padding:2px 7px}
+  .ab{padding:0 7px}
+}

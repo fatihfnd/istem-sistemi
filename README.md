@@ -26,16 +26,16 @@ Prototipte RLS `anon` rolüne tam açıktı — bu, giriş ekranını hiç görm
 3. Kodu deploy edin.
 
 Getirdikleri:
-- **Yönetici (`is_admin`)**: Yönetim sayfaları (Kullanıcılar, Test Grupları, Test Kataloğu, Yedekler) sadece yöneticiye görünür; `kullanicilar`/`test_gruplari` yazma, `test_katalog` düzenleme/silme ve yedek indirme RLS'te de sadece yönetici.
+- **Yönetici (`is_admin`)**: Yönetim sayfaları (İstatistikler, Kullanıcılar, Test Grupları, Test Kataloğu, Yedekler) sadece yöneticiye görünür; `kullanicilar`/`test_gruplari` yazma, `test_katalog` düzenleme/silme ve yedek indirme RLS'te de sadece yönetici.
 - **İstek Setleri**: teknisyen dışında herkes ekler/düzenler/siler; teknisyen sadece görür. Yeni yöneticiyi Kullanıcılar formundaki "Yönetici" kutusuyla atayın.
 - **Kalem silme**: yönetici her kalemi (Tamamlandı dahil); diğerleri sadece kendi açtığı istemdeki, Tamamlandı olmayan kalemleri.
-- **Durum geri alma** (Tamamlandı→Cihazda, Cihazda→Bekleyen): sadece yönetici + teknisyen (veritabanında trigger ile).
+- **Durum geri alma** (Tamamlandı→Cihazda, Cihazda→Bekleyen): yönetici + teknisyen her kalemi, uzman/asistan yalnız kendi açtığı istemin kalemlerini (veritabanında trigger ile; son hali `ek_ozellikler_sema.sql`'de).
 - **Teknisyen**: sıfırdan istem giremez, Şablonlar'a erişemez, İstek Setleri'ni düzenleyemez; tek istem yolu detay panelindeki "Tekrar İste".
 - **Tekrar İste**: aynı test/blok için yeni bir istem kaydı + Bekleyen kalem (`istem_kalemleri.tekrar_kaynagi_id` kaynağa bağlı). Hizmetler'de "Tekrar" rozetiyle görünür.
 - **Kalite notu** (`istem_kalemleri.kalite_notu`) ve **herkese açık şablon** (`sablonlar.herkese_acik`).
 - `istemler` ve `istem_kalemleri`'nde UPDATE kolon bazlıdır (sadece fatura / durum-cihaz-kalite notu kolonları).
 
-⚠️ Bu dosyadan SONRA `policies.sql`, `setler_sema.sql`, `yonetim_sema.sql` ya da `secure_rls_authenticated.sql`'i yeniden çalıştırmayın — eski "herkese açık" politikaları geri ekler. Çalıştırırsanız ardından `yetki_sema.sql`'i tekrar çalıştırın.
+⚠️ Bu dosyadan SONRA `policies.sql`, `setler_sema.sql`, `yonetim_sema.sql` ya da `secure_rls_authenticated.sql`'i yeniden çalıştırmayın — eski "herkese açık" politikaları geri ekler. Çalıştırırsanız ardından `yetki_sema.sql`'i ve `ek_ozellikler_sema.sql`'i tekrar çalıştırın.
 
 ## 1d) Kendi profilim: PIN + fotoğraf (`profil_sema.sql`)
 `yetki_sema.sql`'den sonra, **kod deploy edilmeden önce** çalıştırın (idempotent). Yeni kod girişte `kullanicilar.avatar_url`'i okur.
@@ -46,8 +46,17 @@ Getirdikleri:
 
 **Yeni kullanıcı eklerken / oluştururken:** Auth hesabı oturum saklamayan ayrı bir Supabase client ile açılır — yöneticinin kendi oturumu hiç değişmez.
 
+## 1d2) Kısaltma, çoklu not, toplu tekrar, istatistikler (`ek_ozellikler_sema.sql`)
+`yetki_sema.sql` ve `profil_sema.sql`'den sonra, **kod deploy edilmeden önce** çalıştırın (tek transaction, idempotent). Yeni kod `istem_kuyruk_v`'nin `notlar` / `isteyen_kisaltma` / `uzman_kisaltma` kolonlarını ve `kullanicilar.kisaltma`'yı okur.
+
+- **Kısaltma** (`kullanicilar.kisaltma`): Kullanıcılar formundan yönetici girer; İş Kuyruğu ve Hizmetler'de İsteyen / Uzman Adına'da kısaltma görünür (tam ad ipucu olarak; kısaltma yoksa tam ad). Büyük/küçük harf duyarsız benzersiz.
+- **Çoklu not** (`istem_notlari`): istem başına yazan + zaman damgalı liste; düzenleme yok, yazan kendi notunu / yönetici her notu siler. Eski `istemler.not_metni` silinmez, içeriği listeye taşınır (tekrar çalıştırmak çift kayıt üretmez). Önbellekte kalmış eski sürüm hâlâ `not_metni` yazarsa trigger listeye kopyalar.
+- **Toplu Tekrar İste** (`tekrar_iste_toplu`): seçili Cihazda/Tamamlandı kalemler; aynı kaynak istemden gelenler tek yeni istemde toplanır.
+- **İstatistikler** (`istatistik()`, yalnız yönetici): canlı veriden haftalık/aylık istem, kalem, tip dağılımı, kullanıcı bazında istem, ortalama/medyan tamamlanma süresi.
+- İş Kuyruğu'nda 30 günden eski **Tamamlandı** kayıtlar varsayılan gizlidir ("Eski kayıtları göster"); vaka görünümü her zaman tüm geçmişi gösterir. Bu sunucu tarafında süzülür (şema değişikliği gerekmez).
+
 ## 1e) Günlük yedek (`daily-backup` Edge Function)
-Her gece 02:00'de (pg_cron, `yedekler_sema.sql`) çalışır. Excel dosyasında önce okunabilir sayfalar (İstemler, İstem Kalemleri, Durum Geçmişi — ID yerine kullanıcı/test/cihaz adları), sonra geri yükleme için ham tablolar (`ham_*`) bulunur. Dosya iki BAĞIMSIZ yere gider: `yedekler` bucket'ı ve Resend ile `patolojiselcuktip@gmail.com` (ek). Biri başarısız olursa diğeri yine tamamlanır; hata Edge Function loglarında görünür.
+Her gece 02:00'de (pg_cron, `yedekler_sema.sql`) çalışır. Excel dosyasında önce okunabilir sayfalar (İstemler, İstem Kalemleri, Durum Geçmişi — ID yerine kullanıcı/test/cihaz adları), sonra geri yükleme için ham tablolar (`ham_*`, notlar dahil) bulunur. `ham_istem_log`'un sonundaki `patoloji_no` / `blok_no` / `test_adi` kolonları okuma kolaylığı içindir (geri yüklerken atılır). Dosya iki BAĞIMSIZ yere gider: `yedekler` bucket'ı ve Resend ile `patolojiselcuktip@gmail.com` (ek). Biri başarısız olursa diğeri yine tamamlanır; hata Edge Function loglarında görünür.
 
 - `yedek_eposta_sema.sql`: Resend anahtarını Vault'tan (`istem_resend_key`) sadece fonksiyonun okuyabileceği `yedek_resend_anahtari()` + cron isteğinin zaman aşımını 60 sn'ye çıkarır.
 - Fonksiyon kodu değişince: `npx supabase functions deploy daily-backup`
