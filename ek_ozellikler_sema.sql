@@ -9,6 +9,8 @@
 --
 -- yetki_sema.sql'i bir gün yeniden çalıştırırsanız, ardından bu dosyayı
 -- da yeniden çalıştırın (görünüm ve fonksiyonların son hali burada).
+-- İSTİSNA: istatistik()'in son hali ozet_yedek_sema.sql'dedir — bu
+-- dosyayı yeniden çalıştırırsanız ardından onu da çalıştırın.
 -- ============================================================
 
 begin;

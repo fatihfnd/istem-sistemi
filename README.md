@@ -52,8 +52,8 @@ Getirdikleri:
 - **Kısaltma** (`kullanicilar.kisaltma`): Kullanıcılar formundan yönetici girer; İş Kuyruğu ve Hizmetler'de İsteyen / Uzman Adına'da kısaltma görünür (tam ad ipucu olarak; kısaltma yoksa tam ad). Büyük/küçük harf duyarsız benzersiz.
 - **Çoklu not** (`istem_notlari`): istem başına yazan + zaman damgalı liste; düzenleme yok, yazan kendi notunu / yönetici her notu siler. Eski `istemler.not_metni` silinmez, içeriği listeye taşınır (tekrar çalıştırmak çift kayıt üretmez). Önbellekte kalmış eski sürüm hâlâ `not_metni` yazarsa trigger listeye kopyalar.
 - **Toplu Tekrar İste** (`tekrar_iste_toplu`): seçili Cihazda/Tamamlandı kalemler; aynı kaynak istemden gelenler tek yeni istemde toplanır.
-- **İstatistikler** (`istatistik()`, yalnız yönetici): canlı veriden haftalık/aylık istem, kalem, tip dağılımı, kullanıcı bazında istem, ortalama/medyan tamamlanma süresi.
-- İş Kuyruğu'nda 30 günden eski **Tamamlandı** kayıtlar varsayılan gizlidir ("Eski kayıtları göster"); vaka görünümü her zaman tüm geçmişi gösterir. Bu sunucu tarafında süzülür (şema değişikliği gerekmez).
+- **İstatistikler** (`istatistik()`, yalnız yönetici): canlı veriden haftalık/aylık istem, kalem, tip dağılımı, kullanıcı bazında istem, uzman adına dağılım, ortalama/medyan tamamlanma süresi. Son hali `ozet_yedek_sema.sql`'de.
+- İş Kuyruğu'nda 30 günden eski **Tamamlandı** kayıtlar varsayılan gizlidir ("Eski kayıtları göster" + "N eski kayıt gizli" sayacı); vaka görünümü her zaman tüm geçmişi gösterir. Bu gizleme **yalnız İş Kuyruğu ekranı** içindir: İstatistikler, Excel'e Aktar (tıklandığı anda sunucudan tam liste çekilir; "Filtreye uyanlar" sütun filtrelerini eskiler dahil tam listeye uygular), Hizmetler ve otomatik yedekler her zaman tüm kayıtları kapsar.
 
 ## 1e) Günlük yedek (`daily-backup` Edge Function)
 Her gece 02:00'de (pg_cron, `yedekler_sema.sql`) çalışır. Excel dosyasında önce okunabilir sayfalar (İstemler, İstem Kalemleri, Durum Geçmişi — ID yerine kullanıcı/test/cihaz adları), sonra geri yükleme için ham tablolar (`ham_*`, notlar dahil) bulunur. `ham_istem_log`'un sonundaki `patoloji_no` / `blok_no` / `test_adi` kolonları okuma kolaylığı içindir (geri yüklerken atılır). Dosya iki BAĞIMSIZ yere gider: `yedekler` bucket'ı ve Resend ile `patolojiselcuktip@gmail.com` (ek). Biri başarısız olursa diğeri yine tamamlanır; hata Edge Function loglarında görünür.
@@ -61,6 +61,19 @@ Her gece 02:00'de (pg_cron, `yedekler_sema.sql`) çalışır. Excel dosyasında 
 - `yedek_eposta_sema.sql`: Resend anahtarını Vault'tan (`istem_resend_key`) sadece fonksiyonun okuyabileceği `yedek_resend_anahtari()` + cron isteğinin zaman aşımını 60 sn'ye çıkarır.
 - Fonksiyon kodu değişince: `npx supabase functions deploy daily-backup`
 - Resend ücretsiz planda `onboarding@resend.dev` gönderen adresi sadece Resend hesabının sahibi olan e-postaya gönderebilir.
+
+## 1f) Haftalık / aylık özet (`ozet-yedek` Edge Function, `ozet_yedek_sema.sql`)
+Günlük ham veri yedeğinden ayrı ve ek. Aynı altyapı: Vault'taki service_role ve Resend anahtarları, `yedekler` bucket'ı, aynı alıcı. Hesap İstatistikler sayfasıyla **aynı** `istatistik()` fonksiyonundan gelir.
+
+| İş (pg_cron, UTC) | Türkiye saati | Kapsam | Dosya |
+|---|---|---|---|
+| `haftalik-istem-ozet` `0 2 * * 1` | Pazartesi 05:00 | önceki hafta (Pzt–Paz) | `istem_haftalik_ozet_2026-W40.xlsx` (ISO hafta) |
+| `aylik-istem-ozet` `0 2 1 * *` | ayın 1'i 05:00 | önceki ay | `istem_aylik_ozet_2026-09.xlsx` |
+
+- Sayfalar: Özet, Günlük Döküm (haftalık) / Haftalık Döküm (aylık), Tip Dağılımı, Kullanıcı Bazında, Uzman Adına.
+- Kurulum sırası: panelde `ozet-yedek` fonksiyonunu oluşturup `supabase/functions/ozet-yedek/index.ts`'yi yapıştırın, deploy edin → `ozet_yedek_sema.sql`'i çalıştırın.
+- Elle / geçmişe dönük: gövde `{"periyot":"hafta"}` (önceki hafta) ya da `{"periyot":"ay","bas":"2026-09-01"}` (o tarihi içeren dönem) — sorgu `ozet_yedek_sema.sql`'in sonunda.
+- Yedekler sayfası dosyaları adından Günlük / Haftalık / Aylık olarak etiketler ve süzer.
 
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):

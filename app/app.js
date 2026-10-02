@@ -86,6 +86,7 @@ function tipTag(grup) {
 }
 const TEKRAR_BADGE = `<span class="badge-tekrar" title="Boya tekrarı">${PIXEL_SVG.tekrar}Tekrar</span>`;
 
+const GERI_IKON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>`;
 const SEARCH_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>`;
 
 function esc(s) {
@@ -208,14 +209,15 @@ function bindExportMenu(boxSel, onPick) {
     });
   });
 }
-const EXPORT_MENU_HTML = `
+const exportMenuHTML = (gorunenEtiket = "Görünenler") => `
   <div class="exportbox">
     <button class="btn-ghost btn-sm exportbtn">Excel'e Aktar ▾</button>
     <div class="thfilter" style="right:auto;left:0">
-      <button class="thopt" data-exp="gorunen">Görünenler</button>
+      <button class="thopt" data-exp="gorunen">${gorunenEtiket}</button>
       <button class="thopt" data-exp="tum">Tümü</button>
     </div>
   </div>`;
+const EXPORT_MENU_HTML = exportMenuHTML();
 document.addEventListener("click", () => $$(".exportbox .thfilter.open").forEach((p) => p.classList.remove("open")));
 // Çoklu seçim: checkbox üstünde sürükleyerek seçim (masaüstü, opsiyonel) —
 // sürüklemeyi nerede bitirirse bitirsin devreyi kapatır.
@@ -282,7 +284,7 @@ let notDrafts = new Map();    // istem_id -> kaydedilmemiş yeni not taslağı (
 // görünür. Vaka görünümü her zaman tüm geçmiştir (eskiler ayrıca çekilir).
 const ESKI_GUN = 30;
 let eskileriGoster = false;
-let eskiSinirMs = null;       // son yüklemedeki sınır (ms); eskileriGoster iken null
+let eskiSinirMs = null;       // son yüklemedeki 30 gün sınırı (ms) — toggle açıkken de tutulur (sayaç için)
 let gizliEskiSayisi = 0;      // sunucuda kalan (yüklenmeyen) eski Tamamlandı sayısı
 let queueSeq = 0;             // üst üste binen yüklemelerde yalnız en sonuncusu yazsın
 
@@ -604,10 +606,13 @@ function renderQueuePage() {
         <button class="${isTabActive("cihazda") ? "on" : ""}" data-f="cihazda">Cihazda <span class="count" data-c="cihazda">0</span></button>
         <button class="${isTabActive("tamamlandi") ? "on" : ""}" data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
       </div>
-      <button class="btn-ghost btn-sm eski-btn hidden" id="eskiBtn" title="${ESKI_GUN} günden eski Tamamlandı kayıtlar"></button>
+      <div class="eski-kutu hidden" id="eskiKutu" title="${ESKI_GUN} günden eski Tamamlandı kayıtlar yalnız bu ekranda gizlenir — İstatistikler, Excel'e Aktar ve yedekler her zaman tüm kayıtları kapsar.">
+        <button class="btn-ghost btn-sm eski-btn" id="eskiBtn"></button>
+        <span class="eski-sayac" id="eskiSayac"></span>
+      </div>
       <div class="grow"></div>
       <button class="btn-ghost btn-sm hidden" id="clearFiltersBtn">Filtreleri Temizle</button>
-      <div id="qExport">${EXPORT_MENU_HTML}</div>
+      <div id="qExport">${exportMenuHTML("Filtreye uyanlar (eskiler dahil)")}</div>
       <div class="zoomctl" id="zoomCtl">
         <button type="button" data-zoom="-1" aria-label="Tabloyu sıkılaştır">A−</button>
         <span class="lvl"></span>
@@ -658,10 +663,7 @@ function renderQueuePage() {
   $("#clearFiltersBtn").addEventListener("click", clearAllFilters);
   $("#eskiBtn").addEventListener("click", eskiToggle);
   $("#eskiIpucu").addEventListener("click", (e) => { if (e.target.closest("[data-eski-goster]")) eskiToggle(); });
-  bindExportMenu("#qExport", (which) => {
-    const list = which === "tum" ? rows.filter((r) => !eskiGizli(r)) : getVisibleRows();
-    exportToExcel(list, KUYRUK_EXPORT_COLS, `istem_kuyruk_${which === "tum" ? "tumu" : "gorunenler"}`);
-  });
+  bindExportMenu("#qExport", kuyruguDisaAktar);
   $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen", "Cihaza alındı"));
   $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda", "Tamamlandı"));
   $("#bulkTekrarBtn").addEventListener("click", bulkTekrar);
@@ -810,8 +812,32 @@ function mergeRows(base, extra) {
   const ids = new Set(base.map((r) => r.kalem_id));
   return base.concat(extra.filter((r) => !ids.has(r.kalem_id)));
 }
-function eskiGizli(r) {
+// 30 günden eski Tamamlandı mı (son yüklemedeki sınıra göre)?
+function eskiMi(r) {
   return eskiSinirMs !== null && r.durum === "tamamlandi" && new Date(r.created_at).getTime() < eskiSinirMs;
+}
+// Gizleme YALNIZ İş Kuyruğu ekranı içindir (toggle kapalıyken). İstatistikler
+// (sunucuda, istatistik()), Excel'e Aktar (kuyruguDisaAktar — sunucudan tam
+// liste), Hizmetler ve otomatik yedekler bu filtreyi hiç kullanmaz.
+function eskiGizli(r) {
+  return !eskileriGoster && eskiMi(r);
+}
+
+// Excel'e Aktar — 30 gün gizlemesinden ETKİLENMEZ: kayıtlar tıklandığı anda
+// sunucudan eskiler dahil tam olarak çekilir. "Tümü" hepsini; "Filtreye
+// uyanlar" sütun filtreleri + arama + sıralamayı (vaka görünümünde o vakayı)
+// bu tam liste üzerinde uygular.
+async function kuyruguDisaAktar(which) {
+  toast("Excel hazırlanıyor…");
+  let tum;
+  try {
+    tum = await Api.listQueue();
+  } catch (e) {
+    toast("Kayıtlar alınamadı — Excel oluşturulmadı", true);
+    return;
+  }
+  const list = which === "tum" ? tum : filtreleVeSirala(tum, { eskiDahil: true });
+  exportToExcel(list, KUYRUK_EXPORT_COLS, `istem_kuyruk_${which === "tum" ? "tumu" : "filtreli"}`);
 }
 async function eskiToggle() {
   eskileriGoster = !eskileriGoster;
@@ -910,8 +936,8 @@ function renderQHead() {
   }
 }
 
-function passesFilter(r) {
-  if (eskiGizli(r)) return false;
+function passesFilter(r, eskiDahil = false) {
+  if (!eskiDahil && eskiGizli(r)) return false;
   if (colFilters.durum.size && !colFilters.durum.has(r.durum)) return false;
   if (colFilters.tip.size && !colFilters.tip.has(r.grup)) return false;
   if (colFilters.oncelik.size && !colFilters.oncelik.has(r.oncelik)) return false;
@@ -928,19 +954,23 @@ function passesFilter(r) {
   return true;
 }
 
-// Ekranda o an görünen (filtre+arama+sıralama+vaka görünümü uygulanmış)
-// satırlar — hem renderTable hem "Görünenler" Excel export'u bunu kullanır.
-function getVisibleRows() {
+// Filtre+arama+sıralama (vaka görünümünde o vakanın tüm geçmişi, kronolojik).
+// eskiDahil: 30 gün gizlemesini uygulama (Excel'e Aktar).
+function filtreleVeSirala(list, { eskiDahil = false } = {}) {
   if (caseView !== null) {
-    return rows.filter((r) => r.patoloji_no === caseView)
+    return list.filter((r) => r.patoloji_no === caseView)
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }
-  let list = rows.filter(passesFilter);
+  let out = list.filter((r) => passesFilter(r, eskiDahil));
   if (sortCol) {
     const dir = sortDir === "asc" ? 1 : -1;
-    list = [...list].sort((a, b) => compareForSort(a, b, sortCol) * dir);
+    out = [...out].sort((a, b) => compareForSort(a, b, sortCol) * dir);
   }
-  return list;
+  return out;
+}
+// Ekranda o an görünen satırlar (renderTable, seçim kısayolları).
+function getVisibleRows() {
+  return filtreleVeSirala(rows);
 }
 
 function renderTable() {
@@ -988,16 +1018,19 @@ function renderTable() {
   syncBulkUI();
 }
 
-// Durum rozeti (gerçek durum, HER ZAMAN görünür) + yazılı aksiyon
-// butonları. İleri aksiyonun rengi hedef durumun rengi (mavi = Cihaza Al,
-// yeşil = Tamamla); Geri Al nötr — yalnız yetkisi olana (canRevert).
+// Durum hücresi: rozet (gerçek durum, HER ZAMAN) + bitişiğinde küçük ↺
+// (geri al; yalnız yetkisi olana — canRevert) + tek birincil buton (yalnız
+// bir sonraki adım; Tamamlandı'da yok). ↺ olmayan satırda aynı genişlikte
+// boşluk kalır ki birincil butonlar alt alta hizalı dursun.
 function durumAksiyon(r) {
-  const b = (aks, cls, label) => `<button class="ab ${cls}" data-aks="${aks}" data-id="${r.kalem_id}">${label}</button>`;
-  let acts = "";
-  if (r.durum === "bekleyen") acts = b("cihazda", "ab-cihaza", "Cihaza Al");
-  else if (r.durum === "cihazda") acts = b("tamamlandi", "ab-tamamla", "Tamamla");
-  if (REVERT_TO[r.durum] && canRevert(r)) acts += b("geri", "ab-geri", "Geri Al");
-  return `<div class="dacts"><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${acts}</div>`;
+  const geriHedef = REVERT_TO[r.durum];
+  const geri = geriHedef && canRevert(r)
+    ? `<button class="ab-geri" data-aks="geri" data-id="${r.kalem_id}" data-tip="Geri Al" aria-label="Geri Al: ${PILL[r.durum][1]} → ${PILL[geriHedef][1]}">${GERI_IKON}</button>`
+    : `<span class="ab-geri-yer" aria-hidden="true"></span>`;
+  const sonraki = r.durum === "bekleyen" ? ["cihazda", "ab-cihaza", "Cihaza Al"]
+    : r.durum === "cihazda" ? ["tamamlandi", "ab-tamamla", "Tamamla"] : null;
+  const birincil = sonraki ? `<button class="ab ${sonraki[1]}" data-aks="${sonraki[0]}" data-id="${r.kalem_id}">${sonraki[2]}</button>` : "";
+  return `<div class="dacts"><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${geri}${birincil}</div>`;
 }
 
 // İsteyen / Uzman Adına: kısaltma varsa o (tam ad ipucu), yoksa tam ad.
@@ -1036,11 +1069,18 @@ function updateCounts() {
   });
   $("#clearFiltersBtn")?.classList.toggle("hidden", !hasActiveFilters());
 
-  const eb = $("#eskiBtn");
-  if (eb) {
-    eb.classList.toggle("hidden", !eskileriGoster && gizliEskiSayisi === 0);
+  // Eski kayıtlar: toggle + her zaman görünen sayaç ("nereye gitti" kalmasın).
+  const kutu = $("#eskiKutu");
+  if (kutu && eskiSinirMs !== null) {
+    const n = eskileriGoster ? rows.filter(eskiMi).length : gizliEskiSayisi;
+    kutu.classList.remove("hidden");
+    const eb = $("#eskiBtn");
+    eb.classList.toggle("hidden", n === 0 && !eskileriGoster);
     eb.classList.toggle("on", eskileriGoster);
-    eb.textContent = eskileriGoster ? "Eski kayıtları gizle" : `Eski kayıtları göster (${gizliEskiSayisi})`;
+    eb.textContent = eskileriGoster ? "Eski kayıtları gizle" : "Eski kayıtları göster";
+    $("#eskiSayac").textContent = n === 0
+      ? (eskileriGoster ? "Eski kayıt yok" : "Gizli eski kayıt yok")
+      : eskileriGoster ? `${n} eski kayıt gösteriliyor` : `${n} eski kayıt gizli`;
   }
   // Arama yapılıyor ve eski kayıtlar gizliyse: aranan şey orada olabilir.
   const ip = $("#eskiIpucu");
@@ -1069,7 +1109,7 @@ const REVERT_TO = { cihazda: "bekleyen", tamamlandi: "cihazda" };
 async function revertDurum(r) {
   const fromDurum = r.durum, toDurum = REVERT_TO[fromDurum];
   if (!toDurum || !canRevert(r)) return;
-  if (!confirm(`"${PILL[fromDurum][1]}" durumu geri alınsın mı?`)) return;
+  if (!confirm(`↺ Geri Al: "${PILL[fromDurum][1]}" → "${PILL[toDurum][1]}"\n\nOnaylıyor musun?`)) return;
   try {
     await Api.advanceDurum(r.kalem_id, toDurum, session.id);
     toast(`"${PILL[fromDurum][1]}" durumu geri alındı`);
@@ -1161,8 +1201,8 @@ async function bulkDelete() {
 
 async function loadQueue() {
   const seq = ++queueSeq;
-  const sinir = eskileriGoster ? null : Date.now() - ESKI_GUN * 86400000;
-  const sinirISO = sinir === null ? null : new Date(sinir).toISOString();
+  const esik = Date.now() - ESKI_GUN * 86400000;
+  const sinirISO = eskileriGoster ? null : new Date(esik).toISOString();
   let liste, gizli;
   try {
     [liste, gizli] = await Promise.all([
@@ -1179,7 +1219,7 @@ async function loadQueue() {
     try { liste = mergeRows(liste, await Api.vakaKalemleri(vaka)); } catch (e) { /* yüklü olanlarla devam */ }
   }
   if (seq !== queueSeq) return; // bu arada daha yeni bir yükleme başladı
-  rows = liste; gizliEskiSayisi = gizli; eskiSinirMs = sinir;
+  rows = liste; gizliEskiSayisi = gizli; eskiSinirMs = esik;
   if (currentPage !== "kuyruk") return;
   renderTable();
   if (selId) {
@@ -1264,7 +1304,7 @@ async function showDetail(r) {
   const tekrarInfo = r.tekrar_kaynagi_id
     ? `<div class="tekrar-info">${TEKRAR_BADGE} ${kaynak
         ? `Kaynak kalem: <a href="#" data-goto="${kaynak.kalem_id}">${formatDT(kaynak.created_at)} · ${esc(PILL[kaynak.durum]?.[1] || kaynak.durum)}</a>`
-        : eskiSinirMs !== null
+        : !eskileriGoster
           ? "Kaynak kalem listede yok (30 günden eski tamamlanmış ya da silinmiş olabilir — patoloji no'ya tıklayınca vaka geçmişinde görünür)."
           : "Kaynak kalem artık kuyrukta yok."}</div>`
     : tekrarlari.length
@@ -3088,14 +3128,32 @@ function formatBytes(n) {
   return (n / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+// Tür dosya adından anlaşılır (daily-backup / ozet-yedek Edge Function'ları).
+const YEDEK_TURLERI = [
+  ["gunluk", "Günlük", "istem_otomatik_yedek_"],
+  ["haftalik", "Haftalık", "istem_haftalik_ozet_"],
+  ["aylik", "Aylık", "istem_aylik_ozet_"],
+];
+let yedekTurFiltre = "hepsi";
+function yedekTuru(ad) {
+  const t = YEDEK_TURLERI.find(([, , onek]) => String(ad).startsWith(onek));
+  return t ? t[0] : "diger";
+}
+
 function renderYedeklerPage() {
   $("#mainView").innerHTML = `
     <div class="page-head">
       <h1>Yedekler</h1>
-      <div class="sub">Her gece 02:00'de otomatik alınan veritabanı yedekleri.</div>
+      <div class="sub">Günlük ham veri yedeği her gece 02:00'de; haftalık özet Pazartesi, aylık özet ayın 1'inde 05:00'te (Türkiye saati).</div>
       <div class="spacer"></div>
     </div>
+    <div class="barrow"><div class="tabs" id="yedekTabs"></div></div>
     <div class="devlist" id="yedekList"></div>`;
+  $("#yedekTabs").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-yt]"); if (!b) return;
+    yedekTurFiltre = b.dataset.yt;
+    renderYedekList();
+  });
   loadYedekler();
 }
 
@@ -3112,12 +3170,24 @@ async function loadYedekler() {
 
 function renderYedekList() {
   const wrap = $("#yedekList"); if (!wrap) return;
-  if (!YEDEKLER_LIST.length) {
-    wrap.innerHTML = `<div class="empty"><div class="t">Henüz yedek yok</div><div class="d">İlk otomatik yedek gece 02:00'de alınacak.</div></div>`;
+  const tabs = $("#yedekTabs");
+  if (tabs) {
+    tabs.innerHTML = [["hepsi", "Tümü"], ...YEDEK_TURLERI].map(([k, l]) => {
+      const n = k === "hepsi" ? YEDEKLER_LIST.length : YEDEKLER_LIST.filter((f) => yedekTuru(f.name) === k).length;
+      return `<button class="${yedekTurFiltre === k ? "on" : ""}" data-yt="${k}">${l} <span class="count">${n}</span></button>`;
+    }).join("");
+  }
+  const list = yedekTurFiltre === "hepsi" ? YEDEKLER_LIST : YEDEKLER_LIST.filter((f) => yedekTuru(f.name) === yedekTurFiltre);
+  if (!list.length) {
+    const ilk = { hepsi: "İlk otomatik yedek gece 02:00'de alınacak.", gunluk: "İlk günlük yedek gece 02:00'de alınacak.",
+      haftalik: "İlk haftalık özet Pazartesi 05:00'te oluşur.", aylik: "İlk aylık özet ayın 1'inde 05:00'te oluşur." }[yedekTurFiltre];
+    wrap.innerHTML = `<div class="empty"><div class="t">Bu türde henüz dosya yok</div><div class="d">${ilk}</div></div>`;
     return;
   }
-  wrap.innerHTML = YEDEKLER_LIST.map((f) => `
+  const TUR_AD = Object.fromEntries(YEDEK_TURLERI.map(([k, l]) => [k, l]));
+  wrap.innerHTML = list.map((f) => `
     <div class="devrow" style="cursor:default">
+      <span class="yedek-tur" data-tur="${yedekTuru(f.name)}">${TUR_AD[yedekTuru(f.name)] || "Diğer"}</span>
       <div><div class="nm">${esc(f.name)}</div><div class="tip">${formatBytes(f.metadata?.size)} · ${formatDT(f.created_at)}</div></div>
       <div class="grow"></div>
       <button class="act" data-indir="${esc(f.name)}">İndir</button>
@@ -3262,9 +3332,19 @@ function istatistikHTML(s) {
   const tipler = s.tipler || [];
   const toplamKalem = Number(o.kalem || 0);
   const maxTip = Math.max(1, ...tipler.map((t) => t.n));
-  const kullanicilar = s.kullanicilar || [];
-  const maxK = Math.max(1, ...kullanicilar.map((u) => u.istem));
   const donemler = s.donemler || [];
+  // Kişi dağılımı kartı (Kullanıcı bazında / Uzman adına — aynı tasarım).
+  // list undefined: sunucudaki istatistik() eski sürüm (ozet_yedek_sema.sql çalışmamış).
+  const kisiKarti = (baslik, list) => `<div class="ist-blok">
+      <div class="m-label">${baslik}</div>
+      ${list === undefined ? `<div class="ist-mesaj">Bu dağılım için ozet_yedek_sema.sql çalıştırılmalı.</div>`
+        : !list.length ? `<div class="ist-mesaj">Bu aralıkta istem yok.</div>`
+        : list.map((u) => `<div class="ist-bar">
+          <div class="l pchip" title="${esc(u.ad)}">${u.id && !u.ad.startsWith("(") ? avatarHTML({ id: u.id, ad: u.ad }, "av-sm") : ""}<span class="ad">${esc(u.ad)}</span>${u.kisaltma ? `<span class="kisa-chip">${esc(u.kisaltma)}</span>` : ""}</div>
+          <div class="b"><i style="width:${(u.istem / Math.max(1, ...list.map((x) => x.istem)) * 100).toFixed(1)}%"></i></div>
+          <div class="n">${n(u.istem)}</div>
+        </div>`).join("")}
+    </div>`;
   const tipAd = (t) => TIP[t.kod] || t.ad || t.kod;
   const sifir = `<span class="sifir">0</span>`;
 
@@ -3297,7 +3377,7 @@ function istatistikHTML(s) {
         </tr>`).join("")}</tbody>
       </table></div>
     </div>
-    <div class="ist-iki">
+    <div class="ist-dagilim">
       <div class="ist-blok">
         <div class="m-label">Tip dağılımı (kalem)</div>
         ${tipler.length ? tipler.map((t) => `<div class="ist-bar">
@@ -3306,16 +3386,10 @@ function istatistikHTML(s) {
           <div class="n">${n(t.n)} <span>%${toplamKalem ? Math.round(t.n / toplamKalem * 100) : 0}</span></div>
         </div>`).join("") : `<div class="ist-mesaj">Bu aralıkta kalem yok.</div>`}
       </div>
-      <div class="ist-blok">
-        <div class="m-label">Kullanıcı bazında istem</div>
-        ${kullanicilar.length ? kullanicilar.map((u) => `<div class="ist-bar">
-          <div class="l pchip" title="${esc(u.ad)}">${u.id && !u.ad.startsWith("(") ? avatarHTML({ id: u.id, ad: u.ad }, "av-sm") : ""}<span class="ad">${esc(u.ad)}</span>${u.kisaltma ? `<span class="kisa-chip">${esc(u.kisaltma)}</span>` : ""}</div>
-          <div class="b"><i style="width:${(u.istem / maxK * 100).toFixed(1)}%"></i></div>
-          <div class="n">${n(u.istem)}</div>
-        </div>`).join("") : `<div class="ist-mesaj">Bu aralıkta istem yok.</div>`}
-      </div>
+      ${kisiKarti("Kullanıcı bazında istem (isteyen)", s.kullanicilar || [])}
+      ${kisiKarti("Uzman adına dağılım (kimin adına istendi)", s.uzmanlar)}
     </div>
-    <div class="ist-not">İstem, kalem, tip ve kullanıcı sayıları istendiği döneme sayılır. Tamamlanma süresi: kalemin istenmesinden son "Tamamlandı"ya geçişine kadar; tamamlanma tarihi aralıktaki kalemler, tamamlandığı döneme sayılır. Silinmiş kalemler sayılmaz.</div>`;
+    <div class="ist-not">İstem, kalem, tip, kullanıcı ve uzman sayıları istendiği döneme sayılır; uzman adına dağılımda "Uzman Adına" boş bırakılan istemler "(uzman seçilmedi)" satırındadır. Tamamlanma süresi: kalemin istenmesinden son "Tamamlandı"ya geçişine kadar; tamamlanma tarihi aralıktaki kalemler, tamamlandığı döneme sayılır. Silinmiş kalemler sayılmaz.</div>`;
 }
 
 // ---------------- Boot ----------------

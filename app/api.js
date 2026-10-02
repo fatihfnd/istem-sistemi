@@ -633,11 +633,19 @@
     // ---------------- Yedekler (otomatik günlük yedek — Storage) ----------------
     // "yedekler" private bucket'ı ve daily-backup Edge Function'ı
     // yedekler_sema.sql ile kurulur (bkz. proje kökü).
+    // Storage list() varsayılan olarak en fazla 100 dosya döner — günlük
+    // yedekler + haftalık/aylık özetler bunu kısa sürede aşar; sayfa sayfa
+    // okunur. Klasör girdileri (id'siz) atlanır.
     async listYedekler() {
-      const { data, error } = await client.storage
-        .from("yedekler")
-        .list("", { sortBy: { column: "created_at", order: "desc" } });
-      return must(data, error);
+      const hepsi = [];
+      for (;;) {
+        const { data, error } = await client.storage
+          .from("yedekler")
+          .list("", { limit: 100, offset: hepsi.length, sortBy: { column: "created_at", order: "desc" } });
+        must(data, error);
+        hepsi.push(...data);
+        if (data.length < 100) return hepsi.filter((f) => f.id);
+      }
     },
 
     // Bucket private olduğu için doğrudan link çalışmaz — kısa ömürlü

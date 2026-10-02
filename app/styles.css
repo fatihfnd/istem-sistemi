@@ -246,7 +246,8 @@ thead .bulkcell input[type=checkbox]{margin:0}
 /* İş Kuyruğu Durum sütunu — gerçek durum rozeti HER ZAMAN + yazılı aksiyonlar.
    İleri aksiyonun rengi hedef durumun rengi; Geri Al nötr gri. */
 td.c-durum{width:1%}
-.dacts{display:flex;gap:5px;align-items:center;white-space:nowrap}
+.dacts{display:flex;gap:3px;align-items:center;white-space:nowrap}
+.dacts .ab{margin-left:4px}
 .dacts .pill{min-width:7.4em}
 .ab{height:var(--act-size);flex:none;padding:0 9px;display:inline-flex;align-items:center;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .ab:hover{border-color:var(--ink-3);background:var(--line-2);color:var(--ink)}
@@ -254,7 +255,12 @@ td.c-durum{width:1%}
 .ab-tamamla{border-color:color-mix(in srgb, var(--green-i) 55%, transparent);background:var(--green-b);color:var(--green-i)}
 .ab-cihaza:hover{border-color:var(--blue-i);background:var(--blue-b);color:var(--blue-i);filter:brightness(.96)}
 .ab-tamamla:hover{border-color:var(--green-i);background:var(--green-b);color:var(--green-i);filter:brightness(.96)}
-.ab-geri{color:var(--ink-3)}
+/* Geri al — rozetin bitişiğinde küçük, soluk, yalnız ikon; ipucu üzerine gelince/odakta */
+.ab-geri, .ab-geri-yer{width:22px;height:22px;flex:none}
+.ab-geri{position:relative;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid transparent;background:transparent;color:var(--ink-3);opacity:.7;cursor:pointer}
+.ab-geri svg{width:13px;height:13px}
+.ab-geri:hover, .ab-geri:focus-visible{opacity:1;border-color:var(--line);background:var(--line-2);color:var(--ink-2);outline:0}
+.ab-geri[data-tip]:hover::after, .ab-geri[data-tip]:focus-visible::after{content:attr(data-tip);position:absolute;left:50%;top:calc(100% + 4px);transform:translateX(-50%);background:var(--bar-bg);color:var(--bar-ink);font-family:var(--sans);font-size:11px;font-weight:600;padding:3px 7px;border-radius:5px;white-space:nowrap;z-index:3;pointer-events:none}
 /* Kuyruk aksiyon butonları — hedef durumun rozet rengiyle eşleşir */
 .act-cihaza{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b)}
 .act-cihaza:hover{border-color:var(--blue-i);color:var(--blue-i);background:var(--blue-b);filter:brightness(0.96)}
@@ -635,8 +641,8 @@ tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-a
 .ist-tablo td.sayi, .ist-tablo th.sayi{text-align:right;font-variant-numeric:tabular-nums}
 .ist-tablo .sifir{color:var(--ink-3);opacity:.6}
 .ist-tablo td:first-child{white-space:nowrap}
-.ist-iki{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.ist-iki .ist-blok{margin-bottom:0}
+.ist-dagilim{display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:14px}
+.ist-dagilim .ist-blok{margin-bottom:0}
 .ist-bar{display:grid;grid-template-columns:minmax(0, 190px) 1fr 76px;align-items:center;gap:10px;padding:4px 0}
 .ist-bar .l{min-width:0;overflow:hidden}
 .ist-bar .l .ad{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
@@ -649,10 +655,22 @@ tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-a
 .ist-not{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin-top:14px}
 @media (max-width:900px){
   .ist-wrap{padding:0 16px 20px}
-  .ist-iki{grid-template-columns:1fr;gap:14px}
+  .ist-dagilim{grid-template-columns:1fr;gap:14px}
   .ist-bar{grid-template-columns:minmax(0, 130px) 1fr 64px}
   /* Durum sütunu dar ekranda daha az yer kaplasın (rozet yine her zaman görünür) */
   .dacts{gap:4px}
   .dacts .pill{min-width:0;padding:2px 7px}
   .ab{padding:0 7px}
+  .ab-geri, .ab-geri-yer{width:24px;height:24px}
+  .eski-sayac{font-size:11.5px}
 }
+
+/* ---------------- Eski kayıtlar: toggle + sayaç ---------------- */
+.eski-kutu{display:flex;align-items:center;gap:8px}
+.eski-sayac{font-size:12px;color:var(--ink-3);white-space:nowrap}
+
+/* ---------------- Yedekler: tür etiketi ---------------- */
+.yedek-tur{flex:none;min-width:66px;text-align:center;font-size:11px;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:6px;background:var(--line-2);color:var(--ink-2)}
+.yedek-tur[data-tur=gunluk]{background:var(--blue-b);color:var(--blue-i)}
+.yedek-tur[data-tur=haftalik]{background:var(--violet-b);color:var(--violet-i)}
+.yedek-tur[data-tur=aylik]{background:var(--green-b);color:var(--green-i)}
