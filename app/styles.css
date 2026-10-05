@@ -674,3 +674,84 @@ tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-a
 .yedek-tur[data-tur=gunluk]{background:var(--blue-b);color:var(--blue-i)}
 .yedek-tur[data-tur=haftalik]{background:var(--violet-b);color:var(--violet-i)}
 .yedek-tur[data-tur=aylik]{background:var(--green-b);color:var(--green-i)}
+
+/* ---------------- Orta genişlik (dizüstü / küçük monitör) ----------------
+   Sağ panel varsayılan kapalı; açılınca sağdan kayan panel (arkası
+   karartılmaz — tablo kullanılmaya devam edilir). ≥ 1600 px ve telefon
+   düzeni değişmez. */
+@media (min-width:901px) and (max-width:1599px){
+  .rail{
+    position:fixed; top:0; right:0; bottom:0; width:min(400px, 92vw); z-index:60;
+    box-shadow:-14px 0 34px rgba(0,0,0,.16);
+    transform:translateX(100%); visibility:hidden; pointer-events:none;
+    transition:transform .22s ease, visibility 0s linear .22s;
+  }
+  .rail:has(.rail-head){
+    transform:translateX(0); visibility:visible; pointer-events:auto;
+    transition:transform .22s ease, visibility 0s linear 0s;
+  }
+  .rail .rail-body{min-height:0}
+}
+
+/* ---------------- Sol menü: dar (yalnız ikon) mod ---------------- */
+.side-daralt{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;color:var(--ink-3);font-family:var(--sans);font-size:12.5px;font-weight:560;padding:7px 10px;border-radius:8px;cursor:pointer}
+.side-daralt:hover{background:color-mix(in srgb, var(--accent) 7%, transparent);color:var(--ink-2)}
+.side-daralt svg{flex:none;transition:transform .2s ease}
+@media (min-width:901px){
+  html[data-nav-dar] .side{width:64px;padding:16px 8px}
+  html[data-nav-dar] .side .lbl,
+  html[data-nav-dar] .wordmark .logo,
+  html[data-nav-dar] .wordmark .beta{display:none}
+  html[data-nav-dar] .wordmark{justify-content:center;padding:6px 0 16px}
+  html[data-nav-dar] .new{justify-content:center;padding:10px 0;gap:0}
+  html[data-nav-dar] .nav a{justify-content:center;padding:9px 0;gap:0}
+  html[data-nav-dar] .navsec{font-size:0;padding:0;margin:8px 10px;border-top:1px solid var(--line)}
+  html[data-nav-dar] .side-daralt{justify-content:center;padding:7px 0}
+  html[data-nav-dar] .side-daralt svg{transform:rotate(180deg)}
+  html[data-nav-dar] .sideuser{flex-direction:column;gap:8px;padding:9px 0}
+  html[data-nav-dar] .sideuser .me{flex:none;margin:0;justify-content:center}
+  html[data-nav-dar] .sideuser .me > div:not(.av){display:none}
+  html[data-nav-dar] .sideuser .gear{margin-left:0}
+}
+@media (max-width:900px){ .side-daralt{display:none} }
+
+/* ---------------- Yeni istem bildirimi ---------------- */
+.yeni-bildirim{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:90;display:flex;align-items:center;gap:10px;max-width:min(680px, calc(100vw - 24px));padding:9px 10px 9px 14px;border-radius:11px;background:var(--card);color:var(--ink);border:1.5px solid var(--accent);box-shadow:var(--shadow);font-size:13px}
+.yeni-bildirim[hidden]{display:none}
+.yeni-bildirim > svg{flex:none;color:var(--accent)}
+.yeni-bildirim #yeniBildirimMetin{min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.yeni-bildirim .yb-ozet{font-size:12px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.yeni-bildirim .ub-x{color:var(--ink-3)}
+.yeni-bildirim.parla{animation:yeni-parla 1s ease-in-out 3}
+@keyframes yeni-parla{0%,100%{background:var(--card)}50%{background:var(--accent-soft);box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), var(--shadow)}}
+.badge-yeni{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;background:var(--accent);color:var(--on-accent);font-family:var(--sans);font-size:10.5px;font-weight:700;letter-spacing:.03em;vertical-align:1px}
+tbody tr.row-yeni{background:color-mix(in srgb, var(--accent) 7%, transparent)}
+
+/* ---------------- Zil (ses aç/kapa) ---------------- */
+.main-head.mh-zil{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.zil{flex:none;width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--accent);cursor:pointer}
+.zil:hover{background:var(--line-2)}
+.zil.kapali{color:var(--ink-3)}
+
+/* ---------------- Çalışma Listesi (yazdır) ---------------- */
+.yazdir-alani{display:none}
+@page{size:A4 portrait;margin:13mm 12mm}
+@media print{
+  html, body{height:auto!important;overflow:visible!important;background:#fff!important}
+  body.yazdiriliyor > *:not(.yazdir-alani){display:none!important}
+  body.yazdiriliyor .yazdir-alani{display:block!important}
+  .yazdir-alani{color:#000;font-family:var(--sans);font-size:11pt;line-height:1.3}
+  .yl-bas{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1.5pt solid #000;padding-bottom:4pt;font-size:10pt}
+  .yl-baslik{font-size:16pt;font-weight:700}
+  .yl-alt{font-size:9.5pt;margin:5pt 0 12pt}
+  .yl-tablo{width:100%;border-collapse:collapse}
+  .yl-tablo thead{display:table-header-group}
+  .yl-tablo th{text-align:left;font-size:8.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:0 6pt 5pt;border-bottom:1pt solid #000;background:none!important;position:static!important;color:#000!important}
+  .yl-tablo td{padding:8pt 6pt;border-bottom:.5pt solid #9a9a9a;vertical-align:middle;color:#000;font-size:11pt}
+  .yl-tablo tr{break-inside:avoid;page-break-inside:avoid}
+  .yl-tablo tr.vaka-bas td{border-top:1.5pt solid #000}
+  .yl-tablo tr.acil td{font-weight:700}
+  .yl-tablo .yl-id{font-family:var(--mono);white-space:nowrap}
+  .yl-kutu{width:16pt}
+  .yl-tablo .kutu{display:inline-block;width:10pt;height:10pt;border:1pt solid #000;vertical-align:middle}
+}

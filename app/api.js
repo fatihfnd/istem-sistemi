@@ -121,7 +121,7 @@
         if (!e2) {
           const { data: profile, error: e3 } = await client
             .from("kullanicilar")
-            .select("id,ad_soyad,rol,is_admin,avatar_url")
+            .select("id,ad_soyad,kisaltma,rol,is_admin,avatar_url")
             .eq("id", kullaniciId)
             .maybeSingle();
           if (e3 || !profile) return null;
@@ -159,7 +159,7 @@
       if (!session) return null;
       const { data: profile, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,rol,is_admin,avatar_url")
+        .select("id,ad_soyad,kisaltma,rol,is_admin,avatar_url")
         .eq("auth_user_id", session.user.id)
         .maybeSingle();
       if (error || !profile) return null;

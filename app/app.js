@@ -287,6 +287,10 @@ let eskileriGoster = false;
 let eskiSinirMs = null;       // son yüklemedeki 30 gün sınırı (ms) — toggle açıkken de tutulur (sayaç için)
 let gizliEskiSayisi = 0;      // sunucuda kalan (yüklenmeyen) eski Tamamlandı sayısı
 let queueSeq = 0;             // üst üste binen yüklemelerde yalnız en sonuncusu yazsın
+// Yeni istem bildirimi: şimdiye kadar görülen kalem id'leri (null = ilk
+// yükleme henüz olmadı) ve henüz bakılmamış yeni kalemler ("Yeni" etiketi).
+let bilinenKalemler = null;
+let yeniKalemler = new Set();
 
 // ---------------- Yetkiler (arayüz) ----------------
 // Asıl uygulama RLS'te (yetki_sema.sql) — buradakiler sadece kullanıcının
@@ -482,6 +486,7 @@ async function handleLogout() {
   sortCol = null; sortDir = "asc"; caseView = null;
   kaliteDrafts = new Map(); notDrafts = new Map(); detailStale = false;
   eskileriGoster = false; eskiSinirMs = null; gizliEskiSayisi = 0;
+  bilinenKalemler = null; yeniKalemler = new Set(); renderYeniBildirim();
   currentPage = "kuyruk";
   $("#appRoot").classList.add("hidden");
   showAuth();
@@ -595,9 +600,12 @@ function navigate(page) {
 // ================================================================
 function renderQueuePage() {
   $("#mainView").innerHTML = `
-    <div class="main-head">
-      <h1>İş Kuyruğu</h1>
-      <div class="sub"><b id="totalN">0</b> istek · IHC, histokimya, moleküler</div>
+    <div class="main-head mh-zil">
+      <div>
+        <h1>İş Kuyruğu</h1>
+        <div class="sub"><b id="totalN">0</b> istek · IHC, histokimya, moleküler</div>
+      </div>
+      <button type="button" class="zil" id="zilBtn"></button>
     </div>
     <div class="barrow" id="barrow">
       <div class="tabs" id="tabs">
@@ -629,6 +637,7 @@ function renderQueuePage() {
       <div class="grow"></div>
       <button class="act act-cihaza" id="bulkCihazaBtn">Cihaza Al</button>
       <button class="act act-tamamla" id="bulkTamamlaBtn">Tamamla</button>
+      <button class="btn-ghost btn-sm" id="bulkYazdirBtn" title="Seçili kalemlerin çalışma listesini yazdır">${YAZDIR_IKON} Yazdır</button>
       <button class="btn-ghost btn-sm" id="bulkTekrarBtn">↻ Tekrar İste</button>
       <button class="btn-ghost btn-sm" id="bulkGeriBtn">↺ Geri Al</button>
       <button class="btn-ghost btn-sm" id="bulkSilBtn">Sil</button>
@@ -666,7 +675,10 @@ function renderQueuePage() {
   bindExportMenu("#qExport", kuyruguDisaAktar);
   $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen", "Cihaza alındı"));
   $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda", "Tamamlandı"));
+  $("#bulkYazdirBtn").addEventListener("click", calismaListesiYazdir);
   $("#bulkTekrarBtn").addEventListener("click", bulkTekrar);
+  $("#zilBtn").addEventListener("click", () => sesAyarla(!sesAcik()));
+  renderZil();
   $("#bulkGeriBtn").addEventListener("click", bulkRevert);
   $("#bulkSilBtn").addEventListener("click", bulkDelete);
   $("#bulkClearBtn").addEventListener("click", clearBulkSelection);
@@ -997,6 +1009,7 @@ function renderTable() {
     tr.classList.add(`row-${r.durum}`);
     if (grouped && groupStart && i > 0) tr.classList.add("case-start");
     if (r.kalem_id === selId) tr.classList.add("sel");
+    if (yeniKalemler.has(r.kalem_id)) tr.classList.add("row-yeni");
     const caseSel = showCaseSel
       ? `<button class="case-sel" data-case-sel="${esc(r.patoloji_no)}" title="Bu vakanın tümünü seç/kaldır" aria-label="Bu vakanın tümünü seç/kaldır"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7.5 12.5l3 3 6-6.5"/></svg></button>`
       : "";
@@ -1005,7 +1018,7 @@ function renderTable() {
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span></td>
       <td class="c-blok">${esc(r.blok_no)}</td>
-      <td class="c-test">${esc(r.test_adi)}${tekrarTag}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
+      <td class="c-test">${esc(r.test_adi)}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma)}
@@ -1220,6 +1233,7 @@ async function loadQueue() {
   }
   if (seq !== queueSeq) return; // bu arada daha yeni bir yükleme başladı
   rows = liste; gizliEskiSayisi = gizli; eskiSinirMs = esik;
+  yeniIstemKontrol(liste);
   if (currentPage !== "kuyruk") return;
   renderTable();
   if (selId) {
@@ -1267,6 +1281,7 @@ function showEmpty() {
 
 async function showDetail(r) {
   selId = r.kalem_id;
+  if (yeniKalemler.delete(r.kalem_id)) renderYeniBildirim();
   renderTable();
   const rail = $("#rail");
   rail.innerHTML = `<div class="rail-head"><h2>İstek Detayı</h2><button class="rx" id="closeDetail">×</button></div>
@@ -2939,7 +2954,8 @@ function renderPrefs() {
         <button type="button" class="tema-opt ${t.id === p.tema ? "on" : ""}" data-tema-sec="${t.id}" aria-pressed="${t.id === p.tema}">
           <span class="sw" style="background:${t.renk[mod]}"></span>${esc(t.ad)}</button>`).join("")}</div></div>
     <div class="m-sec"><p class="m-label">Mod</p><div class="segs">${segs("mod-sec", MOD_LABEL, p.mod)}</div></div>
-    <div class="m-sec"><p class="m-label">Tablo yoğunluğu</p><div class="segs">${segs("yog-sec", YOG_LABEL, p.yogunluk)}</div></div>`;
+    <div class="m-sec"><p class="m-label">Tablo yoğunluğu</p><div class="segs">${segs("yog-sec", YOG_LABEL, p.yogunluk)}</div></div>
+    ${session ? `<div class="m-sec"><p class="m-label">Yeni istem sesi</p><div class="segs">${segs("ses-sec", [["acik", "Açık"], ["kapali", "Kapalı"]], sesAcik() ? "acik" : "kapali")}</div></div>` : ""}`;
 }
 
 // ---------------- Kendi profilim: PIN + fotoğraf (herkes, sadece kendi hesabı) ----------------
@@ -3043,6 +3059,7 @@ function wireStaticUI() {
     if (!window.Tema) return;
     const b = e.target.closest("button");
     if (!b) return;
+    if (b.dataset.sesSec) { sesAyarla(b.dataset.sesSec === "acik"); return; }
     if (b.dataset.temaSec) Tema.set({ tema: b.dataset.temaSec });
     else if (b.dataset.modSec) Tema.set({ mod: b.dataset.modSec });
     else if (b.dataset.yogSec) Tema.set({ yogunluk: b.dataset.yogSec });
@@ -3060,7 +3077,20 @@ function wireStaticUI() {
     if (e.target.id === "pinForm") handlePinSubmit();
   });
   document.addEventListener("click", () => togglePrefs(false));
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") togglePrefs(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if ($("#prefsPanel")?.classList.contains("open")) { togglePrefs(false); return; }
+    // Esc yalnız İstem Detayı'nı kapatır — Yeni İstek / düzenleme formları
+    // (yazılanlar kaybolmasın) ve yazı alanındayken kapanmaz.
+    const a = document.activeElement;
+    if ($("#closeDetail") && !(a && a.matches("input, textarea, select"))) showEmpty();
+  });
+  $("#sideDaraltBtn").addEventListener("click", () => navDarAyarla(!document.documentElement.hasAttribute("data-nav-dar")));
+  $("#yeniBildirimGoster").addEventListener("click", yeniBildirimGoster);
+  $("#yeniBildirimKapat").addEventListener("click", () => { yeniKalemler = new Set(); renderYeniBildirim(); renderTable(); });
+  // Tarayıcılar sesi ancak sayfayla bir etkileşimden sonra çalar — ilk
+  // tık/tuşta ses motoru hazırlanır (bkz. sesKilidiAc).
+  ["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, sesKilidiAc, { capture: true, passive: true }));
   // tema.js her değişiklikte yayınlar (ayarlar paneli, A−/A+, "Sistem" modunda
   // işletim sistemi açık/koyu geçişi) — açık kontrolleri tazele.
   document.addEventListener("tema-degisti", () => {
@@ -3392,8 +3422,215 @@ function istatistikHTML(s) {
     <div class="ist-not">İstem, kalem, tip, kullanıcı ve uzman sayıları istendiği döneme sayılır; uzman adına dağılımda "Uzman Adına" boş bırakılan istemler "(uzman seçilmedi)" satırındadır. Tamamlanma süresi: kalemin istenmesinden son "Tamamlandı"ya geçişine kadar; tamamlanma tarihi aralıktaki kalemler, tamamlandığı döneme sayılır. Silinmiş kalemler sayılmaz.</div>`;
 }
 
+// ================================================================
+// ÇALIŞMA LİSTESİ (yazdır) — seçili kalemler, A4, siyah-beyaz.
+// Aynı sayfada, ekranda hiç görünmeyen #yazdirAlani'na yazılır; yazdırırken
+// (body.yazdiriliyor) uygulamanın geri kalanı gizlenir (styles.css @media
+// print). Ayrı pencere değil: açılır pencere engelleyiciye ve ana ekrana
+// eklenmiş uygulama/tablet kısıtlarına takılmaz, yazdırma ekranı hemen açılır.
+// ================================================================
+const YAZDIR_IKON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>`;
+
+// "11240/26" → [26, 11240]: önce yıl, sonra numara (eski yıllar önce).
+function patAnahtar(p) {
+  const m = /^\s*(\d+)\s*\/\s*(\d+)\s*$/.exec(p || "");
+  return m ? [Number(m[2]), Number(m[1])] : null;
+}
+function yazdirSirasi(a, b) {
+  const pa = patAnahtar(a.patoloji_no), pb = patAnahtar(b.patoloji_no);
+  const c = pa && pb ? (pa[0] - pb[0] || pa[1] - pb[1])
+    : pa ? -1 : pb ? 1 : String(a.patoloji_no).localeCompare(String(b.patoloji_no), "tr", { numeric: true });
+  return c
+    || String(a.blok_no || "").localeCompare(String(b.blok_no || ""), "tr", { numeric: true })
+    || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr");
+}
+const kisaAd = (ad, kisa) => kisa || (ad ? initials(ad) : "—");
+
+function calismaListesiYazdir() {
+  const list = rows.filter((r) => bulkSelected.has(r.kalem_id)).sort(yazdirSirasi);
+  if (!list.length) { toast("Yazdırılacak kalem seçilmedi", true); return; }
+  const vakaSayisi = new Set(list.map((r) => r.patoloji_no)).size;
+  const ONC = { acil: "(ACİL)", stat: "(STAT)" };
+  $("#yazdirAlani").innerHTML = `
+    <div class="yl-bas"><div class="yl-baslik">Çalışma Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
+    <div class="yl-alt">${list.length} kalem · ${vakaSayisi} vaka · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
+    <table class="yl-tablo">
+      <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th>Test / Boya</th><th>Öncelik</th><th>Uzman Adına</th><th>İsteyen</th></tr></thead>
+      <tbody>${list.map((r, i) => {
+        const cls = [ONC[r.oncelik] ? "acil" : "", i > 0 && list[i - 1].patoloji_no !== r.patoloji_no ? "vaka-bas" : ""].filter(Boolean).join(" ");
+        return `<tr${cls ? ` class="${cls}"` : ""}>
+          <td class="yl-kutu"><span class="kutu"></span></td>
+          <td class="yl-id">${esc(r.patoloji_no)}</td>
+          <td class="yl-id">${esc(r.blok_no || "—")}</td>
+          <td>${esc(r.test_adi)}</td>
+          <td>${ONC[r.oncelik] || ""}</td>
+          <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}</td>
+          <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  document.body.classList.add("yazdiriliyor");
+  window.print();
+  // Ekran düzenine dönüş bir sonraki tık/dokunuşta — bazı mobil tarayıcılarda
+  // print() hemen döner ve "afterprint"e güvenmek önizlemeyi boşaltabilir.
+  document.addEventListener("pointerdown", () => {
+    document.body.classList.remove("yazdiriliyor");
+    $("#yazdirAlani").innerHTML = "";
+  }, { once: true, capture: true });
+}
+
+// ================================================================
+// SOL MENÜ DARALTMA — tercih bu tarayıcıda (localStorage). Hiç seçim
+// yapılmamışsa orta genişlikte (< 1600 px) dar, geniş ekranda açık başlar.
+// Telefon düzeninde (≤ 900 px) etkisi yok (styles.css).
+// ================================================================
+const NAV_DAR_KEY = "istem_nav_dar";
+const NAV_GENIS_MQ = window.matchMedia ? window.matchMedia("(min-width: 1600px)") : null;
+function navDarTercih() {
+  try { const v = localStorage.getItem(NAV_DAR_KEY); return v === null ? null : v === "1"; } catch (e) { return null; }
+}
+function navDarUygula() {
+  const t = navDarTercih();
+  const dar = t !== null ? t : !(NAV_GENIS_MQ && NAV_GENIS_MQ.matches);
+  document.documentElement.toggleAttribute("data-nav-dar", dar);
+  const btn = $("#sideDaraltBtn");
+  if (btn) {
+    btn.title = dar ? "Menüyü genişlet" : "Menüyü daralt";
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-expanded", String(!dar));
+  }
+  // Dar modda yalnız ikon kalır — ad, üzerine gelince ipucu olarak.
+  $$("#nav a[data-page]").forEach((a) => { if (dar) a.title = a.textContent.trim(); else a.removeAttribute("title"); });
+  const nb = $("#newBtn"); if (nb) { if (dar) nb.title = "Yeni İstek"; else nb.removeAttribute("title"); }
+}
+function navDarAyarla(dar) {
+  try { localStorage.setItem(NAV_DAR_KEY, dar ? "1" : "0"); } catch (e) { /* hatırlanmaz, önemli değil */ }
+  navDarUygula();
+}
+if (NAV_GENIS_MQ) {
+  const f = () => { if (navDarTercih() === null) navDarUygula(); };
+  if (NAV_GENIS_MQ.addEventListener) NAV_GENIS_MQ.addEventListener("change", f); else if (NAV_GENIS_MQ.addListener) NAV_GENIS_MQ.addListener(f);
+}
+
+// ================================================================
+// YENİ İSTEM BİLDİRİMİ — ayrı abonelik yok: canlı güncelleme zaten her
+// değişiklikte kuyruğu yeniden yüklüyor (subscribeQueue → loadQueue); her
+// yüklemede bir öncekiyle karşılaştırılır. Daha önce HİÇ görülmemiş ve
+// Bekleyen kalem = yeni. Sayılmayanlar: ilk yükleme, kişinin kendi açtığı
+// istemler. Geri alma (aynı kalem) ve eski kayıt / vaka geçmişi
+// (Tamamlandı) yanlış alarm üretmez; toplu gelenler tek bildirimde toplanır.
+// ================================================================
+const SAYFA_BASLIGI = document.title;
+function yeniIstemKontrol(liste) {
+  const ilk = bilinenKalemler === null;
+  if (ilk) bilinenKalemler = new Set();
+  const gorulmemis = liste.filter((r) => !bilinenKalemler.has(r.kalem_id));
+  gorulmemis.forEach((r) => bilinenKalemler.add(r.kalem_id));
+  if (ilk || !session) return;
+  const gelen = gorulmemis.filter((r) => r.durum === "bekleyen" && r.istem_yapan_id !== session.id);
+  if (!gelen.length) return;
+  gelen.forEach((r) => yeniKalemler.add(r.kalem_id));
+  renderYeniBildirim(true);
+  if (sesAcik()) zilCal();
+}
+
+function renderYeniBildirim(yeniGeldi = false) {
+  const el = $("#yeniBildirim");
+  // Silinen / artık listede olmayan kalemler düşülür.
+  if (yeniKalemler.size) {
+    const canli = new Set(rows.map((r) => r.kalem_id));
+    yeniKalemler = new Set([...yeniKalemler].filter((id) => canli.has(id)));
+  }
+  const n = yeniKalemler.size;
+  document.title = n ? `(${n}) ${SAYFA_BASLIGI}` : SAYFA_BASLIGI;
+  if (!el) return;
+  if (!n) { el.hidden = true; el.classList.remove("parla"); return; }
+  // Vaka bazında özet: "11240/26 (ER, PR, HER2) · 11198/26 (CD3)" — ilk 3 vaka.
+  const vakalar = new Map();
+  rows.filter((r) => yeniKalemler.has(r.kalem_id)).forEach((r) => {
+    if (!vakalar.has(r.patoloji_no)) vakalar.set(r.patoloji_no, []);
+    vakalar.get(r.patoloji_no).push(r.test_adi);
+  });
+  const ozet = [...vakalar].slice(0, 3).map(([p, t]) => `${p} (${t.join(", ")})`).join(" · ") + (vakalar.size > 3 ? ` · +${vakalar.size - 3} vaka` : "");
+  $("#yeniBildirimMetin").innerHTML = `<b>${n} yeni istem geldi</b><span class="yb-ozet">${esc(ozet)}</span>`;
+  el.hidden = false;
+  if (yeniGeldi) { el.classList.remove("parla"); void el.offsetWidth; el.classList.add("parla"); }
+}
+
+// "Göster": İş Kuyruğu'na geçer, ilk yeni satıra kaydırır (filtreler değişmez).
+function yeniBildirimGoster() {
+  if (currentPage !== "kuyruk") navigate("kuyruk");
+  const tr = $("#rows tr.row-yeni");
+  if (tr) tr.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+// ---------------- Ses (Web Audio — dosya yok, çevrimdışı da çalışır) ----------------
+// Tercih kullanıcı başına (ortak bilgisayar); varsayılan açık.
+const sesKey = () => "istem_ses:" + (session ? session.id : "");
+function sesAcik() {
+  try { return localStorage.getItem(sesKey()) !== "0"; } catch (e) { return true; }
+}
+function sesAyarla(acik) {
+  try { localStorage.setItem(sesKey(), acik ? "1" : "0"); } catch (e) { /* hatırlanmaz */ }
+  renderZil();
+  if ($("#prefsPanel")?.classList.contains("open")) renderPrefs();
+  if (acik) { sesKilidiAc(); zilCal(); } // açarken örnek ton (tık zaten etkileşim)
+  toast(acik ? "Yeni istem sesi açık" : "Yeni istem sesi kapalı");
+}
+const ZIL_IKON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>`;
+const ZIL_KAPALI_IKON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.73 21a2 2 0 0 1-3.46 0M18.63 13A17.9 17.9 0 0 1 18 8M6.26 6.26A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14M18 8a6 6 0 0 0-9.33-5M2 2l20 20"/></svg>`;
+function renderZil() {
+  const b = $("#zilBtn"); if (!b) return;
+  const acik = sesAcik();
+  b.innerHTML = acik ? ZIL_IKON : ZIL_KAPALI_IKON;
+  b.classList.toggle("kapali", !acik);
+  b.title = acik ? "Yeni istem sesi açık — kapatmak için tıkla" : "Yeni istem sesi kapalı — açmak için tıkla";
+  b.setAttribute("aria-label", b.title);
+  b.setAttribute("aria-pressed", String(acik));
+}
+
+let sesCtx = null;
+function sesKilidiAc() {
+  if (!sesAcik()) return; // ses kapalıyken ses motoru hiç açılmaz
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    if (!sesCtx) {
+      sesCtx = new AC();
+      // Safari: kilit, etkileşim içinde bir ses başlatılınca açılır — sessiz örnek.
+      const kaynak = sesCtx.createBufferSource();
+      kaynak.buffer = sesCtx.createBuffer(1, 1, 22050);
+      kaynak.connect(sesCtx.destination);
+      kaynak.start(0);
+    }
+    if (sesCtx.state === "suspended") sesCtx.resume();
+  } catch (e) { /* ses yok — görsel bildirim yeter */ }
+}
+// Kısa, yumuşak iki notalı ton (~0,4 sn). Sayfayla henüz etkileşim yoksa
+// tarayıcı izin vermez — sessizce geçilir (görsel bildirim yine çıkar).
+function zilCal() {
+  if (!sesCtx) return;
+  try {
+    if (sesCtx.state === "suspended") sesCtx.resume();
+    const t0 = sesCtx.currentTime + 0.02;
+    [[659.25, 0], [880, 0.15]].forEach(([frekans, dt]) => {
+      const o = sesCtx.createOscillator(), g = sesCtx.createGain();
+      o.type = "sine";
+      o.frequency.value = frekans;
+      g.gain.setValueAtTime(0.0001, t0 + dt);
+      g.gain.exponentialRampToValueAtTime(0.13, t0 + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.3);
+      o.connect(g);
+      g.connect(sesCtx.destination);
+      o.start(t0 + dt);
+      o.stop(t0 + dt + 0.32);
+    });
+  } catch (e) { /* ses çalınamadı */ }
+}
+
 // ---------------- Boot ----------------
 (async function boot() {
+  navDarUygula();
   $("#authSubmit").addEventListener("click", handleAuthSubmit);
   $("#authPin").addEventListener("keydown", (e) => { if (e.key === "Enter") handleAuthSubmit(); });
   $("#logoutBtn").addEventListener("click", handleLogout);
