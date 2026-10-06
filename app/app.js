@@ -654,6 +654,7 @@ function renderQueuePage() {
       </div>
       <button type="button" class="zil" id="zilBtn"></button>
     </div>
+    <div class="ekip-uyari hidden" id="ekipUyari" role="status">Ekibiniz atanmamış — yöneticiye bildirin</div>
     <div class="kapsamlar" id="kapsamlar" role="tablist" aria-label="Kapsam"></div>
     <div class="barrow" id="barrow">
       <div class="tabs" id="tabs"></div>
@@ -698,6 +699,12 @@ function renderQueuePage() {
 
   if (caseView !== null) { $("#barrow").classList.add("dimmed"); $("#kapsamlar").classList.add("dimmed"); }
 
+  $("#kapsamlar").addEventListener("change", (e) => {
+    if (!e.target.matches("[data-ilsk-toggle]")) return;
+    try { localStorage.setItem(ILSK_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
+    clearBulkSelection();
+    renderTable();
+  });
   $("#kapsamlar").addEventListener("click", (e) => {
     const b = e.target.closest("[data-kapsam]"); if (!b) return;
     kapsam = b.dataset.kapsam;
@@ -804,6 +811,8 @@ function renderQueuePage() {
     if (!tr) return;
     const r = rows.find((x) => x.kalem_id === tr.dataset.kalem);
     if (!r) return;
+    // İlişkili satır: yalnız bilgi — detay açılır, çoklu seçime girmez.
+    if (tr.classList.contains("iliskili")) { showDetail(r); return; }
     // Dokunmatik seçim modu: dokunmak seçimi değiştirir, detay açmaz.
     if (secimModu && bulkSelected.size) { toggleBulkSelect(r.kalem_id); return; }
     // Shift/Ctrl+tık: sadece çoklu seçimi yönetir, detay panelini AÇMAZ
@@ -827,7 +836,7 @@ function renderQueuePage() {
     uzunBasildi = false;
     clearTimeout(uzunBasTimer);
     const tr = e.target.closest("tr[data-kalem], tr[data-blok]");
-    if (!tr || e.touches.length > 1) return;
+    if (!tr || tr.classList.contains("iliskili") || e.touches.length > 1) return;
     dokunmaBas = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     uzunBasTimer = setTimeout(() => {
       uzunBasildi = true;
@@ -966,8 +975,11 @@ async function kuyruguDisaAktar(which) {
     toast("Kayıtlar alınamadı — Excel oluşturulmadı", true);
     return;
   }
-  const list = which === "tum" ? tum : filtreleVeSirala(tum, { eskiDahil: true });
-  exportToExcel(list, KUYRUK_EXPORT_COLS, `istem_kuyruk_${which === "tum" ? "tumu" : "filtreli"}`);
+  let list = which === "tum" ? tum : filtreleVeSirala(tum, { eskiDahil: true });
+  // Grup / Ekibim görünümünde ilişkili kalemler de, "ilişkili" işaretiyle.
+  if (which !== "tum") list = iliskiliEkle(list, tum).map(({ r, ilsk }) => (ilsk ? { ...r, __iliskili: true } : r));
+  const cols = list.some((r) => r.__iliskili) ? [{ label: "İlişkili", value: (r) => (r.__iliskili ? "ilişkili" : "") }, ...KUYRUK_EXPORT_COLS] : KUYRUK_EXPORT_COLS;
+  exportToExcel(list, cols, `istem_kuyruk_${which === "tum" ? "tumu" : "filtreli"}`);
 }
 async function eskiToggle() {
   eskileriGoster = !eskileriGoster;
@@ -1132,15 +1144,26 @@ function renderTable() {
   // ayraç çizilmez, "vakayı seç" kısayolu da vakanın ilk görünen satırında kalır.
   const grouped = caseView !== null || sortCol === null || sortCol === "pat";
   const seenPat = new Set();
+  let oncekiAna = null;
 
-  list.forEach((r, i) => {
+  iliskiliEkle(list).forEach(({ r, ilsk }) => {
     const tr = document.createElement("tr");
     tr.dataset.kalem = r.kalem_id;
-    const groupStart = i === 0 || list[i - 1].patoloji_no !== r.patoloji_no;
+    if (ilsk) {
+      // İlişkili: yalnız bilgi — soluk, girintili, aksiyonsuz, seçilemez.
+      tr.classList.add("iliskili");
+      if (r.kalem_id === selId) tr.classList.add("sel");
+      tr.innerHTML = iliskiliSatirHTML(r);
+      tb.appendChild(tr);
+      return;
+    }
+    const groupStart = !oncekiAna || oncekiAna.patoloji_no !== r.patoloji_no;
+    const ilkSatir = !oncekiAna;
+    oncekiAna = r;
     const showCaseSel = grouped ? groupStart : !seenPat.has(r.patoloji_no);
     seenPat.add(r.patoloji_no);
     tr.classList.add(`row-${r.durum}`);
-    if (grouped && groupStart && i > 0) tr.classList.add("case-start");
+    if (grouped && groupStart && !ilkSatir) tr.classList.add("case-start");
     if (r.kalem_id === selId) tr.classList.add("sel");
     if (yeniKalemler.has(r.kalem_id)) tr.classList.add("row-yeni");
     const caseSel = showCaseSel
@@ -1311,15 +1334,83 @@ function kapsamEtiketi() {
   if (kapsam.startsWith("g:")) return TIP[kapsam.slice(2)] || kapsam.slice(2);
   return "Tümü";
 }
+// Teknisyen: "Benim İsteklerim" yok, "Ekibim" ilk sırada; ekibi atanmamışsa
+// Tümü + "Ekibiniz atanmamış" uyarısı. Diğerleri: Benim İsteklerim · Ekibim · Tümü.
 function renderKapsamlar() {
   const el = $("#kapsamlar"); if (!el) return;
-  const cipler = [["benim", "Benim İsteklerim"]];
+  const teknisyen = Boolean(session && session.rol === "teknisyen");
+  const cipler = [];
+  if (!teknisyen) cipler.push(["benim", "Benim İsteklerim"]);
   if (ekibimVar()) cipler.push(["ekibim", `Ekibim · ${EKIP_AD[benimEkip()]}`]);
   cipler.push(["tumu", "Tümü"]);
+  const ayrac = cipler.length;
   GROUPS.forEach(([k, l]) => cipler.push(["g:" + k, l]));
-  if (!cipler.some(([k]) => k === kapsam)) kapsam = "tumu"; // grup pasifleşmiş / ekip değişmiş
-  el.innerHTML = cipler.map(([k, l], i) => `${i === (ekibimVar() ? 3 : 2) ? `<span class="kcip-ayrac" aria-hidden="true"></span>` : ""}<button class="kcip${kapsam === k ? " on" : ""}" data-kapsam="${k}" role="tab" aria-selected="${kapsam === k}">${esc(l)}</button>`).join("");
+  // grup pasifleşmiş / ekip değişmiş / teknisyene "benim" kalmış
+  if (!cipler.some(([k]) => k === kapsam)) kapsam = teknisyen && ekibimVar() ? "ekibim" : "tumu";
+  $("#ekipUyari")?.classList.toggle("hidden", !(teknisyen && !ekibimVar()));
+  el.innerHTML = cipler.map(([k, l], i) => `${i === ayrac ? `<span class="kcip-ayrac" aria-hidden="true"></span>` : ""}<button class="kcip${kapsam === k ? " on" : ""}" data-kapsam="${k}" role="tab" aria-selected="${kapsam === k}">${esc(l)}</button>`).join("")
+    + (iliskiliKapsamMi()
+      ? `<label class="ilsk-anahtar" title="Aynı patoloji no + bloktaki (blok yoksa aynı istemdeki) diğer grupların tamamlanmamış kalemleri, ana kalemin altında soluk gösterilir"><input type="checkbox" data-ilsk-toggle ${iliskiliTercih() ? "checked" : ""}> İlişkilileri göster</label>`
+      : "");
 }
+
+// ---------------- İlişkili kalemler (grup çipi / Ekibim) ----------------
+// Ana kalemlerin (kapsam içindekilerin) aynı patoloji no + bloğundaki — blok
+// boşsa aynı istemindeki — KAPSAM DIŞI, tamamlanmamış kalemler: yalnız bilgi.
+// Sayaçlara girmez, seçilemez, aksiyon butonu yoktur.
+const ILSK_KEY = "istem_iliskili";
+function iliskiliTercih() {
+  try { return localStorage.getItem(ILSK_KEY) !== "0"; } catch (e) { return true; }
+}
+const iliskiliKapsamMi = () => caseView === null && (kapsam === "ekibim" || kapsam.startsWith("g:"));
+const iliskiliAktif = () => iliskiliKapsamMi() && iliskiliTercih();
+const iliskiAnahtari = (r) => (r.blok_no ? `b\u0000${r.patoloji_no}\u0000${r.blok_no}` : `i\u0000${r.istem_id}`);
+
+// Dönen: [{ r, ilsk }] — her ilişkili kalem BİR kez, o bloğun (ardışık) ana
+// kalemlerinin hemen altında; ana kalemlerle karışmaz.
+function iliskiliEkle(ana, havuzKaynak = rows) {
+  if (!iliskiliAktif()) return ana.map((r) => ({ r, ilsk: false }));
+  const anaIdler = new Set(ana.map((r) => r.kalem_id));
+  const havuz = new Map();
+  const ekle = (k, x) => { if (!havuz.has(k)) havuz.set(k, []); havuz.get(k).push(x); };
+  havuzKaynak.forEach((x) => {
+    if (x.durum === "tamamlandi" || anaIdler.has(x.kalem_id) || kapsamaUyar(x)) return;
+    if (x.blok_no) ekle(`b\u0000${x.patoloji_no}\u0000${x.blok_no}`, x);
+    ekle(`i\u0000${x.istem_id}`, x);
+  });
+  const out = [], gosterildi = new Set();
+  ana.forEach((r, i) => {
+    out.push({ r, ilsk: false });
+    const k = iliskiAnahtari(r);
+    if (i + 1 < ana.length && iliskiAnahtari(ana[i + 1]) === k) return; // bloğun ana kalemleri sürüyor
+    (havuz.get(k) || []).forEach((x) => {
+      if (gosterildi.has(x.kalem_id)) return;
+      gosterildi.add(x.kalem_id);
+      out.push({ r: x, ilsk: true });
+    });
+  });
+  return out;
+}
+function iliskiliSatirHTML(r) {
+  return `<td class="bulkcell"></td>
+      <td class="c-durum"><div class="dacts"><span class="ilsk-etiket">ilişkili</span><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div></td>
+      <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span></td>
+      <td class="c-blok">${esc(r.blok_no)}</td>
+      <td class="c-test">${esc(r.test_adi)}${kesitRozeti(r)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
+      <td>${tipTag(r.grup)}</td>
+      ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
+      ${kisiTd(r.uzman_adi, r.uzman_kisaltma)}
+      <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
+      <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></td>
+      <td class="c-not">${notHucre(r)}</td>`;
+}
+// Kesit ekranı: bloktaki, satırın kalemleri dışındaki tamamlanmamış kalemler.
+function blokIliskilileri(b, items) {
+  if (!iliskiliAktif()) return [];
+  const satirda = new Set([...items, ...b.kesilecek].map((r) => r.kalem_id));
+  return rows.filter((x) => x.patoloji_no === b.pat && (x.blok_no || "") === b.blok && x.durum !== "tamamlandi" && !satirda.has(x.kalem_id));
+}
+const iliskiliOzet = (list) => list.map((x) => `${grupKisa(x.grup)} ${x.test_adi} (${PILL[x.durum][1]})`).join(" · ");
 function renderDurumSekmeleri() {
   const el = $("#tabs"); if (!el) return;
   if (kesitEkraniMi()) {
@@ -1487,6 +1578,7 @@ function renderKesitSatirlari(tb) {
     const items = blokKalemleri(b);
     const acil = blokAcilMi(b), stat = items.some((r) => r.oncelik === "stat");
     if (acil) tr.classList.add("row-acil");
+    const ilsk = blokIliskilileri(b, items);
     const son = sonKesim(b);
     const kesimBilgi = son.length
       ? `<span class="kesim-bilgi">Kesildi ${esc(formatDT(son[0].kesildi_at))}${son[0].kesen_adi ? ` · ${esc(son[0].kesen_kisaltma || initials(son[0].kesen_adi))}` : ""}</span>`
@@ -1498,7 +1590,7 @@ function renderKesitSatirlari(tb) {
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-blok-check aria-label="Bloğu seç"></td>
       <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span></td>
       <td class="c-blok">${esc(b.blok || "—")}</td>
-      <td class="c-kesit">${esc(kesitOzeti(items))}</td>
+      <td class="c-kesit">${esc(kesitOzeti(items))}${ilsk.length ? `<div class="ilsk-satir"><span class="ilsk-etiket">ilişkili</span> ${esc(iliskiliOzet(ilsk))}</div>` : ""}</td>
       <td>${acil ? `<span class="prio ${stat ? "p-stat" : "p-acil"}">${stat ? "STAT" : "ACİL"}</span>` : ""}</td>
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(items))}</td>
       <td class="c-not">${blokNotu(items)}</td>
@@ -1598,7 +1690,7 @@ function kesitListesiYazdir() {
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(b.pat)}</td>
           <td class="yl-id">${esc(b.blok || "—")}</td>
-          <td>${esc(kesitOzeti(items))}</td>
+          <td>${esc(kesitOzeti(items))}${blokIliskilileri(b, items).length ? `<div class="yl-ilsk">ilişkili: ${esc(iliskiliOzet(blokIliskilileri(b, items)))}</div>` : ""}</td>
           <td>${onc}</td>
           <td>${esc(formatDT(enEski(items)))}</td>
         </tr>`;
@@ -3978,22 +4070,27 @@ const kisaAd = (ad, kisa) => kisa || (ad ? initials(ad) : "—");
 function calismaListesiYazdir() {
   if (kesitEkraniMi()) { kesitListesiYazdir(); return; }
   const secili = rows.filter((r) => bulkSelected.has(r.kalem_id));
-  const list = (secili.length ? secili : getVisibleRows()).slice().sort(yazdirSirasi);
+  // Grup / Ekibim görünümünde ilişkili kalemler de basılır, "ilişkili" işaretli
+  // (kesitçi de görsün); blokta ana kalemlerden sonra gelir.
+  const list = iliskiliEkle(secili.length ? secili : getVisibleRows()).map(({ r, ilsk }) => ({ ...r, __iliskili: ilsk }))
+    .sort((a, b) => yazdirSirasi({ ...a, test_adi: "" }, { ...b, test_adi: "" }) || (a.__iliskili - b.__iliskili)
+      || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr"));
   if (!list.length) { toast("Yazdırılacak kalem yok", true); return; }
   const vakaSayisi = new Set(list.map((r) => r.patoloji_no)).size;
+  const ilskSayisi = list.filter((r) => r.__iliskili).length;
   const ONC = { acil: "(ACİL)", stat: "(STAT)" };
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Çalışma Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
-    <div class="yl-alt">${list.length} kalem · ${vakaSayisi} vaka · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
+    <div class="yl-alt">${list.length - ilskSayisi} kalem${ilskSayisi ? ` + ${ilskSayisi} ilişkili` : ""} · ${vakaSayisi} vaka · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
     <table class="yl-tablo">
       <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th>Test / Boya</th><th>Öncelik</th><th>Uzman Adına</th><th>İsteyen</th></tr></thead>
       <tbody>${list.map((r, i) => {
-        const cls = [ONC[r.oncelik] ? "acil" : "", i > 0 && list[i - 1].patoloji_no !== r.patoloji_no ? "vaka-bas" : ""].filter(Boolean).join(" ");
+        const cls = [ONC[r.oncelik] && !r.__iliskili ? "acil" : "", r.__iliskili ? "ilsk" : "", i > 0 && list[i - 1].patoloji_no !== r.patoloji_no ? "vaka-bas" : ""].filter(Boolean).join(" ");
         return `<tr${cls ? ` class="${cls}"` : ""}>
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(r.patoloji_no)}</td>
           <td class="yl-id">${esc(r.blok_no || "—")}</td>
-          <td>${esc(r.test_adi)}</td>
+          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}</td>
           <td>${ONC[r.oncelik] || ""}</td>
           <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}</td>
           <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>

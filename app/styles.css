@@ -809,3 +809,21 @@ td.c-kesit-aks{width:1%}
 .pb-grup{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:560;cursor:pointer}
 .pb-grup input{width:15px;height:15px;margin:0;accent-color:var(--accent)}
 .pb-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
+
+/* ---------------- Teknisyen: ekip atanmamış uyarısı ---------------- */
+.ekip-uyari{margin:0 26px 10px;padding:7px 12px;border-radius:8px;background:var(--amber-b);color:var(--amber-i);font-size:12.5px;font-weight:640;border:1px solid color-mix(in srgb, var(--amber-i) 35%, transparent)}
+@media (max-width:900px){ .ekip-uyari{margin:0 16px 8px} }
+
+/* ---------------- İlişkili kalemler (grup / Ekibim görünümü) ---------------- */
+.ilsk-anahtar{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding-left:10px;font-size:12px;font-weight:560;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.ilsk-anahtar input{margin:0;width:15px;height:15px;accent-color:var(--accent)}
+tbody tr.iliskili > td{opacity:.58;border-top-color:transparent}
+tbody tr.iliskili:hover > td, tbody tr.iliskili.sel > td{opacity:.9}
+tbody tr.iliskili .c-durum{padding-left:calc(var(--cell-px) + 16px)}
+tbody tr.iliskili .c-pat, tbody tr.iliskili .c-blok{font-weight:600}
+.ilsk-etiket{display:inline-block;padding:0 5px;border-radius:4px;border:1px dashed var(--line-strong);color:var(--ink-3);background:transparent;font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.03em;white-space:nowrap;line-height:1.5}
+.ilsk-satir{margin-top:3px;font-size:12px;font-weight:500;color:var(--ink-3);line-height:1.4}
+@media print{
+  .yl-tablo tr.ilsk td{font-style:italic;color:#444}
+  .yl-ilsk{font-style:italic;font-size:9.5pt}
+}
