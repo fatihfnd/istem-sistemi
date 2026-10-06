@@ -893,6 +893,51 @@
       return data;
     },
 
+    // ---------------- Web Push (push_sema.sql) ----------------
+    async vapidAcikAnahtar() {
+      const { data, error } = await client.rpc("vapid_acik_anahtar");
+      if (error) throw error;
+      return data;
+    },
+    // Bu cihazı oturumdaki kullanıcıya bağlar (ortak bilgisayarda devralır).
+    async pushAboneOl(endpoint, keys) {
+      const { error } = await client.rpc("push_abone_ol", { p_endpoint: endpoint, p_keys: keys });
+      if (error) throw error;
+    },
+    // RLS: yalnız kendi satırı görünür — başkasına kayıtlıysa false.
+    async pushAbonelikVarMi(endpoint) {
+      const { data, error } = await client.from("push_abonelikleri").select("id").eq("endpoint", endpoint).maybeSingle();
+      if (error) throw error;
+      return Boolean(data);
+    },
+    async pushAbonelikSil(endpoint) {
+      const { error } = await client.from("push_abonelikleri").delete().eq("endpoint", endpoint);
+      if (error) throw error;
+    },
+    async getBildirimTercihleri(kullaniciId) {
+      const { data, error } = await client.from("bildirim_tercihleri").select("grup_kod").eq("kullanici_id", kullaniciId);
+      return must(data, error).map((r) => r.grup_kod);
+    },
+    async bildirimTercihleriEkle(kullaniciId, gruplar) {
+      const { error } = await client.from("bildirim_tercihleri")
+        .upsert(gruplar.map((g) => ({ kullanici_id: kullaniciId, grup_kod: g })), { onConflict: "kullanici_id,grup_kod", ignoreDuplicates: true });
+      if (error) throw error;
+    },
+    async setBildirimTercihi(kullaniciId, grup, acik) {
+      if (acik) return this.bildirimTercihleriEkle(kullaniciId, [grup]);
+      const { error } = await client.from("bildirim_tercihleri").delete().eq("kullanici_id", kullaniciId).eq("grup_kod", grup);
+      if (error) throw error;
+    },
+    // Kendi cihazlarına deneme bildirimi (push-gonder, kullanıcının oturumuyla).
+    // Dönen: { gonderilen, silinen, hatalar } ya da { ok:false, hata }.
+    async pushDeneme() {
+      const { data, error } = await client.functions.invoke("push-gonder", { body: { islem: "test" } });
+      if (error) {
+        try { return await error.context.json(); } catch (e) { throw error; }
+      }
+      return data;
+    },
+
     // ---------------- Kesit ekranı (ekip_sema.sql) ----------------
     // Yalnız verilen kalem id'leri (ekranda o blok satırında görünenler).
     // Dönen: { tamamlanan, damga, atlanan }.

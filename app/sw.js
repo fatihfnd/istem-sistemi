@@ -10,7 +10,7 @@
 // yol açabilir (bkz. boot() — eski app.js'te oturum doğrulaması olmayabilir).
 // styles.css bilerek cache-first kalıyor: en kötü ihtimalle bayat bir görsel
 // verir, davranışı bozmaz.
-const CACHE = "istem-shell-v27";
+const CACHE = "istem-shell-v28";
 const ASSETS = [
   "./",
   "./index.html",
@@ -81,4 +81,40 @@ self.addEventListener("fetch", (e) => {
           .catch(() => cached)
     )
   );
+});
+
+// ---------------- Web Push (push-gonder) ----------------
+// Uygulama açık ve öndeyse sistem bildirimi gösterilmez (ekran içi banner +
+// ses zaten var). Safari/iOS HARİÇ: Apple her push'ta bildirim gösterilmesini
+// şart koşar, aksi halde aboneliği iptal edebilir — orada her zaman gösterilir.
+const SAFARI = /AppleWebKit/.test(self.navigator.userAgent) && !/Chrome|Chromium|CriOS|Edg|Android/.test(self.navigator.userAgent);
+self.addEventListener("push", (e) => {
+  let v = {};
+  try { v = e.data ? e.data.json() : {}; } catch (_) { v = { body: e.data ? e.data.text() : "" }; }
+  e.waitUntil((async () => {
+    if (!SAFARI) {
+      const pencereler = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      if (pencereler.some((c) => c.visibilityState === "visible" && c.focused)) return;
+    }
+    await self.registration.showNotification(v.title || "İstem", {
+      body: v.body || "",
+      tag: v.tag || "istem",
+      renotify: true,
+      icon: "icons/selcuk-logo.png",
+      badge: "icons/selcuk-logo.png",
+      data: { url: v.url || "./" },
+    });
+  })());
+});
+
+// Bildirime dokununca: açık bir pencere varsa öne getir, yoksa uygulamayı aç.
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const hedef = new URL((e.notification.data && e.notification.data.url) || "./", self.registration.scope).href;
+  e.waitUntil((async () => {
+    const pencereler = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const acik = pencereler.find((c) => c.url.startsWith(self.registration.scope));
+    if (acik) { await acik.focus(); return; }
+    await self.clients.openWindow(hedef);
+  })());
 });

@@ -511,6 +511,10 @@ async function handleAuthSubmit() {
 async function handleLogout() {
   togglePrefs(false);
   if (window.Tema) Tema.cikis();
+  // Ortak bilgisayarda sonraki kişiye öncekinin bildirimleri gelmesin — bu
+  // cihazın push aboneliği silinir (en fazla 3 sn beklenir, çıkışı engellemez).
+  await Promise.race([bildirimleriKapat({ sessiz: true }).catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
+  pushDurum = { yuklendi: false, abone: false, tercihler: new Set(), mesgul: false };
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -1985,12 +1989,6 @@ function pickerSectionsHTML({ withQuickFill }) {
     <div class="m-sec"><div class="groups" id="groups">
       ${GROUPS.map(([k, l], i) => `<button class="${i === 0 ? "on" : ""}" data-g="${k}">${l}</button>`).join("")}
     </div></div>
-    ${withQuickFill ? `
-    <div class="m-sec" id="setsSec"><p class="m-label">Hazır Setler</p>
-      <div class="antisearch">${SEARCH_ICON}
-        <input id="setSearch" placeholder="Set ara…"></div>
-      <div class="sets" id="sets"></div></div>
-    <div class="m-sec" id="mySetsSec"><p class="m-label">Şablonlar</p><div class="sets" id="mySets"></div></div>` : ""}
     <div class="m-sec" id="antiSec"><p class="m-label">Tek Tek Seç <button type="button" class="bulkpick-toggle" id="bulkPickToggle">Toplu Seç</button></p>
       <div class="antisearch">${SEARCH_ICON}
         <input id="antiSearch" placeholder="Test ara… ER, HER2, CK7… (Enter ile hızlı ekle)"></div>
@@ -2003,8 +2001,15 @@ function pickerSectionsHTML({ withQuickFill }) {
         <div class="antis" id="pickedChips"></div>
       </div>
       <div class="antis" id="antis"></div>
-      <div class="otherbox" id="otherbox"><input id="otherin" placeholder="Katalogda olmayan istek…"><button class="add" id="addOtherBtn">+</button></div></div>`;
+      <div class="otherbox" id="otherbox"><input id="otherin" placeholder="Katalogda olmayan istek…"><button class="add" id="addOtherBtn">+</button></div></div>
+    ${withQuickFill ? `
+    <div class="m-sec" id="mySetsSec"><p class="m-label">Şablonlar</p><div class="sets" id="mySets"></div></div>
+    <div class="m-sec" id="setsSec"><p class="m-label">Hazır Setler</p>
+      <div class="antisearch">${SEARCH_ICON}
+        <input id="setSearch" placeholder="Set ara…"></div>
+      <div class="sets" id="sets"></div></div>` : ""}`;
 }
+// Sıra: Grup sekmeleri → Tek Tek Seç (en sık kullanılan) → Şablonlar → Hazır Setler.
 
 function applySetTestler(testler) {
   testler.forEach((t) => {
@@ -2078,17 +2083,24 @@ function renderMySets() {
 // "sira" sırasına göre ilk N. Arama doluysa: tüm katalogda ada göre arar
 // (eski davranış). Zaten seçilmiş testler burada TEKRAR gösterilmez —
 // "Seçilenler" sabit alanında (renderPicked) yaşarlar.
+// Test araması için sadeleştirme: büyük/küçük harf, Türkçe karakter (ı/İ/ç/ş…),
+// tire ve boşluk farkı yok sayılır — "ki67" → Ki-67, "kongo kir" → Kongo Kırmızısı.
+function aramaNorm(s) {
+  return String(s || "").replace(/[İIı]/g, "i").toLowerCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+}
+
 function renderAntis(q = "") {
   const wrap = $("#antis");
   if (!wrap) return;
   const isDiger = grp === "diger";
   $("#otherbox").classList.toggle("show", isDiger);
   wrap.innerHTML = "";
-  const query = q.trim().toLowerCase();
+  const query = aramaNorm(q);
 
   let catMatches;
   if (query) {
-    catMatches = (CAT[grp] || []).filter((t) => t.ad.toLowerCase().includes(query) && !selectedTests.has(t.id));
+    catMatches = (CAT[grp] || []).filter((t) => aramaNorm(t.ad).includes(query) && !selectedTests.has(t.id));
   } else {
     const recent = (RECENT_TESTS[grp] || []).filter((t) => !selectedTests.has(t.id));
     catMatches = recent.length
@@ -2101,7 +2113,7 @@ function renderAntis(q = "") {
     el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}`;
     el.onclick = () => {
       selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
-      renderAntis(q);
+      aramaTemizle();
     };
     wrap.appendChild(el);
   });
@@ -2111,12 +2123,12 @@ function renderAntis(q = "") {
   let customMatches = [];
   if (isDiger) {
     const unsel = customItems.filter((c) => !c.sel);
-    customMatches = query ? unsel.filter((c) => c.ad.toLowerCase().includes(query)) : unsel;
+    customMatches = query ? unsel.filter((c) => aramaNorm(c.ad).includes(query)) : unsel;
     customMatches.forEach((c) => {
       const el = document.createElement("span");
       el.className = "anti";
       el.textContent = c.ad;
-      el.onclick = () => { c.sel = true; renderAntis(q); };
+      el.onclick = () => { c.sel = true; aramaTemizle(); };
       wrap.appendChild(el);
     });
   }
@@ -2135,6 +2147,18 @@ function renderAntis(q = "") {
   }
 
   renderPicked();
+}
+
+// Bir sonuç seçilince: arama kutusu temizlenir, liste varsayılana (son
+// kullanılanlar) döner, odak kutuda kalır — "er → tıkla → pr → tıkla" hiç
+// silmeden. Kullanıcı yazmadan bir "son kullanılan"a dokunduysa klavye zorla
+// açılmaz (odak zaten kutuda değildi).
+function aramaTemizle() {
+  const input = $("#antiSearch");
+  const odakta = Boolean(input && document.activeElement === input);
+  if (input) input.value = "";
+  renderAntis("");
+  if (odakta) input.focus();
 }
 
 // Zaten seçilmiş tüm testler/serbest-metin öğeleri — TÜM gruplar (bir istem
@@ -2183,6 +2207,10 @@ function bindPicker(withQuickFill) {
     renderAntis();
   });
   $("#antiSearch").addEventListener("input", (e) => renderAntis(e.target.value));
+  // Sonuçlara / seçilenlere dokunmak odağı arama kutusundan ALMASIN — mobilde
+  // klavye kapanmasın, masaüstünde imleç kutuda kalsın (tıklama yine çalışır).
+  ["#antis", "#pickedChips"].forEach((s) => ["pointerdown", "mousedown"].forEach((ev) =>
+    $(s).addEventListener(ev, (e) => { if (e.target.closest(".anti, .anti-add")) e.preventDefault(); })));
   // Enter: o an görünen ilk sonucu (ya da eşleşme yoksa "+ ... olarak ekle"
   // seçeneğini) seçip kutuyu temizler — art arda isim yazıp Enter'a basarak
   // fareye dokunmadan hızlıca ekleme.
@@ -3453,7 +3481,8 @@ function renderPrefs() {
           <span class="sw" style="background:${t.renk[mod]}"></span>${esc(t.ad)}</button>`).join("")}</div></div>
     <div class="m-sec"><p class="m-label">Mod</p><div class="segs">${segs("mod-sec", MOD_LABEL, p.mod)}</div></div>
     <div class="m-sec"><p class="m-label">Tablo yoğunluğu</p><div class="segs">${segs("yog-sec", YOG_LABEL, p.yogunluk)}</div></div>
-    ${session ? `<div class="m-sec"><p class="m-label">Yeni istem sesi</p><div class="segs">${segs("ses-sec", [["acik", "Açık"], ["kapali", "Kapalı"]], sesAcik() ? "acik" : "kapali")}</div></div>` : ""}`;
+    ${session ? `<div class="m-sec"><p class="m-label">Yeni istem sesi</p><div class="segs">${segs("ses-sec", [["acik", "Açık"], ["kapali", "Kapalı"]], sesAcik() ? "acik" : "kapali")}</div></div>` : ""}
+    ${bildirimBolumuHTML()}`;
 }
 
 // ---------------- Kendi profilim: PIN + fotoğraf (herkes, sadece kendi hesabı) ----------------
@@ -3541,7 +3570,7 @@ function togglePrefs(open) {
   if (!el || !btn) return;
   const willOpen = open === undefined ? !el.classList.contains("open") : open;
   if (!willOpen) prefsPinOpen = false;
-  if (willOpen) renderPrefs();
+  if (willOpen) { renderPrefs(); if (session) pushDurumYenile(); }
   el.classList.toggle("open", willOpen);
   btn.setAttribute("aria-expanded", String(willOpen));
 }
@@ -3558,6 +3587,7 @@ function wireStaticUI() {
     const b = e.target.closest("button");
     if (!b) return;
     if (b.dataset.sesSec) { sesAyarla(b.dataset.sesSec === "acik"); return; }
+    if (b.dataset.push) { pushAksiyon(b.dataset.push); return; }
     if (b.dataset.temaSec) Tema.set({ tema: b.dataset.temaSec });
     else if (b.dataset.modSec) Tema.set({ mod: b.dataset.modSec });
     else if (b.dataset.yogSec) Tema.set({ yogunluk: b.dataset.yogSec });
@@ -3568,6 +3598,7 @@ function wireStaticUI() {
     } else if (b.hasAttribute("data-avatar-kaldir")) handleAvatarRemove();
   });
   $("#prefsPanel").addEventListener("change", (e) => {
+    if (e.target.dataset.pushGrup) { pushGrupDegis(e.target.dataset.pushGrup, e.target.checked); return; }
     if (e.target.id === "avatarFile") handleAvatarFile(e.target.files && e.target.files[0]);
   });
   $("#prefsPanel").addEventListener("submit", (e) => {
@@ -4130,6 +4161,141 @@ function zilCal() {
       o.stop(t0 + dt + 0.32);
     });
   } catch (e) { /* ses çalınamadı */ }
+}
+
+// ================================================================
+// WEB PUSH — uygulama kapalıyken de sistem bildirimi (push_sema.sql,
+// supabase/functions/push-gonder). İzin YALNIZ "Bildirimleri aç" butonunda
+// istenir (iOS şartı). Ekran içi banner + ses (yukarıda) aynen sürer.
+// ================================================================
+let pushDurum = { yuklendi: false, abone: false, tercihler: new Set(), mesgul: false };
+const pushDestek = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const iosMu = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const anaEkrandaMi = () => Boolean(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+function b64uToU8(s) {
+  const t = s.replace(/-/g, "+").replace(/_/g, "/");
+  const b = atob(t + "===".slice((t.length + 3) % 4));
+  return Uint8Array.from(b, (c) => c.charCodeAt(0));
+}
+const swHazir = () => Promise.race([
+  navigator.serviceWorker.ready,
+  new Promise((_, ko) => setTimeout(() => ko(new Error("Service worker hazır değil")), 10000)),
+]);
+async function pushAbonelik() {
+  if (!pushDestek()) return null;
+  const reg = await navigator.serviceWorker.getRegistration();
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+
+// Ayarlar açılınca: bu cihazın aboneliği BU kullanıcıya mı kayıtlı + tercihler.
+async function pushDurumYenile() {
+  if (!session) return;
+  try {
+    const [sub, tercihler] = await Promise.all([pushAbonelik().catch(() => null), Api.getBildirimTercihleri(session.id).catch(() => [])]);
+    const sunucuda = sub && Notification.permission === "granted" ? await Api.pushAbonelikVarMi(sub.endpoint).catch(() => false) : false;
+    pushDurum.abone = Boolean(sunucuda);
+    pushDurum.tercihler = new Set(tercihler);
+  } finally {
+    pushDurum.yuklendi = true;
+  }
+  if ($("#prefsPanel")?.classList.contains("open")) renderPrefs();
+}
+
+function bildirimBolumuHTML() {
+  if (!session) return "";
+  let govde;
+  if (!pushDestek()) {
+    govde = iosMu() && !anaEkrandaMi()
+      ? `<div class="pb-not">iPhone/iPad'de önce Safari'de <b>Paylaş → Ana Ekrana Ekle</b>, sonra uygulamayı ana ekrandaki simgesinden açıp buradan açın (iOS 16.4+).</div>`
+      : `<div class="pb-not">Bu tarayıcı sistem bildirimlerini desteklemiyor.</div>`;
+  } else if (Notification.permission === "denied") {
+    govde = `<div class="pb-not">Bildirim izni bu tarayıcıda engellenmiş — tarayıcının site ayarlarından izin verip sayfayı yenileyin.</div>`;
+  } else if (!pushDurum.yuklendi) {
+    govde = `<div class="pb-not">Yükleniyor…</div>`;
+  } else if (!pushDurum.abone) {
+    govde = `<button type="button" class="btn-primary btn-sm" data-push="ac" ${pushDurum.mesgul ? "disabled" : ""}>Bildirimleri aç</button>
+      <div class="pb-not">Uygulama kapalıyken de seçtiğiniz grupların yeni istekleri bu cihaza bildirim olarak gelir.</div>`;
+  } else {
+    govde = `<div class="pb-gruplar">${GROUPS.map(([k, l]) => `<label class="pb-grup"><input type="checkbox" data-push-grup="${k}" ${pushDurum.tercihler.has(k) ? "checked" : ""}> ${esc(GRUP_BILGI[k]?.kisa_ad || l)}</label>`).join("")}</div>
+      ${pushDurum.tercihler.size ? "" : `<div class="pb-not">Hiç grup seçili değil — bildirim gelmez.</div>`}
+      <div class="pb-btn"><button type="button" class="btn-ghost btn-sm" data-push="deneme" ${pushDurum.mesgul ? "disabled" : ""}>Deneme bildirimi</button><button type="button" class="linkbtn" data-push="kapat">Bu cihazda kapat</button></div>`;
+  }
+  return `<div class="m-sec"><p class="m-label">Bildirimler (telefon / bilgisayar)</p>${govde}</div>`;
+}
+
+function pushAksiyon(ne) {
+  if (ne === "ac") bildirimleriAc();
+  else if (ne === "kapat") bildirimleriKapat();
+  else if (ne === "deneme") bildirimDeneme();
+}
+
+async function bildirimleriAc() {
+  if (!pushDestek()) return;
+  // İzin isteği butona basma anında, ilk await'ten ÖNCE (iOS: kullanıcı hareketi içinde).
+  const izin = await Notification.requestPermission();
+  if (izin !== "granted") { toast("Bildirim izni verilmedi", true); renderPrefs(); return; }
+  pushDurum.mesgul = true; renderPrefs();
+  try {
+    const anahtar = await Api.vapidAcikAnahtar();
+    if (!anahtar) throw Object.assign(new Error("kurulum yok"), { kurulumYok: true });
+    const reg = await swHazir();
+    let sub = await reg.pushManager.getSubscription();
+    // Sunucu anahtarı değişmişse eski abonelik geçersiz — yenisi alınır.
+    const beklenen = b64uToU8(anahtar);
+    const mevcut = sub && sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+    if (sub && (!mevcut || mevcut.length !== beklenen.length || mevcut.some((x, i) => x !== beklenen[i]))) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: beklenen });
+    const j = sub.toJSON();
+    await Api.pushAboneOl(j.endpoint, j.keys);
+    // Varsayılan tercih: kişinin kendi ekibinin (aktif) grupları — yalnız hiç tercihi yoksa.
+    let tercihler = await Api.getBildirimTercihleri(session.id);
+    if (!tercihler.length && benimEkip()) {
+      const varsayilan = ekipGruplari(benimEkip()).filter((k) => GROUPS.some(([g]) => g === k));
+      if (varsayilan.length) { await Api.bildirimTercihleriEkle(session.id, varsayilan); tercihler = varsayilan; }
+    }
+    pushDurum.abone = true;
+    pushDurum.tercihler = new Set(tercihler);
+    toast("Bildirimler bu cihazda açıldı");
+  } catch (e) {
+    toast(e && e.kurulumYok ? "Bildirim sunucusu henüz kurulmamış (yönetici kurulum adımı)" : "Bildirimler açılamadı", true);
+  } finally {
+    pushDurum.mesgul = false;
+    renderPrefs();
+  }
+}
+
+async function bildirimleriKapat({ sessiz = false } = {}) {
+  const sub = await pushAbonelik().catch(() => null);
+  if (sub) {
+    try { await Api.pushAbonelikSil(sub.endpoint); } catch (e) { /* başkasının kaydıysa RLS dokundurmaz */ }
+    try { await sub.unsubscribe(); } catch (e) { /* zaten düşmüş */ }
+  }
+  pushDurum.abone = false;
+  if (!sessiz) { toast("Bu cihazda bildirimler kapatıldı"); renderPrefs(); }
+}
+
+async function bildirimDeneme() {
+  pushDurum.mesgul = true; renderPrefs();
+  try {
+    const r = await Api.pushDeneme();
+    if (r && r.gonderilen) toast(`Deneme bildirimi gönderildi (${r.gonderilen} cihaz) — uygulama öndeyse görünmeyebilir`);
+    else toast(`Deneme bildirimi gönderilemedi${r && r.hata ? `: ${r.hata}` : ""}`, true);
+  } catch (e) {
+    toast("Deneme bildirimi gönderilemedi", true);
+  } finally {
+    pushDurum.mesgul = false;
+    renderPrefs();
+  }
+}
+
+async function pushGrupDegis(kod, acik) {
+  try {
+    await Api.setBildirimTercihi(session.id, kod, acik);
+    if (acik) pushDurum.tercihler.add(kod); else pushDurum.tercihler.delete(kod);
+  } catch (e) {
+    toast("Tercih kaydedilemedi", true);
+  }
+  renderPrefs();
 }
 
 // ---------------- Boot ----------------

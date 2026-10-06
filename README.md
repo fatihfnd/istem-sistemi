@@ -92,6 +92,23 @@ Günlük ham veri yedeğinden ayrı ve ek. Aynı altyapı: Vault'taki service_ro
 - Aynı patoloji no + blokta başka gruptan tamamlanmamış istek varsa satırda "+HK" gibi çapraz uyarı rozeti çıkar.
 - İHK altındaki "Yeni kesit" katalog girdisi silinmez, pasifleştirilir (isim tahmin edilmez: tek eşleşme yoksa hiçbir şey değişmez, 4. parçanın sonucu eşleşenleri listeler).
 
+## 1h) Web Push bildirimleri (`push-gonder` Edge Function, `push_sema.sql`)
+Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olarak gelir; ekran içi banner + ses aynen sürer.
+
+**Akış:** `istem_kalemleri` INSERT → `push_tetikle()` trigger'ı → istem başına **tek** kez (`push_gonderimleri`) `net.http_post` → `push-gonder` → alıcıların her cihazına. pg_net isteği işlem kesinleştikten sonra gider (geri alınırsa hiç gitmez); hiç abonelik yoksa çağrı yapılmaz; hata istem kaydını asla engellemez.
+
+- Alıcılar: `bildirim_tercihleri`nde istemin gruplarından birini seçmiş, aktif ve istemi açan kişi olmayan kullanıcılar. Metin alıcının kendi gruplarına göre: `17730/26 · 3 İHK (Acil)`. 404/410 dönen abonelik silinir.
+- Şifreleme (RFC 8291, aes128gcm) ve VAPID imzası (RFC 8292, ES256) dış paket olmadan WebCrypto ile; RFC 8291 Ek A test vektörüyle birebir doğrulandı.
+- VAPID anahtarını fonksiyon kendisi üretip Vault'a yazar (`istem_vapid_private`, `istem_vapid_public`) — özel anahtar kimseye görünmez; yalnız ilk kurulumda üretilir.
+- Kullanıcı: Ayarlar → Bildirimler → **Bildirimleri aç** (izin yalnız bu butonla istenir), grup seçimi (ilk açılışta kendi ekibinin grupları), **Deneme bildirimi**, **Bu cihazda kapat**. Çıkışta o cihazın aboneliği silinir (ortak bilgisayar). iPhone/iPad: iOS 16.4+, önce Ana Ekrana Ekle.
+- Uygulama açık ve öndeyken sistem bildirimi gösterilmez (iOS hariç — Apple her push'ta bildirim ister).
+
+**Kurulum (panelden, CLI yok):**
+1. Edge Functions → yeni fonksiyon `push-gonder` → `supabase/functions/push-gonder/index.ts`'yi yapıştır → Deploy ("Verify JWT" açık).
+2. SQL Editor: `push_sema.sql` (3 parça).
+3. SQL Editor: dosyanın sonundaki "KURULUM" sorgusu (anahtar üretimi) + iki kontrol sorgusu.
+4. Teşhis: `select * from push_gonderimleri order by created_at desc limit 10;`
+
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):
 ```
