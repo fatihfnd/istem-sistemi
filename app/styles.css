@@ -827,3 +827,6 @@ tbody tr.iliskili .c-pat, tbody tr.iliskili .c-blok{font-weight:600}
   .yl-tablo tr.ilsk td{font-style:italic;color:#444}
   .yl-ilsk{font-style:italic;font-size:9.5pt}
 }
+
+/* Uzun bildirim (hata nedeni) telefonda ekrana sığsın */
+.toast{max-width:min(560px, calc(100vw - 24px));text-align:center;line-height:1.4}

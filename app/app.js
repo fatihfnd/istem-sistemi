@@ -181,7 +181,8 @@ function toast(msg, isErr) {
   t.textContent = msg;
   t.className = "toast show" + (isErr ? " err" : "");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+  // Uzun (hata nedeni içeren) mesajlar okunabilsin diye daha uzun kalır.
+  toastTimer = setTimeout(() => t.classList.remove("show"), Math.max(2600, Math.min(12000, String(msg).length * 60)));
 }
 
 // ---------------- Excel'e Aktar (manuel, tarayıcı tarafı — SheetJS) ----------------
@@ -4354,11 +4355,23 @@ async function bildirimleriAc() {
     pushDurum.tercihler = new Set(tercihler);
     toast("Bildirimler bu cihazda açıldı");
   } catch (e) {
-    toast(e && e.kurulumYok ? "Bildirim sunucusu henüz kurulmamış (yönetici kurulum adımı)" : "Bildirimler açılamadı", true);
+    toast(e && e.kurulumYok ? "Bildirim sunucusu henüz kurulmamış (yönetici kurulum adımı)" : `Bildirimler açılamadı — ${pushHataAciklama(e)}`, true);
   } finally {
     pushDurum.mesgul = false;
     renderPrefs();
   }
+}
+
+// Cihazda nedenin görünmesi için: sık durumlar Türkçe ipucuyla, her zaman
+// tarayıcının asıl mesajı köşeli parantezde.
+function pushHataAciklama(e) {
+  const m = `${e && e.name && e.name !== "Error" ? `${e.name}: ` : ""}${(e && e.message) || e}`;
+  if (/push service|Registration failed|AbortError/i.test(m)) {
+    return `tarayıcının push servisine ulaşılamadı. Google Play Hizmetleri olmayan telefonlarda (ör. bazı Huawei/Honor) ya da Brave, Samsung İnternet gibi tarayıcılarda olur; Chrome ile deneyin. [${m}]`;
+  }
+  if (/Service worker hazır değil/.test(m)) return `uygulamanın arka plan bileşeni yüklenemedi; sayfayı yenileyip tekrar deneyin. [${m}]`;
+  if (/NotAllowedError|permission/i.test(m)) return `tarayıcı izin vermedi; site ayarlarından bildirime izin verin. [${m}]`;
+  return m;
 }
 
 async function bildirimleriKapat({ sessiz = false } = {}) {
