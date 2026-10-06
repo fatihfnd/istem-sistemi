@@ -219,9 +219,18 @@ function jwtRol(token: string): string | null {
   try { return JSON.parse(new TextDecoder().decode(b64uDecode(token.split(".")[1]))).role ?? null; } catch { return null; }
 }
 
-const json = (veri: unknown, status = 200) => Response.json(veri, { status });
+// "Deneme bildirimi" uygulamadan (tarayıcıdan, başka origin) çağrılır — tarayıcı
+// önce OPTIONS ön-kontrolü yapar; izin başlıkları olmadan çağrıyı engeller.
+// (Trigger çağrısı sunucudan gelir, CORS'tan etkilenmez.)
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (veri: unknown, status = 200) => Response.json(veri, { status, headers: CORS });
 
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   const govde = await req.json().catch(() => ({}));
   const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
   const servisKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;

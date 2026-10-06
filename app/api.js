@@ -933,7 +933,12 @@
     async pushDeneme() {
       const { data, error } = await client.functions.invoke("push-gonder", { body: { islem: "test" } });
       if (error) {
-        try { return await error.context.json(); } catch (e) { throw error; }
+        // HTTP hatası: fonksiyonun kendi açıklaması ({ ok:false, hata }); ağ/CORS
+        // hatası: istemcinin mesajı — her durumda neden kullanıcıya gösterilir.
+        if (error.context && typeof error.context.json === "function") {
+          try { return await error.context.json(); } catch (e) { /* gövde JSON değil */ }
+        }
+        return { ok: false, hata: error.message || String(error) };
       }
       return data;
     },
