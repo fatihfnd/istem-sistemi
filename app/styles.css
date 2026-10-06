@@ -755,3 +755,50 @@ tbody tr.row-yeni{background:color-mix(in srgb, var(--accent) 7%, transparent)}
   .yl-kutu{width:16pt}
   .yl-tablo .kutu{display:inline-block;width:10pt;height:10pt;border:1pt solid #000;vertical-align:middle}
 }
+
+/* ---------------- Kapsam çipleri (İş Kuyruğu üst satır) ---------------- */
+.kapsamlar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 26px 10px}
+.kapsamlar.dimmed{opacity:.45;pointer-events:none}
+.kcip{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:20px;padding:5px 12px;font-family:var(--sans);font-size:12.5px;font-weight:560;cursor:pointer;white-space:nowrap}
+.kcip:hover{border-color:var(--accent);color:var(--ink)}
+.kcip.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:640}
+.kcip-ayrac{width:1px;height:18px;background:var(--line);margin:0 4px}
+@media (max-width:900px){ .kapsamlar{padding:0 16px 8px;flex-wrap:nowrap;overflow-x:auto} }
+
+/* ---------------- Aktif filtre çipleri ---------------- */
+.filtre-cipleri{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 26px 10px}
+.fcip{display:inline-flex;align-items:center;gap:4px;padding:3px 4px 3px 10px;border-radius:20px;background:var(--accent-soft);color:var(--ink);font-size:12px;font-weight:560;border:1px solid color-mix(in srgb, var(--accent) 30%, transparent)}
+.fcip button{border:0;background:transparent;color:var(--ink-2);font-size:15px;line-height:1;cursor:pointer;width:20px;height:20px;border-radius:50%}
+.fcip button:hover{background:color-mix(in srgb, var(--accent) 18%, transparent);color:var(--ink)}
+@media (max-width:900px){ .filtre-cipleri{padding:0 16px 8px} }
+
+/* ---------------- Tıklanabilir hücre metni (filtre) ---------------- */
+.tf{cursor:pointer;border-radius:3px}
+.tf:hover{text-decoration:underline;text-underline-offset:2px;color:var(--accent)}
+
+/* ---------------- Çapraz uyarı + kesit göstergesi ---------------- */
+.capraz{display:inline-block;margin-left:5px;padding:0 5px;border-radius:5px;background:var(--amber-b);color:var(--amber-i);border:1px solid color-mix(in srgb, var(--amber-i) 40%, transparent);font-family:var(--sans);font-size:10.5px;font-weight:700;letter-spacing:.02em;vertical-align:2px;cursor:help;white-space:nowrap}
+.badge-kesit{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;font-family:var(--sans);font-size:10.5px;font-weight:700;vertical-align:1px;white-space:nowrap}
+.badge-kesit.bekliyor{background:var(--line-2);color:var(--ink-3);border:1px dashed var(--line-strong)}
+.badge-kesit.hazir{background:var(--green-b);color:var(--green-i);border:1px solid color-mix(in srgb, var(--green-i) 40%, transparent)}
+
+/* ---------------- Uzman/asistan: İptal Et ---------------- */
+.ab-iptal{color:var(--ink-3);background:transparent}
+.ab-iptal:hover{color:var(--danger);border-color:var(--danger);background:transparent}
+
+/* ---------------- Kesit ekranı ---------------- */
+.c-kesit{font-size:var(--fs-cell);line-height:1.35;min-width:220px}
+tbody tr.row-acil .c-kesit, tbody tr.row-acil .c-pat, tbody tr.row-acil .c-blok{font-weight:800}
+.ab-kesildi, .act-kesildi{border-color:color-mix(in srgb, var(--green-i) 55%, transparent);background:var(--green-b);color:var(--green-i)}
+.ab-kesildi:hover, .act-kesildi:hover{border-color:var(--green-i);background:var(--green-b);color:var(--green-i);filter:brightness(.96)}
+.kesim-bilgi{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.kesim-ek{display:inline-flex;align-items:center;gap:2px;margin-left:6px}
+td.c-kesit-aks{width:1%}
+.blok-ozet{font-size:13px;line-height:1.5}
+.blok-kalemler{display:flex;flex-direction:column;gap:6px}
+.blok-kalem{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 9px;border:1px solid var(--line-2);border-radius:8px;background:var(--paper);color:var(--ink);text-decoration:none;font-size:13px}
+.blok-kalem:hover{border-color:var(--accent)}
+.blok-kalem .bk-test{font-weight:640;margin-right:auto}
+
+/* ---------------- Dokunmatik: uzun basma seçimi ---------------- */
+@media (pointer:coarse){ #rows tr{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none} }

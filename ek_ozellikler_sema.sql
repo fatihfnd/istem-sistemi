@@ -9,8 +9,9 @@
 --
 -- yetki_sema.sql'i bir gün yeniden çalıştırırsanız, ardından bu dosyayı
 -- da yeniden çalıştırın (görünüm ve fonksiyonların son hali burada).
--- İSTİSNA: istatistik()'in son hali ozet_yedek_sema.sql'dedir — bu
--- dosyayı yeniden çalıştırırsanız ardından onu da çalıştırın.
+-- İSTİSNA: istatistik()'in son hali ozet_yedek_sema.sql'de; istem_kuyruk_v
+-- ve durum değişikliği kuralının son hali ekip_sema.sql'de — bu dosyayı
+-- yeniden çalıştırırsanız ardından o ikisini de çalıştırın.
 -- ============================================================
 
 begin;
@@ -101,6 +102,15 @@ end $$;
 -- 3) Kuyruk görünümü — yeni kolonlar SONA eklenir:
 -- isteyen_kisaltma, uzman_kisaltma, notlar (en yeniden eskiye JSON).
 -- ------------------------------------------------------------
+-- ekip_sema.sql çalıştıysa görünüm daha fazla kolonludur (kesildi_at…) —
+-- o durumda burada YENİDEN TANIMLANMAZ (CREATE OR REPLACE VIEW kolon düşüremez).
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'kesildi_at'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -139,7 +149,10 @@ join istemler i             on i.id = ik.istem_id
 left join test_katalog tk   on tk.id = ik.test_id
 left join kullanicilar isteyen on isteyen.id = i.istem_yapan_id
 left join kullanicilar uzman   on uzman.id   = i.uzman_id
-left join cihazlar c        on c.id = ik.cihaz_id;
+left join cihazlar c        on c.id = ik.cihaz_id
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

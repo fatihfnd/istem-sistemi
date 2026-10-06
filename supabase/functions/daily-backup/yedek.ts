@@ -12,7 +12,8 @@
 
 type Satir = Record<string, any>;
 
-export const DURUM: Record<string, string> = { bekleyen: "Bekleyen", cihazda: "Cihazda", tamamlandi: "Tamamlandı", iptal: "İptal" };
+// Veritabanında "cihazda" — görünen ad "İşlemde" (uygulamadaki PILL ile aynı).
+export const DURUM: Record<string, string> = { bekleyen: "Bekleyen", cihazda: "İşlemde", tamamlandi: "Tamamlandı", iptal: "İptal" };
 export const ONCELIK: Record<string, string> = { rutin: "Rutin", acil: "Acil", stat: "STAT" };
 
 // Edge Function UTC'de çalışır — tarihler Türkiye saatiyle yazılır
@@ -184,7 +185,7 @@ export function epostaMetni(ozet: Ozet, dosya: string, depolama: string): string
     `İstem günlük yedeği ekte: ${dosya}`,
     "",
     `Toplam istem: ${ozet.istem}`,
-    `Toplam kalem: ${ozet.kalem} (Bekleyen ${d.bekleyen ?? 0} · Cihazda ${d.cihazda ?? 0} · Tamamlandı ${d.tamamlandi ?? 0})`,
+    `Toplam kalem: ${ozet.kalem} (Bekleyen ${d.bekleyen ?? 0} · İşlemde ${d.cihazda ?? 0} · Tamamlandı ${d.tamamlandi ?? 0})`,
     `Durum geçmişi kaydı: ${ozet.log}`,
     ozet.not === null ? "Notlar: istem_notlari okunamadı (ek_ozellikler_sema.sql çalıştırıldı mı?) — eski tekil notlar yazıldı." : `Not: ${ozet.not}`,
     "",

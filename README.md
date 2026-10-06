@@ -29,7 +29,7 @@ Getirdikleri:
 - **Yönetici (`is_admin`)**: Yönetim sayfaları (İstatistikler, Kullanıcılar, Test Grupları, Test Kataloğu, Yedekler) sadece yöneticiye görünür; `kullanicilar`/`test_gruplari` yazma, `test_katalog` düzenleme/silme ve yedek indirme RLS'te de sadece yönetici.
 - **İstek Setleri**: teknisyen dışında herkes ekler/düzenler/siler; teknisyen sadece görür. Yeni yöneticiyi Kullanıcılar formundaki "Yönetici" kutusuyla atayın.
 - **Kalem silme**: yönetici her kalemi (Tamamlandı dahil); diğerleri sadece kendi açtığı istemdeki, Tamamlandı olmayan kalemleri.
-- **Durum geri alma** (Tamamlandı→Cihazda, Cihazda→Bekleyen): yönetici + teknisyen her kalemi, uzman/asistan yalnız kendi açtığı istemin kalemlerini (veritabanında trigger ile; son hali `ek_ozellikler_sema.sql`'de).
+- **Durum değiştirme** (İşleme Al / Tamamla / Geri Al): yalnız yönetici ve teknisyen; uzman/asistan (admin değilse) kendi Bekleyen kalemini yalnız "İptal Et" (silme kuralı) ile geri çeker (veritabanında trigger ile; son hali `ekip_sema.sql`'de). Arayüzde "Cihazda" durumu "İşlemde" olarak görünür; veritabanındaki değer `cihazda` kalır.
 - **Teknisyen**: sıfırdan istem giremez, Şablonlar'a erişemez, İstek Setleri'ni düzenleyemez; tek istem yolu detay panelindeki "Tekrar İste".
 - **Tekrar İste**: aynı test/blok için yeni bir istem kaydı + Bekleyen kalem (`istem_kalemleri.tekrar_kaynagi_id` kaynağa bağlı). Hizmetler'de "Tekrar" rozetiyle görünür.
 - **Kalite notu** (`istem_kalemleri.kalite_notu`) ve **herkese açık şablon** (`sablonlar.herkese_acik`).
@@ -74,6 +74,23 @@ Günlük ham veri yedeğinden ayrı ve ek. Aynı altyapı: Vault'taki service_ro
 - Kurulum sırası: panelde `ozet-yedek` fonksiyonunu oluşturup `supabase/functions/ozet-yedek/index.ts`'yi yapıştırın, deploy edin → `ozet_yedek_sema.sql`'i çalıştırın.
 - Elle / geçmişe dönük: gövde `{"periyot":"hafta"}` (önceki hafta) ya da `{"periyot":"ay","bas":"2026-09-01"}` (o tarihi içeren dönem) — sorgu `ozet_yedek_sema.sql`'in sonunda.
 - Yedekler sayfası dosyaları adından Günlük / Haftalık / Aylık olarak etiketler ve süzer.
+
+## 1g) Ekipler, kapsam, kesit iş listesi (`ekip_sema.sql`)
+`ek_ozellikler_sema.sql` ve `ozet_yedek_sema.sql`'den sonra, **kod deploy edilmeden önce** çalıştırın (idempotent; teslimde 4 parça).
+
+| Grup | Ekip | Kesit gerektirir | Kısa ad |
+|---|---|---|---|
+| ihc | immun | ✓ | İHK |
+| hk, mol, fish | histomol | ✓ | HK, MOL, FISH |
+| diger | histomol | — | Diğer |
+| hucre, yayma | sito | — | Hücre, Yayma |
+| kesit | kesit | — | Kesit |
+
+- Varsayılanlar yalnız kolon ilk eklendiğinde yazılır; sonra **Test Grupları** sayfasından düzenlenir (ekip, kesit gerektirir, kısa ad). Kullanıcının ekibi (`immun / histomol / sito / kesit / sekreter`) **Kullanıcılar** sayfasından atanır; sekreter girişte Hizmetler'de açılır.
+- **İş Kuyruğu:** üstte kapsam çipleri (Benim İsteklerim · Ekibim · Tümü · her aktif grup), altında durum sekmeleri (Bekleyen / İşlemde / Tamamlandı / Hepsi; sayaçlar kapsama göre). Varsayılan: uzman/asistan → Benim İsteklerim, teknisyen → Ekibim, yönetici → Tümü.
+- **Kesit ekranı** (kesit grubunun çipi / kesit ekibinin "Ekibim"i): satır = patoloji no + blok; kesilecek = (kesit gerektiren grupta Bekleyen ve `kesildi_at` boş) veya (kesit grubunda Tamamlandı değil). **Kesildi** (`blok_kesildi`, yönetici + teknisyen) yalnız satırda görünen kalemlere uygulanır: kesit gerektirenlere `kesildi_at/kesen_id` (durum Bekleyen kalır → diğer ekranlarda "Kesit hazır"), kesit grubundakiler Tamamlandı. `blok_kesildi_geri_al` son işlemi geri alır (işleme alınmış kalemlere dokunmaz).
+- Aynı patoloji no + blokta başka gruptan tamamlanmamış istek varsa satırda "+HK" gibi çapraz uyarı rozeti çıkar.
+- İHK altındaki "Yeni kesit" katalog girdisi silinmez, pasifleştirilir (isim tahmin edilmez: tek eşleşme yoksa hiçbir şey değişmez, 4. parçanın sonucu eşleşenleri listeler).
 
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):

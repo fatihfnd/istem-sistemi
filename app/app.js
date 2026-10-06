@@ -11,7 +11,8 @@ const DEFAULT_GROUPS = [
 let GROUPS = DEFAULT_GROUPS;
 let TIP = Object.fromEntries(GROUPS);
 const ROL_LABEL = { uzman: "Uzman Patolog", asistan: "Asistan", teknisyen: "Teknisyen" };
-const PILL = { bekleyen: ["st-bekleyen", "Bekleyen"], cihazda: ["st-cihazda", "Cihazda"], tamamlandi: ["st-tamamlandi", "Tamamlandı"] };
+// Veritabanındaki değer "cihazda" kalır — görünen ad "İşlemde".
+const PILL = { bekleyen: ["st-bekleyen", "Bekleyen"], cihazda: ["st-cihazda", "İşlemde"], tamamlandi: ["st-tamamlandi", "Tamamlandı"] };
 const PRIO = { rutin: ["p-rutin", "Rutin"], acil: ["p-acil", "Acil"], stat: ["p-stat", "STAT"] };
 const KUYRUK_EXPORT_COLS = [
   { label: "Patoloji No", value: (r) => r.patoloji_no },
@@ -27,7 +28,11 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Tekrar", value: (r) => (r.tekrar_kaynagi_id ? "Evet" : "") },
   { label: "Not", value: (r) => notlarOf(r).map((n) => n.yazan ? `${n.metin} (${n.yazan}, ${formatDateFull(n.zaman)})` : n.metin).join(" | ") },
   { label: "Kalite Notu", value: (r) => r.kalite_notu || "" },
+  { label: "Kesildi", value: (r) => (r.kesildi_at ? `${formatDateFull(r.kesildi_at)}${r.kesen_adi ? ` · ${r.kesen_adi}` : ""}` : "") },
 ];
+// Ekipler (kullanicilar.ekip / test_gruplari.ekip — ekip_sema.sql'deki kısıtla aynı liste).
+const EKIPLER = [["immun", "İmmün"], ["histomol", "Histokimya-Moleküler"], ["sito", "Sitoloji"], ["kesit", "Kesit"], ["sekreter", "Sekreter"]];
+const EKIP_AD = Object.fromEntries(EKIPLER);
 const EMPTY_MSG = {
   kuyruk: { t: "Bir istek seç", d: "Detayını ve durum geçmişini görmek için soldan bir satıra dokun, ya da yeni istek ver." },
   setler: { t: "Bir set seç", d: "Testlerini görmek ve doğrudan istek vermek için bir karta dokun." },
@@ -254,6 +259,8 @@ let bulkAnchor = null;        // Shift+tık ile ardışık aralık genişletmede
 let dragStartId = null;       // checkbox sürükleyerek seçim (masaüstü, opsiyonel) — mousedown olan satır
 let dragActive = false;       // fare gerçekten başka bir satıra taşındı mı (basit tıkla karışmasın diye)
 let dragValue = false;        // sürüklenirken uygulanacak checked durumu
+let uzunBasTimer = null;      // dokunmatik uzun basma
+let uzunBasildi = false;      // uzun basma oldu — ardından gelen tık yok sayılır
 let unsub = null, pageUnsub = null, reloadTimer = null;
 let grp = "ihc", prio = "rutin";
 let selectedTests = new Map(); // test_id -> {ad,klon,grup}
@@ -269,11 +276,20 @@ let setFilterGrup = "all", setFilterUzmanlik = "all";
 function freshColFilters() {
   return {
     pat: "", blok: "", test: "", isteyen: "", uzman: "",
+    // Hücredeki metne tıklanarak konan TAM eşleşme filtreleri ("CD3" → CD30 gelmez).
+    testTam: "", isteyenTam: "", uzmanTam: "",
     tip: new Set(), oncelik: new Set(), durum: new Set(),
     tekrar: new Set(), // "tekrar" | "normal" — İstek sütununun filtre panelinde
   };
 }
 let colFilters = freshColFilters();
+// Kapsam (üst çip satırı): "benim" | "ekibim" | "tumu" | "g:<grup kodu>".
+// Kesit ekranı: kesit ekibinin grup çipi ya da kesit ekibi üyesinin "Ekibim"i.
+let kapsam = "tumu";
+let kesitSekme = "kesilecek"; // kesit ekranı: "kesilecek" | "kesildi" | "hepsi"
+let GRUP_BILGI = {};          // grup kodu -> {kod, ad, ekip, kesit_gerektirir, kisa_ad, sira, aktif}
+let secimModu = false;        // dokunmatik: uzun basınca açılan seçim modu
+const KESILDI_GUN = 7;        // "Kesildi" sekmesi: son kaç günün kesimleri
 let sortCol = null, sortDir = "asc";
 let caseView = null; // aktifken bir patoloji_no string'i (vaka görünümü)
 let kaliteDrafts = new Map(); // kalem_id -> kaydedilmemiş kalite notu taslağı
@@ -300,11 +316,14 @@ const isAdmin = () => Boolean(session && session.is_admin);
 const isTeknisyen = () => Boolean(session && session.rol === "teknisyen" && !session.is_admin);
 // Teknisyen sıfırdan istem giremez — tek yolu detay panelindeki "Tekrar İste".
 const canCreateIstem = () => !isTeknisyen();
-// Durum geri alma (Tamamlandı→Cihazda, Cihazda→Bekleyen): admin + teknisyen
-// her kalemi; uzman/asistan yalnız KENDİ açtığı istemin kalemlerini (RLS:
-// istem_kalemleri_geri_alma_kontrol, ek_ozellikler_sema.sql).
-const canRevert = (r) => isAdmin() || Boolean(session && session.rol === "teknisyen")
-  || Boolean(r && session && r.istem_yapan_id === session.id);
+// Durum değiştirme (İşleme Al / Tamamla / Geri Al): YALNIZ yönetici ve
+// teknisyen — uzman/asistan (admin değilse) hiç görmez; kendi Bekleyen
+// kalemini "İptal Et" (silme kuralı) ile geri çeker. RLS: ekip_sema.sql
+// (istem_kalemleri_geri_alma_kontrol).
+const canAdvance = () => isAdmin() || Boolean(session && session.rol === "teknisyen");
+const canRevert = () => canAdvance();
+// Kesildi işaretleme: yönetici + teknisyen (her ekip) — blok_kesildi().
+const canKesildi = () => canAdvance();
 // Admin her kalemi (Tamamlandı dahil); diğerleri kendi istemindeki,
 // Tamamlandı olmayan kalemleri.
 const canDeleteKalem = (r) => isAdmin() || (r.istem_yapan_id === session.id && r.durum !== "tamamlandi");
@@ -332,12 +351,15 @@ function isTabActive(f) {
 function setDurumTab(f) {
   colFilters.durum = f === "all" ? new Set() : new Set([f]);
 }
+// Durum sekmeleri artık gezinme (filtre çipi değil) — tek durum seçimi
+// "aktif filtre" sayılmaz; başlıktan birden fazla durum işaretlenirse sayılır.
 function hasActiveFilters() {
-  return Boolean(searchQ) || Boolean(colFilters.pat || colFilters.blok || colFilters.test || colFilters.isteyen || colFilters.uzman)
-    || colFilters.tip.size > 0 || colFilters.oncelik.size > 0 || colFilters.durum.size > 0 || colFilters.tekrar.size > 0;
+  return aktifFiltreler().length > 0;
 }
 function clearAllFilters() {
+  const durum = colFilters.durum;
   colFilters = freshColFilters();
+  colFilters.durum = durum.size > 1 ? new Set() : durum;
   searchQ = "";
   const qs = $("#qSearch"); if (qs) qs.value = "";
   $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
@@ -414,6 +436,17 @@ function syncBulkUI() {
     all.checked = visible.length > 0 && n === visible.length;
     all.indeterminate = n > 0 && n < visible.length;
   }
+  if (kesitEkraniMi()) {
+    const bloklar = new Map(gorunenBloklar().map((b) => [b.key, b]));
+    $$("#rows tr[data-blok]").forEach((tr) => {
+      const b = bloklar.get(tr.dataset.blok); if (!b) return;
+      const ids = blokKalemleri(b).map((r) => r.kalem_id);
+      const on = ids.length > 0 && ids.every((id) => bulkSelected.has(id));
+      tr.classList.toggle("bulk-checked", on);
+      const cb = tr.querySelector("[data-blok-check]");
+      if (cb) { cb.checked = on; cb.indeterminate = !on && ids.some((id) => bulkSelected.has(id)); }
+    });
+  }
   $$("#rows [data-case-sel]").forEach((btn) => {
     const ids = visible.filter((r) => r.patoloji_no === btn.dataset.caseSel);
     btn.classList.toggle("on", ids.length > 0 && ids.every((r) => bulkSelected.has(r.kalem_id)));
@@ -483,6 +516,7 @@ async function handleLogout() {
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
   rows = []; selId = null; searchQ = "";
   colFilters = freshColFilters();
+  kapsam = "tumu"; kesitSekme = "kesilecek"; secimModu = false;
   sortCol = null; sortDir = "asc"; caseView = null;
   kaliteDrafts = new Map(); notDrafts = new Map(); detailStale = false;
   eskileriGoster = false; eskiSinirMs = null; gizliEskiSayisi = 0;
@@ -508,7 +542,7 @@ async function initApp(user) {
   // yine de yüklenir — tek bir eksik tablo tüm girişi kilitlemesin.
   const avatarP = refreshAvatarlar(); // paralel — gelince sol alttaki baş harf fotoğrafa döner
   const results = await Promise.allSettled([
-    Api.getTestKatalog(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getTestGruplari(),
+    Api.getTestKatalog(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getAllTestGruplari(),
     Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id),
   ]);
   const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR] = results;
@@ -519,8 +553,7 @@ async function initApp(user) {
   if (uzmanlarR.status === "fulfilled") UZMANLAR = uzmanlarR.value;
   if (cihazlarR.status === "fulfilled") CIHAZLAR = cihazlarR.value;
   if (gruplarR.status === "fulfilled" && gruplarR.value.length) {
-    GROUPS = gruplarR.value.map((g) => [g.kod, g.ad]);
-    TIP = Object.fromEntries(GROUPS);
+    gruplariUygula(gruplarR.value);
   } else if (gruplarR.status === "rejected") {
     toast("Test grupları yüklenemedi — yonetim_sema.sql çalıştırıldı mı? (varsayılan gruplar kullanılıyor)", true);
   }
@@ -536,7 +569,20 @@ async function initApp(user) {
   if (unsub) unsub();
   unsub = Api.subscribeQueue(scheduleReload);
 
-  navigate("kuyruk");
+  // Varsayılan kapsam rol/ekibe göre (bkz. varsayilanKapsam); sekreter
+  // girişte Hizmetler'de açılır.
+  kapsam = varsayilanKapsam();
+  kesitSekme = "kesilecek";
+  navigate(session.ekip === "sekreter" ? "hizmetler" : "kuyruk");
+}
+
+// Gruplar: GROUPS (seçiciler, kapsam çipleri) yalnız AKTİF; TIP ve
+// GRUP_BILGI hepsi (pasif gruptaki eski kalemlerin adı/ekibi de çözülsün).
+function gruplariUygula(list) {
+  const aktif = list.filter((g) => g.aktif !== false);
+  if (aktif.length) GROUPS = aktif.map((g) => [g.kod, g.ad]);
+  TIP = Object.fromEntries(list.map((g) => [g.kod, g.ad]));
+  GRUP_BILGI = Object.fromEntries(list.map((g) => [g.kod, g]));
 }
 
 function scheduleReload() {
@@ -550,11 +596,8 @@ async function refreshSablonlar() {
 }
 
 async function refreshGruplar() {
-  const list = await Api.getTestGruplari();
-  if (list.length) {
-    GROUPS = list.map((g) => [g.kod, g.ad]);
-    TIP = Object.fromEntries(GROUPS);
-  }
+  const list = await Api.getAllTestGruplari();
+  if (list.length) gruplariUygula(list);
 }
 
 // ---------------- Router ----------------
@@ -603,23 +646,19 @@ function renderQueuePage() {
     <div class="main-head mh-zil">
       <div>
         <h1>İş Kuyruğu</h1>
-        <div class="sub"><b id="totalN">0</b> istek · IHC, histokimya, moleküler</div>
+        <div class="sub" id="qSub"><b id="totalN">0</b> istek</div>
       </div>
       <button type="button" class="zil" id="zilBtn"></button>
     </div>
+    <div class="kapsamlar" id="kapsamlar" role="tablist" aria-label="Kapsam"></div>
     <div class="barrow" id="barrow">
-      <div class="tabs" id="tabs">
-        <button class="${isTabActive("all") ? "on" : ""}" data-f="all">Tümü <span class="count" data-c="all">0</span></button>
-        <button class="${isTabActive("bekleyen") ? "on" : ""}" data-f="bekleyen">Bekleyen <span class="count" data-c="bekleyen">0</span></button>
-        <button class="${isTabActive("cihazda") ? "on" : ""}" data-f="cihazda">Cihazda <span class="count" data-c="cihazda">0</span></button>
-        <button class="${isTabActive("tamamlandi") ? "on" : ""}" data-f="tamamlandi">Tamamlandı <span class="count" data-c="tamamlandi">0</span></button>
-      </div>
+      <div class="tabs" id="tabs"></div>
       <div class="eski-kutu hidden" id="eskiKutu" title="${ESKI_GUN} günden eski Tamamlandı kayıtlar yalnız bu ekranda gizlenir — İstatistikler, Excel'e Aktar ve yedekler her zaman tüm kayıtları kapsar.">
         <button class="btn-ghost btn-sm eski-btn" id="eskiBtn"></button>
         <span class="eski-sayac" id="eskiSayac"></span>
       </div>
       <div class="grow"></div>
-      <button class="btn-ghost btn-sm hidden" id="clearFiltersBtn">Filtreleri Temizle</button>
+      <button class="btn-ghost btn-sm" id="qYazdirBtn" title="Seçilenleri; seçim yoksa görünen listeyi yazdır">${YAZDIR_IKON} Yazdır</button>
       <div id="qExport">${exportMenuHTML("Filtreye uyanlar (eskiler dahil)")}</div>
       <div class="zoomctl" id="zoomCtl">
         <button type="button" data-zoom="-1" aria-label="Tabloyu sıkılaştır">A−</button>
@@ -631,11 +670,13 @@ function renderQueuePage() {
         <input id="qSearch" placeholder="Blok, patoloji no…" value="${esc(searchQ)}">
       </div>
     </div>
+    <div class="filtre-cipleri hidden" id="filtreCipleri"></div>
     <div class="case-banner hidden" id="caseBanner"></div>
     <div class="bulkbar hidden" id="bulkBar">
       <span id="bulkCount"></span>
       <div class="grow"></div>
-      <button class="act act-cihaza" id="bulkCihazaBtn">Cihaza Al</button>
+      <button class="act act-kesildi hidden" id="bulkKesildiBtn">Kesildi</button>
+      <button class="act act-cihaza" id="bulkCihazaBtn">İşleme Al</button>
       <button class="act act-tamamla" id="bulkTamamlaBtn">Tamamla</button>
       <button class="btn-ghost btn-sm" id="bulkYazdirBtn" title="Seçili kalemlerin çalışma listesini yazdır">${YAZDIR_IKON} Yazdır</button>
       <button class="btn-ghost btn-sm" id="bulkTekrarBtn">↻ Tekrar İste</button>
@@ -651,14 +692,29 @@ function renderQueuePage() {
       <div class="eski-ipucu hidden" id="eskiIpucu"></div>
     </div>`;
 
-  if (caseView !== null) $("#barrow").classList.add("dimmed");
+  if (caseView !== null) { $("#barrow").classList.add("dimmed"); $("#kapsamlar").classList.add("dimmed"); }
 
-  $("#tabs").addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    setDurumTab(b.dataset.f);
-    $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+  $("#kapsamlar").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-kapsam]"); if (!b) return;
+    kapsam = b.dataset.kapsam;
     clearBulkSelection();
     renderTable();
+  });
+  $("#tabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.ks) kesitSekme = b.dataset.ks;
+    else setDurumTab(b.dataset.f);
+    clearBulkSelection();
+    renderTable();
+  });
+  $("#filtreCipleri").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-fc]"); if (!b) return;
+    filtreKaldir(b.dataset.fc);
+  });
+  $("#qYazdirBtn").addEventListener("click", calismaListesiYazdir);
+  $("#bulkKesildiBtn").addEventListener("click", () => {
+    const ids = gorunenBloklar().flatMap((b) => b.kesilecek.map((r) => r.kalem_id)).filter((id) => bulkSelected.has(id));
+    blokKesildiYap(ids);
   });
   $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderTable(); });
   $("#zoomCtl").addEventListener("click", (e) => {
@@ -669,12 +725,11 @@ function renderQueuePage() {
     if (i >= 0 && i < list.length) Tema.set({ yogunluk: list[i] });
   });
   renderZoomCtl();
-  $("#clearFiltersBtn").addEventListener("click", clearAllFilters);
   $("#eskiBtn").addEventListener("click", eskiToggle);
   $("#eskiIpucu").addEventListener("click", (e) => { if (e.target.closest("[data-eski-goster]")) eskiToggle(); });
   bindExportMenu("#qExport", kuyruguDisaAktar);
-  $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen", "Cihaza alındı"));
-  $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda", "Tamamlandı"));
+  $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen"));
+  $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda"));
   $("#bulkYazdirBtn").addEventListener("click", calismaListesiYazdir);
   $("#bulkTekrarBtn").addEventListener("click", bulkTekrar);
   $("#zilBtn").addEventListener("click", () => sesAyarla(!sesAcik()));
@@ -683,6 +738,34 @@ function renderQueuePage() {
   $("#bulkSilBtn").addEventListener("click", bulkDelete);
   $("#bulkClearBtn").addEventListener("click", clearBulkSelection);
   $("#rows").addEventListener("click", (e) => {
+    // Uzun basmanın (dokunmatik seçim) ardından gelen tık — yok sayılır.
+    if (uzunBasildi) { uzunBasildi = false; e.preventDefault(); return; }
+    // ---- Kesit ekranı (blok satırları) ----
+    const btr = e.target.closest("tr[data-blok]");
+    if (btr) {
+      const b = gorunenBloklar().find((x) => x.key === btr.dataset.blok);
+      if (!b) return;
+      e.stopPropagation();
+      if (e.target.closest("[data-kesildi]")) { blokKesildiYap(b.kesilecek.map((r) => r.kalem_id)); return; }
+      if (e.target.closest("[data-kesit-geri]")) { blokKesildiGeriAl(b); return; }
+      if (e.target.closest("[data-blok-check]") || (secimModu && bulkSelected.size)) { blokSecimToggle(b); return; }
+      if (e.target.closest(".c-pat")) { openCaseView(b.pat); return; }
+      showBlokDetay(b);
+      return;
+    }
+    // Çapraz uyarı rozeti — dokunmatikte de okunabilsin.
+    const capraz = e.target.closest("[data-capraz]");
+    if (capraz) { e.stopPropagation(); toast(capraz.title); return; }
+    // Hücre metnine tık → o sütunun TAM eşleşme filtresi.
+    const tf = e.target.closest("[data-tf]");
+    if (tf) {
+      e.stopPropagation();
+      if (caseView !== null) { caseView = null; $("#barrow")?.classList.remove("dimmed"); $("#kapsamlar")?.classList.remove("dimmed"); }
+      colFilters[tf.dataset.tf] = tf.dataset.v;
+      clearBulkSelection();
+      renderTable();
+      return;
+    }
     const caseSel = e.target.closest("[data-case-sel]");
     if (caseSel) {
       e.stopPropagation();
@@ -703,6 +786,7 @@ function renderQueuePage() {
       const r = rows.find((x) => x.kalem_id === btn.dataset.id);
       if (!r) return;
       if (btn.dataset.aks === "geri") revertDurum(r);
+      else if (btn.dataset.aks === "iptal") kalemIptal(r);
       else advance(r.kalem_id, btn.dataset.aks);
       return;
     }
@@ -716,6 +800,8 @@ function renderQueuePage() {
     if (!tr) return;
     const r = rows.find((x) => x.kalem_id === tr.dataset.kalem);
     if (!r) return;
+    // Dokunmatik seçim modu: dokunmak seçimi değiştirir, detay açmaz.
+    if (secimModu && bulkSelected.size) { toggleBulkSelect(r.kalem_id); return; }
     // Shift/Ctrl+tık: sadece çoklu seçimi yönetir, detay panelini AÇMAZ
     // (mevcut seçili detay ne ise öyle kalır).
     if (e.shiftKey && bulkAnchor) { e.preventDefault(); selectRange(bulkAnchor, r.kalem_id); return; }
@@ -731,6 +817,33 @@ function renderQueuePage() {
   // ASLA çakışmaz, çünkü sadece fare GERÇEKTEN başka bir checkbox'a
   // taşındığında (dragActive) devreye girer — aksi halde native "click"
   // olayı yukarıdaki handler'dan normal şekilde (tek seferlik toggle) geçer.
+  // Dokunmatik: satıra ~0,5 sn basılı tutmak seçim modunu açar (o satırı seçer).
+  let dokunmaBas = null;
+  $("#rows").addEventListener("touchstart", (e) => {
+    uzunBasildi = false;
+    clearTimeout(uzunBasTimer);
+    const tr = e.target.closest("tr[data-kalem], tr[data-blok]");
+    if (!tr || e.touches.length > 1) return;
+    dokunmaBas = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    uzunBasTimer = setTimeout(() => {
+      uzunBasildi = true;
+      secimModu = true;
+      if (tr.dataset.blok) {
+        const b = gorunenBloklar().find((x) => x.key === tr.dataset.blok);
+        if (b) blokSecimToggle(b);
+      } else {
+        toggleBulkSelect(tr.dataset.kalem);
+      }
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, 500);
+  }, { passive: true });
+  $("#rows").addEventListener("touchmove", (e) => {
+    if (!dokunmaBas) return;
+    const t = e.touches[0];
+    if (Math.hypot(t.clientX - dokunmaBas.x, t.clientY - dokunmaBas.y) > 10) clearTimeout(uzunBasTimer);
+  }, { passive: true });
+  ["touchend", "touchcancel"].forEach((ev) => $("#rows").addEventListener(ev, () => clearTimeout(uzunBasTimer), { passive: true }));
+  $("#rows").addEventListener("contextmenu", (e) => { if (uzunBasildi) e.preventDefault(); });
   $("#rows").addEventListener("mousedown", (e) => {
     const cb = e.target.closest("[data-bulk-check]");
     if (!cb) return;
@@ -805,6 +918,7 @@ function renderQueuePage() {
 function openCaseView(patNo) {
   caseView = patNo;
   $("#barrow")?.classList.add("dimmed");
+  $("#kapsamlar")?.classList.add("dimmed");
   renderTable();
   vakaGecmisiniYukle(patNo);
 }
@@ -860,6 +974,7 @@ async function eskiToggle() {
 function closeCaseView() {
   caseView = null;
   $("#barrow")?.classList.remove("dimmed");
+  $("#kapsamlar")?.classList.remove("dimmed");
   renderTable();
 }
 function renderCaseBanner() {
@@ -907,6 +1022,10 @@ function renderQHead() {
   const head = $("#qhead");
   if (!head) return;
   const bulkAllTh = `<th class="bulkcell"><input type="checkbox" data-bulk-all aria-label="Görünen tümünü seç/kaldır" title="Görünen tümünü seç/kaldır"></th>`;
+  if (kesitEkraniMi()) {
+    head.innerHTML = `<tr>${bulkAllTh}<th>Patoloji No</th><th>Blok</th><th>${kesitSekme === "kesildi" ? "Kesilenler" : "Kesilecekler"}</th><th>Öncelik</th><th>İstendi</th><th>Not</th><th></th></tr>`;
+    return;
+  }
   if (caseView !== null) {
     head.innerHTML = `<tr>${bulkAllTh}<th>Durum</th><th>Patoloji No</th><th>Blok</th><th>İstek</th><th>Tip</th><th>İsteyen</th><th>Uzman Adına</th><th>Tarih</th><th>Öncelik</th><th>Not</th></tr>`;
     return;
@@ -950,6 +1069,10 @@ function renderQHead() {
 
 function passesFilter(r, eskiDahil = false) {
   if (!eskiDahil && eskiGizli(r)) return false;
+  if (!kapsamaUyar(r)) return false;
+  if (colFilters.testTam && r.test_adi !== colFilters.testTam) return false;
+  if (colFilters.isteyenTam && r.isteyen_adi !== colFilters.isteyenTam) return false;
+  if (colFilters.uzmanTam && r.uzman_adi !== colFilters.uzmanTam) return false;
   if (colFilters.durum.size && !colFilters.durum.has(r.durum)) return false;
   if (colFilters.tip.size && !colFilters.tip.has(r.grup)) return false;
   if (colFilters.oncelik.size && !colFilters.oncelik.has(r.oncelik)) return false;
@@ -980,17 +1103,23 @@ function filtreleVeSirala(list, { eskiDahil = false } = {}) {
   }
   return out;
 }
-// Ekranda o an görünen satırlar (renderTable, seçim kısayolları).
+// Ekranda o an görünen satırlar (renderTable, seçim kısayolları). Kesit
+// ekranında: görünen blokların (seçilebilir) kalemleri.
 function getVisibleRows() {
+  if (kesitEkraniMi()) return gorunenBloklar().flatMap((b) => blokKalemleri(b));
   return filtreleVeSirala(rows);
 }
 
 function renderTable() {
   const tb = $("#rows");
   if (!tb) return; // kuyruk sayfasında değiliz
+  renderKapsamlar();
   renderQHead();
   renderCaseBanner();
+  renderFiltreCipleri();
   tb.innerHTML = "";
+  if (kesitEkraniMi()) { renderKesitSatirlari(tb); updateCounts(); syncBulkUI(); return; }
+  const acik = acikBlokHaritasi();
 
   const list = getVisibleRows();
   // Vaka (patoloji no) gruplaması sadece aynı vakanın satırlarını yan yana
@@ -1017,11 +1146,11 @@ function renderTable() {
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span></td>
-      <td class="c-blok">${esc(r.blok_no)}</td>
-      <td class="c-test">${esc(r.test_adi)}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
+      <td class="c-blok">${esc(r.blok_no)}${caprazRozet(r, acik)}</td>
+      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
       <td>${tipTag(r.grup)}</td>
-      ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
-      ${kisiTd(r.uzman_adi, r.uzman_kisaltma)}
+      ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
+      ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam")}
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
       <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span></td>
       <td class="c-not">${notHucre(r)}</td>`;
@@ -1036,20 +1165,32 @@ function renderTable() {
 // bir sonraki adım; Tamamlandı'da yok). ↺ olmayan satırda aynı genişlikte
 // boşluk kalır ki birincil butonlar alt alta hizalı dursun.
 function durumAksiyon(r) {
+  const pill = `<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>`;
+  if (!canAdvance()) {
+    // Uzman/asistan: yalnız rozet; kendi Bekleyen kalemine "İptal Et".
+    const iptal = r.durum === "bekleyen" && canDeleteKalem(r)
+      ? `<span class="ab-geri-yer" aria-hidden="true"></span><button class="ab ab-iptal" data-aks="iptal" data-id="${r.kalem_id}">İptal Et</button>`
+      : "";
+    return `<div class="dacts">${pill}${iptal}</div>`;
+  }
   const geriHedef = REVERT_TO[r.durum];
   const geri = geriHedef && canRevert(r)
     ? `<button class="ab-geri" data-aks="geri" data-id="${r.kalem_id}" data-tip="Geri Al" aria-label="Geri Al: ${PILL[r.durum][1]} → ${PILL[geriHedef][1]}">${GERI_IKON}</button>`
     : `<span class="ab-geri-yer" aria-hidden="true"></span>`;
-  const sonraki = r.durum === "bekleyen" ? ["cihazda", "ab-cihaza", "Cihaza Al"]
+  const sonraki = r.durum === "bekleyen" ? ["cihazda", "ab-cihaza", "İşleme Al"]
     : r.durum === "cihazda" ? ["tamamlandi", "ab-tamamla", "Tamamla"] : null;
   const birincil = sonraki ? `<button class="ab ${sonraki[1]}" data-aks="${sonraki[0]}" data-id="${r.kalem_id}">${sonraki[2]}</button>` : "";
-  return `<div class="dacts"><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${geri}${birincil}</div>`;
+  return `<div class="dacts">${pill}${geri}${birincil}</div>`;
 }
 
 // İsteyen / Uzman Adına: kısaltma varsa o (tam ad ipucu), yoksa tam ad.
-function kisiTd(ad, kisa) {
-  if (!ad) return `<td class="c-kisi">—</td>`;
-  return `<td class="c-kisi${kisa ? " kisa" : ""}" title="${esc(ad)}">${esc(kisa || ad)}</td>`;
+// tfKey verilirse metin tıklanabilir: o kişiye göre TAM eşleşme filtresi.
+function kisiTd(ad, kisa, tfKey) {
+  if (!ad || ad === "—") return `<td class="c-kisi">—</td>`;
+  const metin = tfKey
+    ? `<span class="tf" data-tf="${tfKey}" data-v="${esc(ad)}">${esc(kisa || ad)}</span>`
+    : esc(kisa || ad);
+  return `<td class="c-kisi${kisa ? " kisa" : ""}" title="${esc(ad)}">${metin}</td>`;
 }
 
 // İstemin notları (istem_notlari, en yeniden eskiye). Görünüm eskiyse
@@ -1074,13 +1215,14 @@ function notHucre(r) {
 function updateCounts() {
   const totalEl = $("#totalN"); if (!totalEl) return;
   // Sayaçlar görünen kapsamı yansıtır: gizli eski Tamamlandı'lar sayılmaz.
-  const kapsam = rows.filter((r) => !eskiGizli(r));
-  totalEl.textContent = kapsam.length;
-  ["all", "bekleyen", "cihazda", "tamamlandi"].forEach((f) => {
-    const el = document.querySelector(`[data-c="${f}"]`);
-    if (el) el.textContent = f === "all" ? kapsam.length : kapsam.filter((r) => r.durum === f).length;
-  });
-  $("#clearFiltersBtn")?.classList.toggle("hidden", !hasActiveFilters());
+  // Başlık altı: kapsamdaki istek sayısı; Kesit ekranında kesilecek blok sayısı.
+  if (kesitEkraniMi()) {
+    const b = kesitBloklari().filter((x) => x.kesilecek.length);
+    $("#qSub").innerHTML = `<b id="totalN">${b.length}</b> blok kesilecek · ${b.reduce((n, x) => n + x.kesilecek.length, 0)} kalem`;
+  } else {
+    $("#qSub").innerHTML = `<b id="totalN">${rows.filter((r) => !eskiGizli(r) && kapsamaUyar(r)).length}</b> istek · ${esc(kapsamEtiketi())}`;
+  }
+  renderDurumSekmeleri();
 
   // Eski kayıtlar: toggle + her zaman görünen sayaç ("nereye gitti" kalmasın).
   const kutu = $("#eskiKutu");
@@ -1132,13 +1274,358 @@ async function revertDurum(r) {
   }
 }
 
+// ================================================================
+// KAPSAM ÇİPLERİ + DURUM SEKMELERİ
+// ================================================================
+const benimEkip = () => (session && session.ekip) || null;
+const ekipGruplari = (ekip) => Object.values(GRUP_BILGI).filter((g) => g.ekip === ekip).map((g) => g.kod);
+const ekibimVar = () => Boolean(benimEkip() && ekipGruplari(benimEkip()).length);
+// Uzman/asistan: Benim İsteklerim · teknisyen: Ekibim (ekibi yoksa Tümü) ·
+// yönetici: Tümü. Kesit ekibinde "Ekibim" = Kesit ekranı.
+function varsayilanKapsam() {
+  if (!session || isAdmin()) return "tumu";
+  if (session.rol === "teknisyen") return ekibimVar() ? "ekibim" : "tumu";
+  if (session.rol === "uzman" || session.rol === "asistan") return "benim";
+  return "tumu";
+}
+function kesitEkraniMi() {
+  if (caseView !== null || !session) return false;
+  if (kapsam === "ekibim") return benimEkip() === "kesit";
+  if (kapsam.startsWith("g:")) return GRUP_BILGI[kapsam.slice(2)]?.ekip === "kesit";
+  return false;
+}
+function kapsamaUyar(r) {
+  if (!session) return true;
+  if (kapsam === "benim") return r.istem_yapan_id === session.id || r.uzman_id === session.id;
+  if (kapsam === "ekibim") return GRUP_BILGI[r.grup]?.ekip === benimEkip();
+  if (kapsam.startsWith("g:")) return r.grup === kapsam.slice(2);
+  return true;
+}
+function kapsamEtiketi() {
+  if (kapsam === "benim") return "Benim İsteklerim";
+  if (kapsam === "ekibim") return `Ekibim · ${EKIP_AD[benimEkip()] || ""}`;
+  if (kapsam.startsWith("g:")) return TIP[kapsam.slice(2)] || kapsam.slice(2);
+  return "Tümü";
+}
+function renderKapsamlar() {
+  const el = $("#kapsamlar"); if (!el) return;
+  const cipler = [["benim", "Benim İsteklerim"]];
+  if (ekibimVar()) cipler.push(["ekibim", `Ekibim · ${EKIP_AD[benimEkip()]}`]);
+  cipler.push(["tumu", "Tümü"]);
+  GROUPS.forEach(([k, l]) => cipler.push(["g:" + k, l]));
+  if (!cipler.some(([k]) => k === kapsam)) kapsam = "tumu"; // grup pasifleşmiş / ekip değişmiş
+  el.innerHTML = cipler.map(([k, l], i) => `${i === (ekibimVar() ? 3 : 2) ? `<span class="kcip-ayrac" aria-hidden="true"></span>` : ""}<button class="kcip${kapsam === k ? " on" : ""}" data-kapsam="${k}" role="tab" aria-selected="${kapsam === k}">${esc(l)}</button>`).join("");
+}
+function renderDurumSekmeleri() {
+  const el = $("#tabs"); if (!el) return;
+  if (kesitEkraniMi()) {
+    const b = kesitBloklari();
+    const say = { kesilecek: b.filter((x) => x.kesilecek.length).length, kesildi: b.filter((x) => !x.kesilecek.length).length, hepsi: b.length };
+    el.innerHTML = [["kesilecek", "Kesilecek"], ["kesildi", `Kesildi (${KESILDI_GUN} gün)`], ["hepsi", "Hepsi"]]
+      .map(([k, l]) => `<button class="${kesitSekme === k ? "on" : ""}" data-ks="${k}">${l} <span class="count">${say[k]}</span></button>`).join("");
+    return;
+  }
+  const kapsamdakiler = rows.filter((r) => !eskiGizli(r) && kapsamaUyar(r));
+  const say = (f) => (f === "all" ? kapsamdakiler.length : kapsamdakiler.filter((r) => r.durum === f).length);
+  el.innerHTML = [["bekleyen", "Bekleyen"], ["cihazda", "İşlemde"], ["tamamlandi", "Tamamlandı"], ["all", "Hepsi"]]
+    .map(([f, l]) => `<button class="${isTabActive(f) ? "on" : ""}" data-f="${f}">${l} <span class="count">${say(f)}</span></button>`).join("");
+}
+
+// ---------------- Aktif filtre çipleri ----------------
+function aktifFiltreler() {
+  const f = [];
+  if (searchQ) f.push(["ara", `Arama: ${searchQ}`]);
+  [["testTam", "İstek"], ["isteyenTam", "İsteyen"], ["uzmanTam", "Uzman Adına"]]
+    .forEach(([k, l]) => { if (colFilters[k]) f.push([k, `${l}: ${colFilters[k]}`]); });
+  [["pat", "Patoloji No"], ["blok", "Blok"], ["test", "İstek"], ["isteyen", "İsteyen"], ["uzman", "Uzman Adına"]]
+    .forEach(([k, l]) => { if (colFilters[k]) f.push([k, `${l} içinde: "${colFilters[k]}"`]); });
+  if (colFilters.tip.size) f.push(["tip", `Tip: ${[...colFilters.tip].map((k) => TIP[k] || k).join(", ")}`]);
+  if (colFilters.oncelik.size) f.push(["oncelik", `Öncelik: ${[...colFilters.oncelik].map((k) => PRIO[k][1]).join(", ")}`]);
+  if (colFilters.tekrar.size === 1) f.push(["tekrar", colFilters.tekrar.has("tekrar") ? "Yalnız tekrarlar" : "Tekrar olmayanlar"]);
+  if (colFilters.durum.size > 1) f.push(["durum", `Durum: ${[...colFilters.durum].map((k) => PILL[k][1]).join(", ")}`]);
+  return f;
+}
+function renderFiltreCipleri() {
+  const el = $("#filtreCipleri"); if (!el) return;
+  // Kesit ekranında yalnız arama geçerli; vaka görünümünde filtre uygulanmaz.
+  const f = caseView !== null ? [] : kesitEkraniMi() ? aktifFiltreler().filter(([k]) => k === "ara") : aktifFiltreler();
+  el.classList.toggle("hidden", !f.length);
+  el.innerHTML = f.map(([k, l]) => `<span class="fcip">${esc(l)}<button type="button" data-fc="${k}" aria-label="${esc(l)} filtresini kaldır" title="Kaldır">×</button></span>`).join("")
+    + (f.length > 1 ? `<button type="button" class="linkbtn" data-fc="hepsi">Tümünü temizle</button>` : "");
+}
+function filtreKaldir(k) {
+  if (k === "hepsi") { clearAllFilters(); return; }
+  if (k === "ara") { searchQ = ""; const qs = $("#qSearch"); if (qs) qs.value = ""; }
+  else if (["tip", "oncelik", "tekrar", "durum"].includes(k)) colFilters[k] = new Set();
+  else colFilters[k] = "";
+  clearBulkSelection();
+  renderTable();
+}
+
+// ---------------- Çapraz uyarı + kesit göstergesi (normal satırlar) ----------------
+const grupKisa = (g) => GRUP_BILGI[g]?.kisa_ad || TIP[g] || g;
+// "patoloji\0blok" -> o bloktaki TAMAMLANMAMIŞ kalemler (kapsamdan bağımsız:
+// Bekleyen/İşlemde kalemler her zaman yüklü olduğu için eksiksiz).
+function acikBlokHaritasi() {
+  const m = new Map();
+  rows.forEach((r) => {
+    if (r.durum === "tamamlandi" || !r.blok_no) return;
+    const k = r.patoloji_no + "\u0000" + r.blok_no;
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  });
+  return m;
+}
+function caprazRozet(r, acik) {
+  if (!r.blok_no) return "";
+  const digerleri = (acik.get(r.patoloji_no + "\u0000" + r.blok_no) || []).filter((x) => x.grup !== r.grup);
+  if (!digerleri.length) return "";
+  return [...new Set(digerleri.map((x) => x.grup))].map((g) => {
+    const l = digerleri.filter((x) => x.grup === g);
+    const ipucu = `Aynı blokta ${grupKisa(g)}: ${l.map((x) => `${x.test_adi} (${PILL[x.durum][1]})`).join(", ")}`;
+    return `<span class="capraz" data-capraz title="${esc(ipucu)}">+${esc(grupKisa(g))}</span>`;
+  }).join("");
+}
+function kesitRozeti(r) {
+  if (!GRUP_BILGI[r.grup]?.kesit_gerektirir || r.durum !== "bekleyen") return "";
+  return r.kesildi_at
+    ? `<span class="badge-kesit hazir" title="Kesildi: ${esc(formatDateFull(r.kesildi_at))}${r.kesen_adi ? ` · ${esc(r.kesen_adi)}` : ""}">Kesit hazır</span>`
+    : `<span class="badge-kesit bekliyor" title="Kesit ekibi henüz kesmedi">Kesit bekleniyor</span>`;
+}
+
+async function kalemIptal(r) {
+  if (!confirm(`${r.patoloji_no} · ${r.blok_no || "—"} · ${r.test_adi}\n\nBu istek iptal edilsin mi? (Silinir, geri alınamaz.)`)) return;
+  try {
+    await Api.deleteIstemKalem(r.kalem_id);
+    toast("İstek iptal edildi");
+    if (selId === r.kalem_id) showEmpty();
+    await loadQueue();
+  } catch (e) {
+    toast(e && e.isForbidden ? "Bu isteği iptal etme yetkin yok" : "İptal edilemedi", true);
+  }
+}
+
+// ================================================================
+// KESİT EKRANI — blok bazlı iş listesi (yüklü kuyruktan; Bekleyen/İşlemde
+// kalemler her zaman yüklü).
+//   K = kesit_gerektirir gruplar (İHK/HK/MOL/FISH) · E = ekip 'kesit' grupları
+//   kesilecek = (K ve Bekleyen ve kesildi_at boş) veya (E ve Tamamlandı değil)
+//   satır = (patoloji_no, blok_no)
+// "Kesildi" yalnız satırda görünen kalemlerin id'leriyle çağrılır (blok_kesildi).
+// ================================================================
+const grupK = (g) => Boolean(GRUP_BILGI[g]?.kesit_gerektirir);
+const grupE = (g) => GRUP_BILGI[g]?.ekip === "kesit";
+function kesitBloklari() {
+  const sinir = Date.now() - KESILDI_GUN * 86400000;
+  const m = new Map();
+  rows.forEach((r) => {
+    const K = grupK(r.grup), E = grupE(r.grup);
+    if (!K && !E) return;
+    const kesilecek = (E && r.durum !== "tamamlandi") || (K && !E && r.durum === "bekleyen" && !r.kesildi_at);
+    const kesilen = !kesilecek && r.kesildi_at && new Date(r.kesildi_at).getTime() >= sinir;
+    if (!kesilecek && !kesilen) return;
+    const key = r.patoloji_no + "\u0000" + (r.blok_no || "");
+    if (!m.has(key)) m.set(key, { key, pat: r.patoloji_no, blok: r.blok_no || "", kesilecek: [], kesilen: [] });
+    m.get(key)[kesilecek ? "kesilecek" : "kesilen"].push(r);
+  });
+  return [...m.values()];
+}
+// Bloğun en son "Kesildi" işlemindeki kalemler (aynı zaman damgası = aynı işlem).
+function sonKesim(b) {
+  if (!b.kesilen.length) return [];
+  const son = b.kesilen.reduce((m, r) => (r.kesildi_at > m ? r.kesildi_at : m), "");
+  return b.kesilen.filter((r) => r.kesildi_at === son);
+}
+// Satırın temsil ettiği (seçilen / yazdırılan) kalemler.
+const blokKalemleri = (b) => (b.kesilecek.length && kesitSekme !== "kesildi" ? b.kesilecek : sonKesim(b));
+const blokAcilMi = (b) => blokKalemleri(b).some((r) => r.oncelik === "acil" || r.oncelik === "stat");
+const enEski = (list) => list.reduce((m, r) => (!m || r.created_at < m ? r.created_at : m), null);
+
+function gorunenBloklar() {
+  let list = kesitBloklari().filter((b) =>
+    kesitSekme === "kesilecek" ? b.kesilecek.length : kesitSekme === "kesildi" ? !b.kesilecek.length : true);
+  if (searchQ) {
+    const q = searchQ.toLowerCase();
+    list = list.filter((b) => b.pat.toLowerCase().includes(q) || b.blok.toLowerCase().includes(q));
+  }
+  // Kesilecek: acil üstte, sonra en eski istek önce. Kesildi: en yeni kesim önce.
+  return list.sort((a, b) => {
+    if (!a.kesilecek.length && !b.kesilecek.length) return (sonKesim(b)[0]?.kesildi_at || "").localeCompare(sonKesim(a)[0]?.kesildi_at || "");
+    return (blokAcilMi(b) - blokAcilMi(a)) || String(enEski(blokKalemleri(a))).localeCompare(String(enEski(blokKalemleri(b))));
+  });
+}
+
+// "2 boş lam İHK: CD3, CD20 · 1 boş lam HK: PAS · Derin kesit"
+function kesitOzeti(list) {
+  const k = new Map(), e = [];
+  list.forEach((r) => {
+    if (grupE(r.grup)) { e.push(r.test_adi); return; }
+    if (!k.has(r.grup)) k.set(r.grup, []);
+    k.get(r.grup).push(r.test_adi);
+  });
+  const sira = (g) => GRUP_BILGI[g]?.sira ?? 999;
+  const parca = [...k].sort((a, b) => sira(a[0]) - sira(b[0])).map(([g, t]) => `${t.length} boş lam ${grupKisa(g)}: ${t.join(", ")}`);
+  if (e.length) parca.push(e.join(", "));
+  return parca.join(" · ");
+}
+function blokNotu(list) {
+  const goruldu = new Set(), notlar = [];
+  list.forEach((r) => { if (goruldu.has(r.istem_id)) return; goruldu.add(r.istem_id); notlar.push(...notlarOf(r)); });
+  if (!notlar.length) return "";
+  notlar.sort((a, b) => String(b.zaman || "").localeCompare(String(a.zaman || "")));
+  return notHucre({ notlar });
+}
+
+function renderKesitSatirlari(tb) {
+  gorunenBloklar().forEach((b) => {
+    const tr = document.createElement("tr");
+    tr.dataset.blok = b.key;
+    const items = blokKalemleri(b);
+    const acil = blokAcilMi(b), stat = items.some((r) => r.oncelik === "stat");
+    if (acil) tr.classList.add("row-acil");
+    const son = sonKesim(b);
+    const kesimBilgi = son.length
+      ? `<span class="kesim-bilgi">Kesildi ${esc(formatDT(son[0].kesildi_at))}${son[0].kesen_adi ? ` · ${esc(son[0].kesen_kisaltma || initials(son[0].kesen_adi))}` : ""}</span>`
+        + (canKesildi() ? `<button class="ab-geri" data-kesit-geri data-tip="Geri Al" aria-label="Son kesimi geri al">${GERI_IKON}</button>` : "")
+      : "";
+    const aksiyon = b.kesilecek.length && kesitSekme !== "kesildi"
+      ? `${canKesildi() ? `<button class="ab ab-kesildi" data-kesildi>Kesildi</button>` : ""}${son.length ? `<span class="kesim-ek">${kesimBilgi}</span>` : ""}`
+      : kesimBilgi;
+    tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-blok-check aria-label="Bloğu seç"></td>
+      <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span></td>
+      <td class="c-blok">${esc(b.blok || "—")}</td>
+      <td class="c-kesit">${esc(kesitOzeti(items))}</td>
+      <td>${acil ? `<span class="prio ${stat ? "p-stat" : "p-acil"}">${stat ? "STAT" : "ACİL"}</span>` : ""}</td>
+      <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(items))}</td>
+      <td class="c-not">${blokNotu(items)}</td>
+      <td class="c-kesit-aks"><div class="dacts">${aksiyon}</div></td>`;
+    tb.appendChild(tr);
+  });
+  if (!tb.children.length) {
+    tb.innerHTML = `<tr class="bos-satir"><td colspan="8">${kesitSekme === "kesildi" ? `Son ${KESILDI_GUN} günde kesilen blok yok.` : "Kesilecek blok yok."}</td></tr>`;
+  }
+}
+
+function blokSecimToggle(b) {
+  const ids = blokKalemleri(b).map((r) => r.kalem_id);
+  const hepsi = ids.length > 0 && ids.every((id) => bulkSelected.has(id));
+  ids.forEach((id) => (hepsi ? bulkSelected.delete(id) : bulkSelected.add(id)));
+  syncBulkUI();
+}
+
+async function blokKesildiYap(ids) {
+  if (!ids.length) { toast("Kesilecek kalem yok", true); return; }
+  try {
+    const s = await Api.blokKesildi(ids);
+    const parca = [];
+    if (s.damga) parca.push(`${s.damga} boş lam hazır`);
+    if (s.tamamlanan) parca.push(`${s.tamamlanan} kesit isteği tamamlandı`);
+    if (s.atlanan) parca.push(`${s.atlanan} atlandı`);
+    toast(`Kesildi — ${parca.join(", ") || "değişiklik yok"}`);
+    clearBulkSelection();
+    await loadQueue();
+  } catch (e) {
+    toast(e && e.code === "42501" ? "Kesildi işaretleme yetkin yok" : "Kesildi işaretlenemedi", true);
+  }
+}
+async function blokKesildiGeriAl(b) {
+  const ids = sonKesim(b).map((r) => r.kalem_id);
+  if (!ids.length) return;
+  if (!confirm(`${b.pat} · ${b.blok || "—"}\n\nSon "Kesildi" işlemi geri alınsın mı?\n(İşleme alınmış kalemlere dokunulmaz.)`)) return;
+  try {
+    const s = await Api.blokKesildiGeriAl(ids);
+    toast(`Kesim geri alındı — ${s.geri + s.damga} kalem${s.atlanan ? `, ${s.atlanan} atlandı (işleme alınmış)` : ""}`);
+    clearBulkSelection();
+    await loadQueue();
+  } catch (e) {
+    toast(e && e.code === "42501" ? "Geri alma yetkin yok" : "Geri alınamadı", true);
+  }
+}
+
+// Blok detayı: o patoloji no + bloktaki TÜM kalemler (her grup) — kesit
+// teknisyeni notları ve diğer istekleri görsün; kaleme tıklayınca detayı.
+function showBlokDetay(b) {
+  selId = null;
+  const kalemler = rows.filter((r) => r.patoloji_no === b.pat && (r.blok_no || "") === b.blok)
+    .sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
+  const notlar = blokNotlari(kalemler);
+  $("#rail").innerHTML = `<div class="rail-head"><h2>Blok ${esc(b.pat)} · ${esc(b.blok || "—")}</h2><button class="rx" id="closeDetail">×</button></div>
+    <div class="rail-body">
+      <div class="m-label">Kesilecekler</div>
+      <div class="blok-ozet">${esc(kesitOzeti(b.kesilecek)) || "—"}</div>
+      <div class="m-label" style="margin-top:16px">Bu bloktaki istekler</div>
+      <div class="blok-kalemler">${kalemler.map((r) => `<a href="#" class="blok-kalem" data-goto="${r.kalem_id}">
+        <span class="bk-test">${esc(r.test_adi)}</span>${tipTag(r.grup)}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${kesitRozeti(r)}
+      </a>`).join("")}</div>
+      <div class="m-label" style="margin-top:16px">Notlar</div>
+      <div class="notlar">${notlar || `<div class="not-bos">Not yok.</div>`}</div>
+    </div>`;
+  $("#closeDetail").onclick = showEmpty;
+  $$("#rail [data-goto]").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); const r = rows.find((x) => x.kalem_id === a.dataset.goto); if (r) showDetail(r); };
+  });
+}
+function blokNotlari(kalemler) {
+  const goruldu = new Set(), list = [];
+  kalemler.forEach((r) => { if (goruldu.has(r.istem_id)) return; goruldu.add(r.istem_id); list.push(...notlarOf(r)); });
+  list.sort((a, b) => String(b.zaman || "").localeCompare(String(a.zaman || "")));
+  return list.map((n) => `<div class="not-item"><div class="not-meta"><b>${esc(n.yazan || "—")}</b>${n.zaman ? ` · ${formatDateFull(n.zaman)}` : ""}</div><div class="not-metin">${esc(n.metin)}</div></div>`).join("");
+}
+
+// Kesit ekranında Yazdır: blok listesi (seçilen bloklar; seçim yoksa görünenler),
+// arşiv sırasıyla — patoloji no (yıl, numara), sonra blok.
+function kesitListesiYazdir() {
+  let bloklar = gorunenBloklar();
+  const secili = bloklar.filter((b) => blokKalemleri(b).some((r) => bulkSelected.has(r.kalem_id)));
+  if (secili.length) bloklar = secili;
+  if (!bloklar.length) { toast("Yazdırılacak blok yok", true); return; }
+  bloklar = bloklar.slice().sort((a, b) => yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
+  const kalemSayisi = bloklar.reduce((n, b) => n + blokKalemleri(b).length, 0);
+  $("#yazdirAlani").innerHTML = `
+    <div class="yl-bas"><div class="yl-baslik">Kesit Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
+    <div class="yl-alt">${bloklar.length} blok · ${kalemSayisi} kalem · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
+    <table class="yl-tablo">
+      <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th>Kesilecekler</th><th>Öncelik</th><th>İstendi</th></tr></thead>
+      <tbody>${bloklar.map((b, i) => {
+        const items = blokKalemleri(b);
+        const onc = items.some((r) => r.oncelik === "stat") ? "(STAT)" : blokAcilMi(b) ? "(ACİL)" : "";
+        const cls = [onc ? "acil" : "", i > 0 && bloklar[i - 1].pat !== b.pat ? "vaka-bas" : ""].filter(Boolean).join(" ");
+        return `<tr${cls ? ` class="${cls}"` : ""}>
+          <td class="yl-kutu"><span class="kutu"></span></td>
+          <td class="yl-id">${esc(b.pat)}</td>
+          <td class="yl-id">${esc(b.blok || "—")}</td>
+          <td>${esc(kesitOzeti(items))}</td>
+          <td>${onc}</td>
+          <td>${esc(formatDT(enEski(items)))}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  yazdirmayiBaslat();
+}
+
 // ---------------- Toplu aksiyonlar (İş Kuyruğu çoklu seçim) ----------------
 function renderBulkBar() {
   const bar = $("#bulkBar");
   if (!bar) return;
   const n = bulkSelected.size;
+  if (!n) secimModu = false;
   bar.classList.toggle("hidden", n === 0);
-  if (n) $("#bulkCount").textContent = `${n} seçili`;
+  const kesit = kesitEkraniMi();
+  const ilerlet = canAdvance();
+  // Kesit ekranında: Kesildi + Yazdır; uzman/asistanda durum butonları yok.
+  $("#bulkKesildiBtn").classList.toggle("hidden", !kesit || !canKesildi());
+  ["#bulkCihazaBtn", "#bulkTamamlaBtn", "#bulkGeriBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit || !ilerlet));
+  ["#bulkTekrarBtn", "#bulkSilBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit));
+  $("#bulkSilBtn").textContent = ilerlet ? "Sil" : "İptal Et";
+  if (!n) return;
+  const gorunen = getVisibleRows();
+  const tumu = gorunen.length > 0 && n === gorunen.length && gorunen.every((r) => bulkSelected.has(r.kalem_id));
+  if (kesit) {
+    const bloklar = gorunenBloklar().filter((b) => blokKalemleri(b).some((r) => bulkSelected.has(r.kalem_id))).length;
+    $("#bulkCount").textContent = `${bloklar} blok (${n} kalem) seçili${tumu ? " · görünenlerin tümü" : ""}`;
+  } else {
+    $("#bulkCount").textContent = `${n} seçili${tumu ? ` · görünen ${gorunen.length} satırın tümü` : ""}`;
+  }
 }
 
 function summarize(prefix, ok, skipped, fail) {
@@ -1147,7 +1634,7 @@ function summarize(prefix, ok, skipped, fail) {
   toast(msg, ok === 0 && fail > 0);
 }
 
-// Cihaza Al / Tamamla — mevcut tekli advance() ile aynı primitif
+// İşleme Al / Tamamla — mevcut tekli advance() ile aynı primitif
 // (Api.advanceDurum), sadece seçili+uygun (fromDurum'daki) kalemler için
 // paralel çalıştırılır. İleri aksiyonlarda (tekli davranışla simetrik) onay
 // istenmez.
@@ -1182,7 +1669,7 @@ async function bulkRevert() {
 async function bulkTekrar() {
   const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && (r.durum === "cihazda" || r.durum === "tamamlandi"));
   const skipped = bulkSelected.size - targets.length;
-  if (!targets.length) { toast("Uygun satır yok — yalnız Cihazda/Tamamlandı kalemler tekrar istenebilir", true); return; }
+  if (!targets.length) { toast("Uygun satır yok — yalnız İşlemde/Tamamlandı kalemler tekrar istenebilir", true); return; }
   const neden = prompt(`${targets.length} kalem için tekrar istensin mi?${skipped ? ` (${skipped} uygun olmayan atlanacak)` : ""}\nAynı istemden gelenler tek yeni istemde toplanır.\n\nTekrar nedeni (opsiyonel, teknisyene not olarak gider):`, "");
   if (neden === null) return;
   try {
@@ -1199,7 +1686,8 @@ async function bulkTekrar() {
 // Sil — tekli silmeyle aynı kural (canDeleteKalem): admin her kalemi
 // (Tamamlandı dahil), diğerleri kendi istemindeki Tamamlandı olmayanları.
 async function bulkDelete() {
-  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && canDeleteKalem(r));
+  // Uzman/asistan: yalnız kendi BEKLEYEN kalemleri ("İptal Et").
+  const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && canDeleteKalem(r) && (canAdvance() || r.durum === "bekleyen"));
   const skipped = bulkSelected.size - targets.length;
   if (!targets.length) { toast("Uygun satır yok", true); return; }
   const tamamlanan = targets.filter((r) => r.durum === "tamamlandi").length;
@@ -1292,7 +1780,7 @@ async function showDetail(r) {
   try { logs = await Api.getTimeline(r.kalem_id); } catch (e) { /* geçmişsiz devam */ }
   if (selId !== r.kalem_id) return; // kullanıcı başka satıra geçti
 
-  const steps = [["bekleyen", "İstendi"], ["cihazda", "Cihaza alındı"], ["tamamlandi", "Tamamlandı"]];
+  const steps = [["bekleyen", "İstendi"], ["cihazda", "İşleme alındı"], ["tamamlandi", "Tamamlandı"]];
   const order = steps.findIndex((s) => s[0] === r.durum);
   const timeFor = (key) => { const f = logs.find((l) => l.yeni_durum === key); return f ? formatDT(f.created_at) : null; };
   const tl = steps.map(([key, lbl], i) => {
@@ -1463,14 +1951,15 @@ async function showDetail(r) {
   };
 
   let toDurum = null;
-  if (r.durum === "bekleyen") toDurum = "cihazda";
-  else if (r.durum === "cihazda") toDurum = "tamamlandi";
-  const advLabel = toDurum === "cihazda" ? "Cihaza al" : toDurum === "tamamlandi" ? "Tamamla" : null;
+  if (canAdvance() && r.durum === "bekleyen") toDurum = "cihazda";
+  else if (canAdvance() && r.durum === "cihazda") toDurum = "tamamlandi";
+  const advLabel = toDurum === "cihazda" ? "İşleme al" : toDurum === "tamamlandi" ? "Tamamla" : null;
   const revertTo = canRevert(r) ? REVERT_TO[r.durum] || null : null;
-  const canDelete = canDeleteKalem(r);
+  // Uzman/asistan: yalnız kendi Bekleyen kalemini "İptal Et".
+  const canDelete = canDeleteKalem(r) && (canAdvance() || r.durum === "bekleyen");
   if (canDelete || advLabel || revertTo) {
     rail.insertAdjacentHTML("beforeend", `<div class="rail-foot">
-      ${canDelete ? `<button class="btn-ghost" id="delIstemBtn">Sil</button>` : ""}
+      ${canDelete ? `<button class="btn-ghost" id="delIstemBtn">${canAdvance() ? "Sil" : "İptal Et"}</button>` : ""}
       ${revertTo ? `<button class="btn-ghost" id="revertBtn">↩ Geri Al</button>` : ""}
       ${advLabel ? `<button class="btn-primary" id="advBtn">${advLabel}</button>` : ""}
     </div>`);
@@ -2510,7 +2999,7 @@ function renderKullaniciList() {
   wrap.innerHTML = KULLANICILAR_LIST.map((u) => `
     <div class="devrow" data-id="${u.id}">
       ${avatarHTML({ id: u.id, ad: u.ad_soyad }, "av-sm av-md")}
-      <div><div class="nm">${esc(u.ad_soyad)}${u.kisaltma ? ` <span class="kisa-chip">${esc(u.kisaltma)}</span>` : ""}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${u.is_admin ? " · Yönetici" : ""}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
+      <div><div class="nm">${esc(u.ad_soyad)}${u.kisaltma ? ` <span class="kisa-chip">${esc(u.kisaltma)}</span>` : ""}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${u.ekip ? ` · ${esc(EKIP_AD[u.ekip] || u.ekip)}` : ""}${u.is_admin ? " · Yönetici" : ""}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
       <div class="grow"></div>
       <span class="status ${u.aktif ? "aktif" : "pasif"}">${u.aktif ? "Aktif" : "Pasif"}</span>
     </div>`).join("");
@@ -2547,6 +3036,8 @@ function showKullaniciForm(existing) {
     <div class="rail-body">
       <div class="m-sec"><p class="m-label">Ad Soyad</p><input class="finput" id="kAd" value="${existing ? esc(existing.ad_soyad) : ""}" placeholder="ör. Dr. A. Yılmaz"></div>
       <div class="m-sec"><p class="m-label">Kısaltma <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— İş Kuyruğu'nda İsteyen / Uzman Adına'da görünür; opsiyonel, benzersiz</span></p><input class="finput" id="kKisa" value="${existing ? esc(existing.kisaltma || "") : ""}" placeholder="ör. FD" maxlength="10" autocomplete="off"></div>
+      <div class="m-sec"><p class="m-label">Ekip <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— "Ekibim" kapsamı; Kesit ekibi Kesit ekranında, Sekreter Hizmetler'de açılır</span></p>
+        <select class="finput" id="kEkip"><option value="">— yok —</option>${EKIPLER.map(([k, l]) => `<option value="${k}" ${existing && existing.ekip === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="m-sec"><p class="m-label">Rol</p>
         <select class="finput" id="kRol">
           <option value="uzman" ${existing && existing.rol === "uzman" ? "selected" : ""}>Uzman Patolog</option>
@@ -2590,6 +3081,7 @@ function showKullaniciForm(existing) {
     if (!ad_soyad) { toast("Ad soyad girin", true); return; }
     const rol = $("#kRol").value;
     const kisaltma = $("#kKisa").value.trim();
+    const ekip = $("#kEkip").value || null;
     // Benzersizlik veritabanında da var (kullanicilar_kisaltma_uniq); burada
     // önceden bakmak, yeni kullanıcıda Auth hesabı açıldıktan sonra
     // kayıt hatası almayı (yetim Auth hesabını) önler.
@@ -2600,11 +3092,12 @@ function showKullaniciForm(existing) {
     $("#saveKullanici").disabled = true;
     try {
       if (existing) {
-        await Api.updateKullanici(existing.id, { ad_soyad, kisaltma, rol, is_admin });
+        await Api.updateKullanici(existing.id, { ad_soyad, kisaltma, ekip, rol, is_admin });
+        if (existing.id === session.id) session.ekip = ekip;
       } else {
         const pin = $("#kPin").value.trim();
         if (!pin) { toast("PIN girin", true); $("#saveKullanici").disabled = false; return; }
-        await Api.createKullanici({ ad_soyad, kisaltma, rol, is_admin, pin });
+        await Api.createKullanici({ ad_soyad, kisaltma, ekip, rol, is_admin, pin });
       }
       toast(existing ? "Kullanıcı güncellendi" : "Kullanıcı eklendi");
       UZMANLAR = await Api.getUzmanlar();
@@ -2717,7 +3210,7 @@ function renderTgList() {
   }
   wrap.innerHTML = TEST_GRUPLARI_LIST.map((g) => `
     <div class="devrow" data-id="${g.id}">
-      <div><div class="nm">${esc(g.ad)}</div><div class="tip">${esc(g.kod)} · sıra ${g.sira}</div></div>
+      <div><div class="nm">${esc(g.ad)}${g.kisa_ad ? ` <span class="kisa-chip">${esc(g.kisa_ad)}</span>` : ""}</div><div class="tip">${esc(g.kod)} · sıra ${g.sira}${g.ekip ? ` · ${esc(EKIP_AD[g.ekip] || g.ekip)}` : " · ekip yok"}${g.kesit_gerektirir ? " · kesit gerektirir" : ""}</div></div>
       <div class="grow"></div>
       <span class="status ${g.aktif ? "aktif" : "pasif"}">${g.aktif ? "Aktif" : "Pasif"}</span>
     </div>`).join("");
@@ -2736,6 +3229,10 @@ function showTestGrubuForm(existing) {
         : `<div class="m-sec"><p class="m-label">Kod <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— küçük harf, boşluksuz</span></p><input class="finput" id="gKod" placeholder="ör. fish"></div>`}
       <div class="m-sec"><p class="m-label">Ad</p><input class="finput" id="gAd" value="${existing ? esc(existing.ad) : ""}" placeholder="ör. FISH"></div>
       <div class="m-sec"><p class="m-label">Sıra</p><input class="finput" id="gSira" type="number" value="${existing ? existing.sira : 80}"></div>
+      <div class="m-sec"><p class="m-label">Kısa ad <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— çapraz uyarı ("+HK") ve kesit özeti ("2 boş lam İHK")</span></p><input class="finput" id="gKisa" value="${existing && existing.kisa_ad ? esc(existing.kisa_ad) : ""}" placeholder="ör. HK" maxlength="12"></div>
+      <div class="m-sec"><p class="m-label">Ekip</p>
+        <select class="finput" id="gEkip"><option value="">— yok —</option>${EKIPLER.filter(([k]) => k !== "sekreter").map(([k, l]) => `<option value="${k}" ${existing && existing.ekip === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="m-sec"><label class="chkrow"><input type="checkbox" id="gKesit" ${existing && existing.kesit_gerektirir ? "checked" : ""}> Kesit gerektirir <span style="color:var(--ink-3);font-weight:400">— bu gruptaki istekler kesit ekibinin listesine "boş lam" olarak düşer</span></label></div>
     </div>
     <div class="rail-foot">
       ${existing ? `<button class="btn-ghost" id="delGrup">Sil</button><button class="btn-danger" id="toggleGrupAktif">${existing.aktif ? "Pasifleştir" : "Aktifleştir"}</button>` : `<button class="btn-ghost" id="cancelGrup">İptal</button>`}
@@ -2767,14 +3264,15 @@ function showTestGrubuForm(existing) {
     const ad = $("#gAd").value.trim();
     if (!ad) { toast("Ad girin", true); return; }
     const sira = Number($("#gSira").value) || 0;
+    const ekBilgi = { kisa_ad: $("#gKisa").value.trim() || null, ekip: $("#gEkip").value || null, kesit_gerektirir: $("#gKesit").checked };
     $("#saveGrup").disabled = true;
     try {
       if (existing) {
-        await Api.updateTestGrubu(existing.id, { ad, sira });
+        await Api.updateTestGrubu(existing.id, { ad, sira, ...ekBilgi });
       } else {
         const kod = $("#gKod").value.trim().toLowerCase();
         if (!kod) { toast("Kod girin", true); $("#saveGrup").disabled = false; return; }
-        await Api.createTestGrubu({ kod, ad, sira });
+        await Api.createTestGrubu({ kod, ad, sira, ...ekBilgi });
       }
       await refreshGruplar();
       toast(existing ? "Grup güncellendi" : "Grup oluşturuldu");
@@ -3385,7 +3883,7 @@ function istatistikHTML(s) {
       ${kart("Kalem", n(o.kalem), o.tekrar ? `${n(o.tekrar)} tekrar dahil` : "test × blok")}
       ${kart("Tamamlanan", n(o.tamamlanan), "aralıkta tamamlanan kalem")}
       ${kart("Ort. tamamlanma", fmtSure(o.ort_saat), o.medyan_saat != null ? `medyan ${fmtSure(o.medyan_saat)}` : "")}
-      ${kart("Şu an açık", n(o.acik), "Bekleyen + Cihazda")}
+      ${kart("Şu an açık", n(o.acik), "Bekleyen + İşlemde")}
     </div>
     <div class="ist-blok">
       <div class="m-label">${per === "month" ? "Aylık" : "Haftalık"} döküm</div>
@@ -3447,8 +3945,10 @@ function yazdirSirasi(a, b) {
 const kisaAd = (ad, kisa) => kisa || (ad ? initials(ad) : "—");
 
 function calismaListesiYazdir() {
-  const list = rows.filter((r) => bulkSelected.has(r.kalem_id)).sort(yazdirSirasi);
-  if (!list.length) { toast("Yazdırılacak kalem seçilmedi", true); return; }
+  if (kesitEkraniMi()) { kesitListesiYazdir(); return; }
+  const secili = rows.filter((r) => bulkSelected.has(r.kalem_id));
+  const list = (secili.length ? secili : getVisibleRows()).slice().sort(yazdirSirasi);
+  if (!list.length) { toast("Yazdırılacak kalem yok", true); return; }
   const vakaSayisi = new Set(list.map((r) => r.patoloji_no)).size;
   const ONC = { acil: "(ACİL)", stat: "(STAT)" };
   $("#yazdirAlani").innerHTML = `
@@ -3469,6 +3969,10 @@ function calismaListesiYazdir() {
         </tr>`;
       }).join("")}</tbody>
     </table>`;
+  yazdirmayiBaslat();
+}
+
+function yazdirmayiBaslat() {
   document.body.classList.add("yazdiriliyor");
   window.print();
   // Ekran düzenine dönüş bir sonraki tık/dokunuşta — bazı mobil tarayıcılarda

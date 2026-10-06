@@ -121,7 +121,7 @@
         if (!e2) {
           const { data: profile, error: e3 } = await client
             .from("kullanicilar")
-            .select("id,ad_soyad,kisaltma,rol,is_admin,avatar_url")
+            .select("id,ad_soyad,kisaltma,ekip,rol,is_admin,avatar_url")
             .eq("id", kullaniciId)
             .maybeSingle();
           if (e3 || !profile) return null;
@@ -159,7 +159,7 @@
       if (!session) return null;
       const { data: profile, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,kisaltma,rol,is_admin,avatar_url")
+        .select("id,ad_soyad,kisaltma,ekip,rol,is_admin,avatar_url")
         .eq("auth_user_id", session.user.id)
         .maybeSingle();
       if (error || !profile) return null;
@@ -236,7 +236,7 @@
     async getAllKullanicilar() {
       const { data, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,kisaltma,rol,is_admin,avatar_url,pin,email,auth_user_id,aktif")
+        .select("id,ad_soyad,kisaltma,ekip,rol,is_admin,avatar_url,pin,email,auth_user_id,aktif")
         .order("ad_soyad");
       return must(data, error);
     },
@@ -244,14 +244,14 @@
     // PIN burada artık kullanicilar.pin'e YAZILMIYOR — parola kaynağı
     // sadece Supabase Auth. Auth hesabı ayrı bir client'ta açılır (bkz.
     // signupClient), kullanicilar satırı yöneticinin kendi oturumuyla yazılır.
-    async createKullanici({ ad_soyad, kisaltma, rol, is_admin, pin }) {
+    async createKullanici({ ad_soyad, kisaltma, ekip, rol, is_admin, pin }) {
       const email = await uniqueEmailFor(ad_soyad);
       const { data: signUpData, error: e1 } = await signupClient().auth.signUp({ email, password: toAuthPassword(pin) });
       if (e1) throw e1;
       const authUserId = signUpData?.user?.id || null;
       const { data, error: e2 } = await client
         .from("kullanicilar")
-        .insert({ ad_soyad, kisaltma: kisaltma || null, rol, is_admin: Boolean(is_admin), email, auth_user_id: authUserId })
+        .insert({ ad_soyad, kisaltma: kisaltma || null, ekip: ekip || null, rol, is_admin: Boolean(is_admin), email, auth_user_id: authUserId })
         .select()
         .single();
       if (e2) throw e2;
@@ -260,10 +260,10 @@
 
     // PIN artık düzenlenemiyor (başka birinin şifresini service_role
     // olmadan değiştiremeyiz) — sadece ad/rol/yönetici.
-    async updateKullanici(id, { ad_soyad, kisaltma, rol, is_admin }) {
+    async updateKullanici(id, { ad_soyad, kisaltma, ekip, rol, is_admin }) {
       const { data, error } = await client
         .from("kullanicilar")
-        .update({ ad_soyad, kisaltma: kisaltma || null, rol, is_admin: Boolean(is_admin) })
+        .update({ ad_soyad, kisaltma: kisaltma || null, ekip: ekip || null, rol, is_admin: Boolean(is_admin) })
         .eq("id", id)
         .select("id");
       if (error) throw error;
@@ -326,16 +326,16 @@
     async getTestGruplari() {
       const { data, error } = await client
         .from("test_gruplari")
-        .select("id,kod,ad,sira,aktif")
+        .select("id,kod,ad,sira,aktif,ekip,kesit_gerektirir,kisa_ad")
         .eq("aktif", true)
         .order("sira");
       return must(data, error);
     },
 
-    async createTestGrubu({ kod, ad, sira }) {
+    async createTestGrubu({ kod, ad, sira, ekip, kesit_gerektirir, kisa_ad }) {
       const { data, error } = await client
         .from("test_gruplari")
-        .insert({ kod, ad, sira: sira ?? 0 })
+        .insert({ kod, ad, sira: sira ?? 0, ekip: ekip || null, kesit_gerektirir: Boolean(kesit_gerektirir), kisa_ad: kisa_ad || null })
         .select()
         .single();
       if (error) throw error;
@@ -346,13 +346,15 @@
     async getAllTestGruplari() {
       const { data, error } = await client
         .from("test_gruplari")
-        .select("id,kod,ad,sira,aktif")
+        .select("id,kod,ad,sira,aktif,ekip,kesit_gerektirir,kisa_ad")
         .order("sira");
       return must(data, error);
     },
 
-    async updateTestGrubu(id, { ad, sira }) {
-      const { error } = await client.from("test_gruplari").update({ ad, sira: sira ?? 0 }).eq("id", id);
+    async updateTestGrubu(id, { ad, sira, ekip, kesit_gerektirir, kisa_ad }) {
+      const { error } = await client.from("test_gruplari")
+        .update({ ad, sira: sira ?? 0, ekip: ekip || null, kesit_gerektirir: Boolean(kesit_gerektirir), kisa_ad: kisa_ad || null })
+        .eq("id", id);
       if (error) throw error;
     },
 
@@ -887,6 +889,21 @@
     // Dönen değer yeni kalemin id'si.
     async tekrarIste(kalemId, neden) {
       const { data, error } = await client.rpc("tekrar_iste", { p_kalem_id: kalemId, p_not: neden || null });
+      if (error) throw error;
+      return data;
+    },
+
+    // ---------------- Kesit ekranı (ekip_sema.sql) ----------------
+    // Yalnız verilen kalem id'leri (ekranda o blok satırında görünenler).
+    // Dönen: { tamamlanan, damga, atlanan }.
+    async blokKesildi(kalemIdleri) {
+      const { data, error } = await client.rpc("blok_kesildi", { p_kalem_ids: kalemIdleri });
+      if (error) throw error;
+      return data;
+    },
+    // Dönen: { geri, damga, atlanan }.
+    async blokKesildiGeriAl(kalemIdleri) {
+      const { data, error } = await client.rpc("blok_kesildi_geri_al", { p_kalem_ids: kalemIdleri });
       if (error) throw error;
       return data;
     },
