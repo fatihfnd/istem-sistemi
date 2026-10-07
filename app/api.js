@@ -694,12 +694,15 @@
     // bu yüzden isimler burada client-side çözülüyor (getKullaniciMap ile).
     // Sayfa sayfa okunur (PostgREST 1000 satır sınırı — bkz. listQueue).
     async getHizmetler() {
-      const istemleriOku = async () => {
+      // Kalemlerin "hizmetler" yazdırma kayıtları da (arsiv_yazdirma_sema.sql);
+      // şema henüz yoksa (ilişki bulunamadı) eski sorguya düşülür.
+      const TEMEL = "id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani";
+      const istemleriOku = async (kalemSecimi) => {
         const satirlar = [];
         for (;;) {
           const { data, error } = await client
             .from("istemler")
-            .select("id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani,istem_kalemleri(grup,tekrar_kaynagi_id)")
+            .select(`${TEMEL},istem_kalemleri(${kalemSecimi})`)
             .order("created_at", { ascending: false })
             .order("id", { ascending: true })
             .range(satirlar.length, satirlar.length + 999);
@@ -708,8 +711,17 @@
           satirlar.push(...data);
         }
       };
-      const [istemler, kullaniciMap] = await Promise.all([istemleriOku(), this.getKullaniciMap()]);
+      const oku = () => istemleriOku("id,grup,tekrar_kaynagi_id,yazdirma_kayitlari(baglam,created_at,yazdiran_id)")
+        .catch(() => istemleriOku("id,grup,tekrar_kaynagi_id"));
+      // Fatura girişinin son geri alınması (kim, ne zaman) — tablo yoksa boş.
+      const geriAlmalar = async () => {
+        const { data, error } = await client.from("fatura_gecmisi").select("istem_id,kullanici_id,created_at").eq("islem", "geri_alindi").order("created_at", { ascending: false });
+        return error ? [] : data;
+      };
+      const [istemler, kullaniciMap, geriler] = await Promise.all([oku(), this.getKullaniciMap(), geriAlmalar()]);
       const ad = (id) => kullaniciMap[id]?.ad || "—";
+      const sonGeri = new Map();
+      geriler.forEach((g) => { if (!sonGeri.has(g.istem_id)) sonGeri.set(g.istem_id, { zaman: g.created_at, kim: ad(g.kullanici_id) }); });
 
       const grupSira = Object.fromEntries(["ihc", "hk", "mol", "kesit", "hucre", "yayma", "diger"].map((g, i) => [g, i]));
       return istemler.map((i) => {
@@ -719,7 +731,18 @@
           .sort((a, b) => (grupSira[a[0]] ?? 99) - (grupSira[b[0]] ?? 99))
           .map(([grup, count]) => ({ grup, count }));
         const kalemler = i.istem_kalemleri || [];
+        // "hizmetler" bağlamı: her kalemin son kaydı; istem, TÜM kalemleri
+        // yazdırılmışsa yazdırılmış sayılır.
+        const sonKayitlar = kalemler.map((k) => (k.yazdirma_kayitlari || []).filter((y) => y.baglam === "hizmetler")
+          .reduce((m, y) => (!m || y.created_at > m.created_at ? y : m), null));
+        const yazdirilmamis = !kalemler.length || sonKayitlar.some((y) => !y);
+        const enSon = sonKayitlar.reduce((m, y) => (y && (!m || y.created_at > m.created_at) ? y : m), null);
         return {
+          kalem_idler: kalemler.map((k) => k.id).filter(Boolean),
+          yazdirilmamis,
+          yazdirma: !yazdirilmamis && enSon ? { zaman: enSon.created_at, kim: ad(enSon.yazdiran_id), kisaltma: kullaniciMap[enSon.yazdiran_id]?.kisaltma || null } : null,
+          fatura_giren_id: i.fatura_giren_id || null,
+          son_geri_alma: sonGeri.get(i.id) || null,
           // "Tekrar İste" ile açılan istem (tüm kalemleri bir tekrar) —
           // Hizmetler'de ayrıca işaretlenir.
           tekrar: kalemler.length > 0 && kalemler.every((k) => k.tekrar_kaynagi_id),
@@ -738,6 +761,48 @@
       });
     },
 
+    // Gir'i geri al — yetki (işaretleyen / yönetici) ve kayıt (fatura_gecmisi)
+    // veritabanında trigger'la (arsiv_yazdirma_sema.sql).
+    async faturaGeriAl(istemId) {
+      const { error } = await client.from("istemler")
+        .update({ fatura_girildi: false, fatura_giren_id: null, fatura_zamani: null })
+        .eq("id", istemId);
+      if (error) throw error;
+    },
+
+    // ---------------- Arşiv: blok çıkarma (arsiv_yazdirma_sema.sql) ----------------
+    async blokCikarildi(kalemIdleri) {
+      const { data, error } = await client.rpc("blok_cikarildi", { p_kalem_ids: kalemIdleri });
+      if (error) throw error;
+      return data;
+    },
+    async blokCikarildiGeriAl(kalemIdleri) {
+      const { data, error } = await client.rpc("blok_cikarildi_geri_al", { p_kalem_ids: kalemIdleri });
+      if (error) throw error;
+      return data;
+    },
+
+    // ---------------- Yazdırma kayıtları ----------------
+    // Dönen: eklenen kayıtların id'leri ("Yazdırılmadı — geri al" için).
+    async yazdirmaKaydet(kalemIdleri, baglam, yazdiranId) {
+      const ids = [];
+      for (let i = 0; i < kalemIdleri.length; i += 500) {
+        const { data, error } = await client.from("yazdirma_kayitlari")
+          .insert(kalemIdleri.slice(i, i + 500).map((k) => ({ kalem_id: k, baglam, yazdiran_id: yazdiranId })))
+          .select("id");
+        if (error) throw error;
+        ids.push(...data.map((r) => r.id));
+      }
+      return ids;
+    },
+    // RLS: yalnız kendi ve son 15 dakikalık kayıtlar silinir.
+    async yazdirmaKaydiSil(kayitIdleri) {
+      for (let i = 0; i < kayitIdleri.length; i += 200) {
+        const { error } = await client.from("yazdirma_kayitlari").delete().in("id", kayitIdleri.slice(i, i + 200));
+        if (error) throw error;
+      }
+    },
+
     async markFaturaGirildi(istemId, kullaniciId) {
       const { error } = await client
         .from("istemler")
@@ -750,6 +815,7 @@
       const channel = client
         .channel("hizmetler-realtime")
         .on("postgres_changes", { event: "*", schema: "public", table: "istemler" }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "yazdirma_kayitlari" }, onChange)
         .subscribe();
       return () => client.removeChannel(channel);
     },
@@ -1054,6 +1120,7 @@
         .on("postgres_changes", { event: "*", schema: "public", table: "istem_kalemleri" }, onChange)
         .on("postgres_changes", { event: "*", schema: "public", table: "istem_log" }, onChange)
         .on("postgres_changes", { event: "*", schema: "public", table: "istem_notlari" }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "yazdirma_kayitlari" }, onChange)
         .subscribe();
       return () => client.removeChannel(channel);
     },

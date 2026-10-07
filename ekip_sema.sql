@@ -6,9 +6,10 @@
 -- kesit_gerektirir / kisa_ad, kullanicilar.ekip ve istem_kuyruk_v'nin
 -- yeni kolonlarını okur). İDEMPOTENT'tir.
 --
--- Bu dosyanın SON HALİ geçerlidir: istem_kuyruk_v, durum değişikliği
--- kuralı (istem_kalemleri_geri_alma_kontrol). yetki_sema.sql ya da
--- ek_ozellikler_sema.sql'i yeniden çalıştırırsanız ardından bunu da çalıştırın.
+-- Durum değişikliği kuralının (istem_kalemleri_geri_alma_kontrol) son hali
+-- buradadır; istem_kuyruk_v'nin son hali arsiv_yazdirma_sema.sql'dedir.
+-- yetki_sema.sql ya da ek_ozellikler_sema.sql'i yeniden çalıştırırsanız
+-- ardından bunu ve arsiv_yazdirma_sema.sql'i de çalıştırın.
 -- ============================================================
 
 begin;
@@ -62,7 +63,7 @@ alter table test_gruplari add constraint test_gruplari_ekip_chk
 alter table kullanicilar add column if not exists ekip text;
 alter table kullanicilar drop constraint if exists kullanicilar_ekip_chk;
 alter table kullanicilar add constraint kullanicilar_ekip_chk
-  check (ekip is null or ekip in ('immun', 'histomol', 'sito', 'kesit', 'sekreter'));
+  check (ekip is null or ekip in ('immun', 'histomol', 'sito', 'kesit', 'sekreter', 'arsiv'));
 
 -- ------------------------------------------------------------
 -- 3) istem_kalemleri: kesim damgası. Doğrudan UPDATE'e AÇILMAZ (kolon
@@ -89,6 +90,15 @@ begin;
 -- 4) Kuyruk görünümü — yeni kolonlar SONA eklenir:
 -- uzman_id ("Benim İsteklerim"), kesildi_at, kesen_id, kesen_adi, kesen_kisaltma
 -- ------------------------------------------------------------
+-- arsiv_yazdirma_sema.sql çalıştıysa görünüm daha fazla kolonludur
+-- (yazdirmalar…) — o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'yazdirmalar'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -133,7 +143,10 @@ left join test_katalog tk   on tk.id = ik.test_id
 left join kullanicilar isteyen on isteyen.id = i.istem_yapan_id
 left join kullanicilar uzman   on uzman.id   = i.uzman_id
 left join kullanicilar kesen   on kesen.id   = ik.kesen_id
-left join cihazlar c        on c.id = ik.cihaz_id;
+left join cihazlar c        on c.id = ik.cihaz_id
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

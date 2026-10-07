@@ -29,9 +29,10 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Not", value: (r) => notlarOf(r).map((n) => n.yazan ? `${n.metin} (${n.yazan}, ${formatDateFull(n.zaman)})` : n.metin).join(" | ") },
   { label: "Kalite Notu", value: (r) => r.kalite_notu || "" },
   { label: "Kesildi", value: (r) => (r.kesildi_at ? `${formatDateFull(r.kesildi_at)}${r.kesen_adi ? ` · ${r.kesen_adi}` : ""}` : "") },
+  { label: "Blok Çıkarıldı", value: (r) => (r.blok_cikarildi_at ? `${formatDateFull(r.blok_cikarildi_at)}${r.cikaran_adi ? ` · ${r.cikaran_adi}` : ""}` : "") },
 ];
 // Ekipler (kullanicilar.ekip / test_gruplari.ekip — ekip_sema.sql'deki kısıtla aynı liste).
-const EKIPLER = [["immun", "İmmün"], ["histomol", "Histokimya-Moleküler"], ["sito", "Sitoloji"], ["kesit", "Kesit"], ["sekreter", "Sekreter"]];
+const EKIPLER = [["immun", "İmmün"], ["histomol", "Histokimya-Moleküler"], ["sito", "Sitoloji"], ["kesit", "Kesit"], ["arsiv", "Arşiv"], ["sekreter", "Sekreter"]];
 const EKIP_AD = Object.fromEntries(EKIPLER);
 const EMPTY_MSG = {
   kuyruk: { t: "Bir istek seç", d: "Detayını ve durum geçmişini görmek için soldan bir satıra dokun, ya da yeni istek ver." },
@@ -288,6 +289,7 @@ let colFilters = freshColFilters();
 // Kesit ekranı: kesit ekibinin grup çipi ya da kesit ekibi üyesinin "Ekibim"i.
 let kapsam = "tumu";
 let kesitSekme = "kesilecek"; // kesit ekranı: "kesilecek" | "kesildi" | "hepsi"
+let arsivSekme = "hepsi";     // arşiv ekranı: "hepsi" | "cikarilacak" | "cikarildi"
 let GRUP_BILGI = {};          // grup kodu -> {kod, ad, ekip, kesit_gerektirir, kisa_ad, sira, aktif}
 let secimModu = false;        // dokunmatik: uzun basınca açılan seçim modu
 const KESILDI_GUN = 7;        // "Kesildi" sekmesi: son kaç günün kesimleri
@@ -437,7 +439,7 @@ function syncBulkUI() {
     all.checked = visible.length > 0 && n === visible.length;
     all.indeterminate = n > 0 && n < visible.length;
   }
-  if (kesitEkraniMi()) {
+  if (kesitEkraniMi() || arsivEkraniMi()) {
     const bloklar = new Map(gorunenBloklar().map((b) => [b.key, b]));
     $$("#rows tr[data-blok]").forEach((tr) => {
       const b = bloklar.get(tr.dataset.blok); if (!b) return;
@@ -521,7 +523,7 @@ async function handleLogout() {
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
   rows = []; selId = null; searchQ = "";
   colFilters = freshColFilters();
-  kapsam = "tumu"; kesitSekme = "kesilecek"; secimModu = false;
+  kapsam = "tumu"; kesitSekme = "kesilecek"; arsivSekme = "hepsi"; secimModu = false;
   sortCol = null; sortDir = "asc"; caseView = null;
   kaliteDrafts = new Map(); notDrafts = new Map(); detailStale = false;
   eskileriGoster = false; eskiSinirMs = null; gizliEskiSayisi = 0;
@@ -693,7 +695,7 @@ function renderQueuePage() {
         <span class="eski-sayac" id="eskiSayac"></span>
       </div>
       <div class="grow"></div>
-      <button class="btn-ghost btn-sm" id="qYazdirBtn" title="Seçilenleri; seçim yoksa görünen listeyi yazdır">${YAZDIR_IKON} Yazdır</button>
+      <div id="qYazdir">${yazdirMenuHTML(true)}</div>
       <div id="qExport">${exportMenuHTML("Filtreye uyanlar (eskiler dahil)")}</div>
       <div class="zoomctl" id="zoomCtl">
         <button type="button" data-zoom="-1" aria-label="Tabloyu sıkılaştır">A−</button>
@@ -711,6 +713,7 @@ function renderQueuePage() {
       <span id="bulkCount"></span>
       <div class="grow"></div>
       <button class="act act-kesildi hidden" id="bulkKesildiBtn">Kesildi</button>
+      <button class="act act-kesildi hidden" id="bulkCikarildiBtn">Çıkarıldı</button>
       <button class="act act-cihaza" id="bulkCihazaBtn">İşleme Al</button>
       <button class="act act-tamamla" id="bulkTamamlaBtn">Tamamla</button>
       <button class="btn-ghost btn-sm" id="bulkYazdirBtn" title="Seçili kalemlerin çalışma listesini yazdır">${YAZDIR_IKON} Yazdır</button>
@@ -744,6 +747,7 @@ function renderQueuePage() {
   $("#tabs").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     if (b.dataset.ks) kesitSekme = b.dataset.ks;
+    else if (b.dataset.as) arsivSekme = b.dataset.as;
     else setDurumTab(b.dataset.f);
     clearBulkSelection();
     renderTable();
@@ -752,7 +756,11 @@ function renderQueuePage() {
     const b = e.target.closest("[data-fc]"); if (!b) return;
     filtreKaldir(b.dataset.fc);
   });
-  $("#qYazdirBtn").addEventListener("click", calismaListesiYazdir);
+  bindYazdirMenu("#qYazdir", yazdirSecim);
+  $("#bulkCikarildiBtn").addEventListener("click", () => {
+    const ids = gorunenBloklar().flatMap((b) => (b.kalemler || []).filter((r) => !r.blok_cikarildi_at).map((r) => r.kalem_id)).filter((id) => bulkSelected.has(id));
+    blokCikarildiYap(ids);
+  });
   $("#bulkKesildiBtn").addEventListener("click", () => {
     const ids = gorunenBloklar().flatMap((b) => b.kesilecek.map((r) => r.kalem_id)).filter((id) => bulkSelected.has(id));
     blokKesildiYap(ids);
@@ -771,7 +779,7 @@ function renderQueuePage() {
   bindExportMenu("#qExport", kuyruguDisaAktar);
   $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen"));
   $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda"));
-  $("#bulkYazdirBtn").addEventListener("click", calismaListesiYazdir);
+  $("#bulkYazdirBtn").addEventListener("click", () => yazdirSecim("secili"));
   $("#bulkTekrarBtn").addEventListener("click", bulkTekrar);
   $("#zilBtn").addEventListener("click", () => sesAyarla(!sesAcik()));
   renderZil();
@@ -789,11 +797,17 @@ function renderQueuePage() {
       e.stopPropagation();
       if (e.target.closest("[data-kesildi]")) { blokKesildiYap(b.kesilecek.map((r) => r.kalem_id)); return; }
       if (e.target.closest("[data-kesit-geri]")) { blokKesildiGeriAl(b); return; }
+      if (e.target.closest("[data-cikarildi]")) { blokCikarildiYap(b.kalemler.filter((r) => !r.blok_cikarildi_at).map((r) => r.kalem_id)); return; }
+      if (e.target.closest("[data-cikar-geri]")) { blokCikarildiGeriAl(b); return; }
+      if (e.target.closest("[data-ipucu]")) { toast(e.target.closest("[data-ipucu]").title); return; }
       if (e.target.closest("[data-blok-check]") || (secimModu && bulkSelected.size)) { blokSecimToggle(b); return; }
       if (e.target.closest(".c-pat")) { openCaseView(b.pat); return; }
       showBlokDetay(b);
       return;
     }
+    // Yazıcı ikonu — dokunmatikte de okunabilsin.
+    const ipucu = e.target.closest("[data-ipucu]");
+    if (ipucu) { e.stopPropagation(); toast(ipucu.title); return; }
     // Çapraz uyarı rozeti — dokunmatikte de okunabilsin.
     const capraz = e.target.closest("[data-capraz]");
     if (capraz) { e.stopPropagation(); toast(capraz.title); return; }
@@ -1068,6 +1082,10 @@ function renderQHead() {
   const head = $("#qhead");
   if (!head) return;
   const bulkAllTh = `<th class="bulkcell"><input type="checkbox" data-bulk-all aria-label="Görünen tümünü seç/kaldır" title="Görünen tümünü seç/kaldır"></th>`;
+  if (arsivEkraniMi()) {
+    head.innerHTML = `<tr>${bulkAllTh}<th>Patoloji No</th><th>Blok</th><th class="sayi">İHK<span class="genis"> için</span></th><th class="sayi">YK/HK<span class="genis"> için</span></th><th>Acil</th><th class="c-tarih">İstem tarihi</th><th></th></tr>`;
+    return;
+  }
   if (kesitEkraniMi()) {
     head.innerHTML = `<tr>${bulkAllTh}<th>Patoloji No</th><th>Blok</th><th>${kesitSekme === "kesildi" ? "Kesilenler" : "Kesilecekler"}</th><th>Öncelik</th><th>İstendi</th><th>Not</th><th></th></tr>`;
     return;
@@ -1152,7 +1170,7 @@ function filtreleVeSirala(list, { eskiDahil = false } = {}) {
 // Ekranda o an görünen satırlar (renderTable, seçim kısayolları). Kesit
 // ekranında: görünen blokların (seçilebilir) kalemleri.
 function getVisibleRows() {
-  if (kesitEkraniMi()) return gorunenBloklar().flatMap((b) => blokKalemleri(b));
+  if (kesitEkraniMi() || arsivEkraniMi()) return gorunenBloklar().flatMap((b) => blokKalemleri(b));
   return filtreleVeSirala(rows);
 }
 
@@ -1164,6 +1182,7 @@ function renderTable() {
   renderCaseBanner();
   renderFiltreCipleri();
   tb.innerHTML = "";
+  if (arsivEkraniMi()) { renderArsivSatirlari(tb); updateCounts(); syncBulkUI(); return; }
   if (kesitEkraniMi()) { renderKesitSatirlari(tb); updateCounts(); syncBulkUI(); return; }
   const acik = acikBlokHaritasi();
 
@@ -1202,7 +1221,7 @@ function renderTable() {
     const tekrarTag = r.tekrar_kaynagi_id ? TEKRAR_BADGE : "";
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
       <td class="c-durum">${durumAksiyon(r)}</td>
-      <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span></td>
+      <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${yazdirIkonu([r], "calisma")}</td>
       <td class="c-blok">${esc(r.blok_no)}${caprazRozet(r, acik)}</td>
       <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
       <td>${tipTag(r.grup)}</td>
@@ -1273,7 +1292,10 @@ function updateCounts() {
   const totalEl = $("#totalN"); if (!totalEl) return;
   // Sayaçlar görünen kapsamı yansıtır: gizli eski Tamamlandı'lar sayılmaz.
   // Başlık altı: kapsamdaki istek sayısı; Kesit ekranında kesilecek blok sayısı.
-  if (kesitEkraniMi()) {
+  if (arsivEkraniMi()) {
+    const b = arsivBloklari().filter((x) => !x.cikarildi);
+    $("#qSub").innerHTML = `<b id="totalN">${b.length}</b> blok çıkarılacak · ${b.reduce((n, x) => n + x.kalemler.length, 0)} kalem`;
+  } else if (kesitEkraniMi()) {
     const b = kesitBloklari().filter((x) => x.kesilecek.length);
     $("#qSub").innerHTML = `<b id="totalN">${b.length}</b> blok kesilecek · ${b.reduce((n, x) => n + x.kesilecek.length, 0)} kalem`;
   } else {
@@ -1336,11 +1358,13 @@ async function revertDurum(r) {
 // ================================================================
 const benimEkip = () => (session && session.ekip) || null;
 const ekipGruplari = (ekip) => Object.values(GRUP_BILGI).filter((g) => g.ekip === ekip).map((g) => g.kod);
-const ekibimVar = () => Boolean(benimEkip() && ekipGruplari(benimEkip()).length);
+// Arşiv ekibinin kendi test grubu yok — "Ekibim"i arşiv ekranıdır.
+const ekibimVar = () => Boolean(benimEkip() && (benimEkip() === "arsiv" || ekipGruplari(benimEkip()).length));
 // Uzman/asistan: Benim İsteklerim · teknisyen: Ekibim (ekibi yoksa Tümü) ·
 // yönetici: Tümü. Kesit ekibinde "Ekibim" = Kesit ekranı.
 function varsayilanKapsam() {
   if (!session || isAdmin()) return "tumu";
+  if (benimEkip() === "arsiv") return "ekibim"; // rolü ne olursa olsun arşiv ekranı
   if (session.rol === "teknisyen") return ekibimVar() ? "ekibim" : "tumu";
   if (session.rol === "uzman" || session.rol === "asistan") return "benim";
   return "tumu";
@@ -1351,9 +1375,14 @@ function kesitEkraniMi() {
   if (kapsam.startsWith("g:")) return GRUP_BILGI[kapsam.slice(2)]?.ekip === "kesit";
   return false;
 }
+// Arşiv ekranı: arşiv ekibinin "Ekibim"i (blok bazlı arşiv listesi).
+function arsivEkraniMi() {
+  return caseView === null && Boolean(session) && kapsam === "ekibim" && benimEkip() === "arsiv";
+}
 function kapsamaUyar(r) {
   if (!session) return true;
   if (kapsam === "benim") return r.istem_yapan_id === session.id || r.uzman_id === session.id;
+  if (kapsam === "ekibim" && benimEkip() === "arsiv") return grupK(r.grup) || grupE(r.grup);
   if (kapsam === "ekibim") return GRUP_BILGI[r.grup]?.ekip === benimEkip();
   if (kapsam.startsWith("g:")) return r.grup === kapsam.slice(2);
   return true;
@@ -1392,7 +1421,7 @@ const ILSK_KEY = "istem_iliskili";
 function iliskiliTercih() {
   try { return localStorage.getItem(ILSK_KEY) !== "0"; } catch (e) { return true; }
 }
-const iliskiliKapsamMi = () => caseView === null && (kapsam === "ekibim" || kapsam.startsWith("g:"));
+const iliskiliKapsamMi = () => caseView === null && !arsivEkraniMi() && (kapsam === "ekibim" || kapsam.startsWith("g:"));
 const iliskiliAktif = () => iliskiliKapsamMi() && iliskiliTercih();
 const iliskiAnahtari = (r) => (r.blok_no ? `b\u0000${r.patoloji_no}\u0000${r.blok_no}` : `i\u0000${r.istem_id}`);
 
@@ -1443,6 +1472,13 @@ function blokIliskilileri(b, items) {
 const iliskiliOzet = (list) => list.map((x) => `${grupKisa(x.grup)} ${x.test_adi} (${PILL[x.durum][1]})`).join(" · ");
 function renderDurumSekmeleri() {
   const el = $("#tabs"); if (!el) return;
+  if (arsivEkraniMi()) {
+    const b = arsivBloklari();
+    const say = { hepsi: b.length, cikarilacak: b.filter((x) => !x.cikarildi).length, cikarildi: b.filter((x) => x.cikarildi).length };
+    el.innerHTML = [["hepsi", "Hepsi"], ["cikarilacak", "Çıkarılacak"], ["cikarildi", "Çıkarıldı"]]
+      .map(([k, l]) => `<button class="${arsivSekme === k ? "on" : ""}" data-as="${k}">${l} <span class="count">${say[k]}</span></button>`).join("");
+    return;
+  }
   if (kesitEkraniMi()) {
     const b = kesitBloklari();
     const say = { kesilecek: b.filter((x) => x.kesilecek.length).length, kesildi: b.filter((x) => !x.kesilecek.length).length, hepsi: b.length };
@@ -1511,12 +1547,15 @@ function caprazRozet(r, acik) {
     return `<span class="capraz" data-capraz title="${esc(ipucu)}">+${esc(grupKisa(g))}</span>`;
   }).join("");
 }
+// Aşama: Kesit bekleniyor → Blok çıkarıldı (arşivden) → Kesit hazır.
 function kesitRozeti(r) {
   if (!GRUP_BILGI[r.grup]?.kesit_gerektirir || r.durum !== "bekleyen") return "";
-  return r.kesildi_at
-    ? `<span class="badge-kesit hazir" title="Kesildi: ${esc(formatDateFull(r.kesildi_at))}${r.kesen_adi ? ` · ${esc(r.kesen_adi)}` : ""}">Kesit hazır</span>`
-    : `<span class="badge-kesit bekliyor" title="Kesit ekibi henüz kesmedi">Kesit bekleniyor</span>`;
+  if (r.kesildi_at) return `<span class="badge-kesit hazir" title="Kesildi: ${esc(formatDateFull(r.kesildi_at))}${r.kesen_adi ? ` · ${esc(r.kesen_adi)}` : ""}">Kesit hazır</span>`;
+  if (r.blok_cikarildi_at) return blokCikarildiRozeti(r);
+  return `<span class="badge-kesit bekliyor" title="Kesit ekibi henüz kesmedi">Kesit bekleniyor</span>`;
 }
+const blokCikarildiRozeti = (r) =>
+  `<span class="badge-kesit cikti" title="Blok arşivden çıkarıldı: ${esc(formatDateFull(r.blok_cikarildi_at))}${r.cikaran_adi ? ` · ${esc(r.cikaran_adi)}` : ""}">Blok çıkarıldı</span>`;
 
 async function kalemIptal(r) {
   if (!confirm(`${r.patoloji_no} · ${r.blok_no || "—"} · ${r.test_adi}\n\nBu istek iptal edilsin mi? (Silinir, geri alınamaz.)`)) return;
@@ -1562,11 +1601,15 @@ function sonKesim(b) {
   return b.kesilen.filter((r) => r.kesildi_at === son);
 }
 // Satırın temsil ettiği (seçilen / yazdırılan) kalemler.
-const blokKalemleri = (b) => (b.kesilecek.length && kesitSekme !== "kesildi" ? b.kesilecek : sonKesim(b));
+const blokKalemleri = (b) => (b.tur === "arsiv" ? b.kalemler : b.kesilecek.length && kesitSekme !== "kesildi" ? b.kesilecek : sonKesim(b));
 const blokAcilMi = (b) => blokKalemleri(b).some((r) => r.oncelik === "acil" || r.oncelik === "stat");
 const enEski = (list) => list.reduce((m, r) => (!m || r.created_at < m ? r.created_at : m), null);
 
+// Ekrandaki blok satırları: arşiv ekranında arşiv blokları, kesit ekranında kesit blokları.
 function gorunenBloklar() {
+  return arsivEkraniMi() ? gorunenArsivBloklari() : gorunenKesitBloklari();
+}
+function gorunenKesitBloklari() {
   let list = kesitBloklari().filter((b) =>
     kesitSekme === "kesilecek" ? b.kesilecek.length : kesitSekme === "kesildi" ? !b.kesilecek.length : true);
   if (searchQ) {
@@ -1617,9 +1660,10 @@ function renderKesitSatirlari(tb) {
     const aksiyon = b.kesilecek.length && kesitSekme !== "kesildi"
       ? `${canKesildi() ? `<button class="ab ab-kesildi" data-kesildi>Kesildi</button>` : ""}${son.length ? `<span class="kesim-ek">${kesimBilgi}</span>` : ""}`
       : kesimBilgi;
+    const cikan = items.find((r) => r.blok_cikarildi_at);
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-blok-check aria-label="Bloğu seç"></td>
-      <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span></td>
-      <td class="c-blok">${esc(b.blok || "—")}</td>
+      <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span>${yazdirIkonu(items, "calisma")}</td>
+      <td class="c-blok">${esc(b.blok || "—")}${cikan ? blokCikarildiRozeti(cikan) : ""}</td>
       <td class="c-kesit">${esc(kesitOzeti(items))}${ilsk.length ? `<div class="ilsk-satir"><span class="ilsk-etiket">ilişkili</span> ${esc(iliskiliOzet(ilsk))}</div>` : ""}</td>
       <td>${acil ? `<span class="prio ${stat ? "p-stat" : "p-acil"}">${stat ? "STAT" : "ACİL"}</span>` : ""}</td>
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(items))}</td>
@@ -1677,8 +1721,8 @@ function showBlokDetay(b) {
   const notlar = blokNotlari(kalemler);
   $("#rail").innerHTML = `<div class="rail-head"><h2>Blok ${esc(b.pat)} · ${esc(b.blok || "—")}</h2><button class="rx" id="closeDetail">×</button></div>
     <div class="rail-body">
-      <div class="m-label">Kesilecekler</div>
-      <div class="blok-ozet">${esc(kesitOzeti(b.kesilecek)) || "—"}</div>
+      <div class="m-label">${b.tur === "arsiv" ? "Arşiv" : "Kesilecekler"}</div>
+      <div class="blok-ozet">${b.tur === "arsiv" ? `İHK için ${b.kalemler.filter((r) => ihkMi(r.grup)).length} · YK/HK için ${b.kalemler.filter((r) => !ihkMi(r.grup)).length}` : esc(kesitOzeti(b.kesilecek)) || "—"}</div>
       <div class="m-label" style="margin-top:16px">Bu bloktaki istekler</div>
       <div class="blok-kalemler">${kalemler.map((r) => `<a href="#" class="blok-kalem" data-goto="${r.kalem_id}">
         <span class="bk-test">${esc(r.test_adi)}</span>${tipTag(r.grup)}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${kesitRozeti(r)}
@@ -1700,11 +1744,9 @@ function blokNotlari(kalemler) {
 
 // Kesit ekranında Yazdır: blok listesi (seçilen bloklar; seçim yoksa görünenler),
 // arşiv sırasıyla — patoloji no (yıl, numara), sonra blok.
-function kesitListesiYazdir() {
-  let bloklar = gorunenBloklar();
-  const secili = bloklar.filter((b) => blokKalemleri(b).some((r) => bulkSelected.has(r.kalem_id)));
-  if (secili.length) bloklar = secili;
-  if (!bloklar.length) { toast("Yazdırılacak blok yok", true); return; }
+function kesitListesiYazdir(mod = "gorunen") {
+  let bloklar = bloklariSec(gorunenBloklar(), mod, "calisma");
+  if (!bloklar.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
   bloklar = bloklar.slice().sort((a, b) => yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
   const kalemSayisi = bloklar.reduce((n, b) => n + blokKalemleri(b).length, 0);
   $("#yazdirAlani").innerHTML = `
@@ -1726,7 +1768,218 @@ function kesitListesiYazdir() {
         </tr>`;
       }).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat();
+  yazdirmayiBaslat({ baglam: "calisma", kalemIdler: bloklar.flatMap((b) => blokKalemleri(b).map((r) => r.kalem_id)) });
+}
+// Blok satırları için mod seçimi: seçili = içinde seçili kalem olan bloklar;
+// yazdırılmamış = en az bir kalemi o bağlamda hiç yazdırılmamış bloklar.
+function bloklariSec(bloklar, mod, baglam) {
+  if (mod === "secili") return bloklar.filter((b) => blokKalemleri(b).some((r) => bulkSelected.has(r.kalem_id)));
+  if (mod === "yazdirilmamis") return bloklar.filter((b) => blokKalemleri(b).some((r) => !r.yazdirmalar?.[baglam]));
+  return bloklar;
+}
+
+// ================================================================
+// ARŞİV EKRANI — arşiv ekibinin "Ekibim"i. Blok bazlı (kesit ekranıyla aynı
+// altyapı), boya adı yok, türe göre sayı:
+//   arşiv kalemi = (kesit gerektiren grup ya da kesit grubu) VE tamamlanmamış
+//   satır = (patoloji_no, blok_no) · İHK için = ekip 'immun' grupları ·
+//   YK/HK için = diğerleri (YK + HK + MOL + FISH) · çıkarıldı = tüm kalemlerde damga
+// "Çıkarıldı" yalnız satırda görünen (damgasız) kalemlerin id'leriyle çağrılır.
+// ================================================================
+const ihkMi = (g) => GRUP_BILGI[g]?.ekip === "immun";
+const canCikar = () => isAdmin() || Boolean(session && session.rol === "teknisyen") || benimEkip() === "arsiv";
+function arsivBloklari() {
+  const m = new Map();
+  rows.forEach((r) => {
+    if (r.durum === "tamamlandi" || !(grupK(r.grup) || grupE(r.grup))) return;
+    const key = r.patoloji_no + "\u0000" + (r.blok_no || "");
+    if (!m.has(key)) m.set(key, { key, tur: "arsiv", pat: r.patoloji_no, blok: r.blok_no || "", kalemler: [] });
+    m.get(key).kalemler.push(r);
+  });
+  return [...m.values()].map((b) => Object.assign(b, { cikarildi: b.kalemler.every((r) => r.blok_cikarildi_at) }));
+}
+// Bloğun en son "Çıkarıldı" işlemindeki kalemler (aynı zaman damgası).
+function sonCikarma(b) {
+  const damgali = b.kalemler.filter((r) => r.blok_cikarildi_at);
+  if (!damgali.length) return [];
+  const son = damgali.reduce((m, r) => (r.blok_cikarildi_at > m ? r.blok_cikarildi_at : m), "");
+  return damgali.filter((r) => r.blok_cikarildi_at === son);
+}
+function gorunenArsivBloklari() {
+  let list = arsivBloklari().filter((b) => (arsivSekme === "cikarilacak" ? !b.cikarildi : arsivSekme === "cikarildi" ? b.cikarildi : true));
+  if (searchQ) {
+    const q = searchQ.toLowerCase();
+    list = list.filter((b) => b.pat.toLowerCase().includes(q) || b.blok.toLowerCase().includes(q));
+  }
+  // Çıkarılacaklar üstte (acil önce, sonra arşiv sırası: patoloji no + blok); çıkarılmışlar altta.
+  return list.sort((a, b) => (a.cikarildi - b.cikarildi) || (blokAcilMi(b) - blokAcilMi(a))
+    || yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
+}
+function renderArsivSatirlari(tb) {
+  gorunenArsivBloklari().forEach((b) => {
+    const tr = document.createElement("tr");
+    tr.dataset.blok = b.key;
+    tr.className = "arsiv-satir";
+    const ihk = b.kalemler.filter((r) => ihkMi(r.grup)).length, ykhk = b.kalemler.length - ihk;
+    const acil = blokAcilMi(b), stat = b.kalemler.some((r) => r.oncelik === "stat");
+    if (b.cikarildi) tr.classList.add("row-cikarildi");
+    else if (acil) tr.classList.add("row-acil");
+    const son = sonCikarma(b);
+    const bilgi = son.length
+      ? `<span class="kesim-bilgi">Çıkarıldı ${esc(formatDT(son[0].blok_cikarildi_at))}${son[0].cikaran_adi ? ` · ${esc(son[0].cikaran_kisaltma || initials(son[0].cikaran_adi))}` : ""}</span>`
+        + (canCikar() ? `<button class="ab-geri" data-cikar-geri data-tip="Geri Al" aria-label="Son çıkarmayı geri al">${GERI_IKON}</button>` : "")
+      : "";
+    const aksiyon = !b.cikarildi
+      ? `${canCikar() ? `<button class="ab ab-cikar" data-cikarildi>Çıkarıldı</button>` : ""}${son.length ? `<span class="kesim-ek">${bilgi}</span>` : ""}`
+      : bilgi;
+    tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-blok-check aria-label="Bloğu seç"></td>
+      <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span>${yazdirIkonu(b.kalemler, "arsiv")}</td>
+      <td class="c-blok">${esc(b.blok || "—")}</td>
+      <td class="sayi c-arsiv">${ihk || `<span class="sifir">–</span>`}</td>
+      <td class="sayi c-arsiv">${ykhk || `<span class="sifir">–</span>`}</td>
+      <td>${acil ? `<span class="prio ${stat ? "p-stat" : "p-acil"}">${stat ? "STAT" : "ACİL"}</span>` : ""}</td>
+      <td class="c-tarih" style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(b.kalemler))}</td>
+      <td class="c-kesit-aks"><div class="dacts">${aksiyon}</div></td>`;
+    tb.appendChild(tr);
+  });
+  if (!tb.children.length) {
+    tb.innerHTML = `<tr class="bos-satir"><td colspan="8">${arsivSekme === "cikarildi" ? "Çıkarılmış blok yok." : "Çıkarılacak blok yok."}</td></tr>`;
+  }
+}
+async function blokCikarildiYap(ids) {
+  if (!ids.length) { toast("Çıkarılacak kalem yok", true); return; }
+  try {
+    const s = await Api.blokCikarildi(ids);
+    toast(`Blok çıkarıldı — ${s.damga} kalem${s.atlanan ? `, ${s.atlanan} atlandı` : ""}`);
+    clearBulkSelection();
+    await loadQueue();
+  } catch (e) {
+    toast(e && e.code === "42501" ? "Blok çıkarma yetkin yok" : "İşaretlenemedi", true);
+  }
+}
+async function blokCikarildiGeriAl(b) {
+  const ids = sonCikarma(b).map((r) => r.kalem_id);
+  if (!ids.length) return;
+  if (!confirm(`${b.pat} · ${b.blok || "—"}\n\nSon "Çıkarıldı" işlemi geri alınsın mı?`)) return;
+  try {
+    const s = await Api.blokCikarildiGeriAl(ids);
+    toast(`Blok çıkarma geri alındı — ${s.geri} kalem`);
+    clearBulkSelection();
+    await loadQueue();
+  } catch (e) {
+    toast(e && e.code === "42501" ? "Geri alma yetkin yok" : "Geri alınamadı", true);
+  }
+}
+// Arşiv çıktısı: Patoloji No | Blok | İHK | YK/HK | Acil — boya adı yok,
+// patoloji no (yıl, numara) ve bloğa göre sıralı. Bağlam "arsiv".
+function arsivListesiYazdir(mod = "gorunen") {
+  let bloklar = bloklariSec(gorunenArsivBloklari(), mod, "arsiv");
+  if (!bloklar.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
+  bloklar = bloklar.slice().sort((a, b) => yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
+  $("#yazdirAlani").innerHTML = `
+    <div class="yl-bas"><div class="yl-baslik">Arşiv Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
+    <div class="yl-alt">${bloklar.length} blok · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
+    <table class="yl-tablo">
+      <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th class="yl-sayi">İHK</th><th class="yl-sayi">YK/HK</th><th>Acil</th></tr></thead>
+      <tbody>${bloklar.map((b, i) => {
+        const ihk = b.kalemler.filter((r) => ihkMi(r.grup)).length;
+        const onc = b.kalemler.some((r) => r.oncelik === "stat") ? "(STAT)" : blokAcilMi(b) ? "(ACİL)" : "";
+        const cls = [onc ? "acil" : "", i > 0 && bloklar[i - 1].pat !== b.pat ? "vaka-bas" : ""].filter(Boolean).join(" ");
+        return `<tr${cls ? ` class="${cls}"` : ""}>
+          <td class="yl-kutu"><span class="kutu"></span></td>
+          <td class="yl-id">${esc(b.pat)}</td>
+          <td class="yl-id">${esc(b.blok || "—")}</td>
+          <td class="yl-sayi">${ihk || "–"}</td>
+          <td class="yl-sayi">${b.kalemler.length - ihk || "–"}</td>
+          <td>${onc}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  yazdirmayiBaslat({ baglam: "arsiv", kalemIdler: bloklar.flatMap((b) => b.kalemler.map((r) => r.kalem_id)) });
+}
+
+// ================================================================
+// YAZDIRMA KAYDI — bağlamlar: calisma (İş Kuyruğu + Kesit ekranı) · arsiv ·
+// hizmetler. Yazdırılmamış = o bağlamda hiç kaydı olmayan kalem; satır
+// (blok/istem) içinde en az biri yazdırılmamışsa satır yazdırılmamış.
+// Tarayıcı yazdırma penceresinde "İptal"e basıldığını bildirmez — kayıt
+// yazdırma başlarken düşer, 15 sn "Yazdırılmadı — geri al" sunulur.
+// ================================================================
+const YZ_IKON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>`;
+function yazdirMenuHTML(seciliVar) {
+  return `<div class="exportbox yzbox">
+    <button class="btn-ghost btn-sm yzbtn" type="button">${YAZDIR_IKON} Yazdır ▾</button>
+    <div class="thfilter" style="right:auto;left:0">
+      <button class="thopt" type="button" data-yz="yazdirilmamis"><b>Yazdırılmamışları yazdır</b></button>
+      ${seciliVar ? `<button class="thopt" type="button" data-yz="secili">Seçilileri yazdır</button>` : ""}
+      <button class="thopt" type="button" data-yz="gorunen">Görünenleri yazdır</button>
+    </div>
+  </div>`;
+}
+function bindYazdirMenu(boxSel, onPick) {
+  const box = $(boxSel); if (!box) return;
+  const panel = box.querySelector(".thfilter");
+  box.querySelector(".yzbtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const secili = panel.querySelector('[data-yz="secili"]');
+    if (secili) secili.disabled = bulkSelected.size === 0;
+    panel.classList.toggle("open");
+  });
+  panel.querySelectorAll("[data-yz]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.classList.remove("open");
+    onPick(b.dataset.yz);
+  }));
+}
+// Satırın (kalem ya da blok) o bağlamdaki yazdırma durumu: hepsi yazdırılmışsa
+// son yazdırma bilgisiyle ikon; değilse hiçbir şey.
+function yazdirIkonu(kalemler, baglam) {
+  if (!kalemler.length) return "";
+  const kayitlar = kalemler.map((r) => r.yazdirmalar && r.yazdirmalar[baglam]);
+  if (!kayitlar.every(Boolean)) return "";
+  const son = kayitlar.reduce((m, k) => (!m || k.zaman > m.zaman ? k : m), null);
+  return yazdirIkonuHTML(son);
+}
+const yazdirIkonuHTML = (k) =>
+  `<span class="yz-ikon" data-ipucu title="Yazdırıldı · ${esc(k.kisaltma || (k.kim ? initials(k.kim) : "—"))} · ${esc(formatDT(k.zaman))}">${YZ_IKON}</span>`;
+
+async function yazdirmaKaydet(kalemIdler, baglam) {
+  const yenile = () => (currentPage === "hizmetler" ? loadHizmetler() : loadQueue());
+  let kayitIdler;
+  try {
+    kayitIdler = await Api.yazdirmaKaydet([...new Set(kalemIdler)], baglam, session.id);
+  } catch (e) {
+    toast("Yazdırma kaydı tutulamadı (liste yine de basıldı)", true);
+    return;
+  }
+  geriAlBandi(`Yazdırma kaydedildi (${kayitIdler.length} kalem)`, "Yazdırılmadı — geri al", async () => {
+    try {
+      await Api.yazdirmaKaydiSil(kayitIdler);
+      toast("Yazdırma kaydı geri alındı");
+    } catch (e) {
+      toast("Geri alınamadı (15 dakikadan eski ya da başkasının kaydı)", true);
+    }
+    await yenile();
+  });
+  await yenile();
+}
+let geriAlTimer = null;
+function geriAlBandi(metin, dugme, onGeriAl) {
+  let el = $("#geriAlBant");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "geriAlBant";
+    el.className = "geri-al-bant";
+    el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<span>${esc(metin)}</span><button type="button" class="linkbtn">${esc(dugme)}</button><button type="button" class="ub-x" aria-label="Kapat">×</button>`;
+  el.classList.add("show");
+  const kapat = () => { el.classList.remove("show"); clearTimeout(geriAlTimer); };
+  el.querySelector(".linkbtn").onclick = () => { kapat(); onGeriAl(); };
+  el.querySelector(".ub-x").onclick = kapat;
+  clearTimeout(geriAlTimer);
+  geriAlTimer = setTimeout(kapat, 15000);
 }
 
 // ---------------- Toplu aksiyonlar (İş Kuyruğu çoklu seçim) ----------------
@@ -1736,10 +1989,13 @@ function renderBulkBar() {
   const n = bulkSelected.size;
   if (!n) secimModu = false;
   bar.classList.toggle("hidden", n === 0);
-  const kesit = kesitEkraniMi();
+  const arsiv = arsivEkraniMi();
+  const kesit = kesitEkraniMi() || arsiv;
   const ilerlet = canAdvance();
-  // Kesit ekranında: Kesildi + Yazdır; uzman/asistanda durum butonları yok.
-  $("#bulkKesildiBtn").classList.toggle("hidden", !kesit || !canKesildi());
+  // Kesit ekranında: Kesildi + Yazdır; arşivde: Çıkarıldı + Yazdır;
+  // uzman/asistanda durum butonları yok.
+  $("#bulkKesildiBtn").classList.toggle("hidden", arsiv || !kesitEkraniMi() || !canKesildi());
+  $("#bulkCikarildiBtn").classList.toggle("hidden", !arsiv || !canCikar());
   ["#bulkCihazaBtn", "#bulkTamamlaBtn", "#bulkGeriBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit || !ilerlet));
   ["#bulkTekrarBtn", "#bulkSilBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit));
   $("#bulkSilBtn").textContent = ilerlet ? "Sil" : "İptal Et";
@@ -2899,6 +3155,11 @@ const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzm
 // Girilmiş = faturası girilmiş (tekrar olmayan) istemler.
 const HIZ_SEKMELER = [["bekleyen", "Bekleyen"], ["tekrar", "Tekrarlar"], ["girilmis", "Girilmiş"]];
 let hizSekme = "bekleyen";
+const HIZ_GRUPLA_KEY = "istem_hiz_grupla";
+const hizKapali = new Set(); // kapatılmış uzman grupları (oturum boyunca)
+function hizGrupla() {
+  try { return localStorage.getItem(HIZ_GRUPLA_KEY) !== "0"; } catch (e) { return true; }
+}
 function hizSekmesi(h) {
   return h.tekrar ? "tekrar" : h.fatura_girildi ? "girilmis" : "bekleyen";
 }
@@ -2957,6 +3218,8 @@ function renderHizmetlerPage() {
       <div class="sub">Faturalama özeti — her satır bir "İstek Ver" işlemini (istemler kaydını) temsil eder.</div>
       <div class="spacer"></div>
       <button class="btn-ghost btn-sm hidden" id="hizClearFiltersBtn">Filtreleri Temizle</button>
+      <label class="ilsk-anahtar" title="Her uzmanın istemleri kendi başlığı altında; başlığa tıklayınca kapanır/açılır"><input type="checkbox" id="hizGruplaTgl" ${hizGrupla() ? "checked" : ""}> Uzmana göre grupla</label>
+      <div id="hizYazdir">${yazdirMenuHTML(false)}</div>
       <div id="hizExport">${EXPORT_MENU_HTML}</div>
     </div>
     <div class="barrow">
@@ -2982,7 +3245,23 @@ function renderHizmetlerPage() {
     renderHizTable();
   });
   $("#hizClearFiltersBtn").addEventListener("click", hizClearFilters);
+  $("#hizGruplaTgl").addEventListener("change", (e) => {
+    try { localStorage.setItem(HIZ_GRUPLA_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
+    renderHizTable();
+  });
+  bindYazdirMenu("#hizYazdir", hizmetlerYazdir);
   $("#hizRows").addEventListener("click", (e) => {
+    const grup = e.target.closest("[data-hiz-grup]");
+    if (grup) {
+      const ad = grup.dataset.hizGrup;
+      if (hizKapali.has(ad)) hizKapali.delete(ad); else hizKapali.add(ad);
+      renderHizTable();
+      return;
+    }
+    const ipucu = e.target.closest("[data-ipucu]");
+    if (ipucu) { toast(ipucu.title); return; }
+    const geri = e.target.closest("[data-hiz-geri]");
+    if (geri) { const h = hizmetlerList.find((x) => x.istem_id === geri.dataset.hizGeri); if (h) faturaGeriAl(h); return; }
     const patCell = e.target.closest("[data-pat]");
     if (patCell) {
       const patNo = patCell.dataset.pat;
@@ -3077,20 +3356,82 @@ function renderHizTable() {
   if (!list.length) {
     tb.innerHTML = `<tr class="bos-satir"><td colspan="6">${hizHasActiveFilters() ? "Filtreye uyan kayıt yok." : "Bu bölümde kayıt yok."}</td></tr>`;
   }
-  list.forEach((h) => {
+  // Uzmana göre gruplama: başlık satırı (ad + sayaç), tıklayınca kapanır/açılır.
+  const gruplu = hizGrupla();
+  const gruplar = gruplu ? hizUzmanGruplari(list) : [[null, list]];
+  gruplar.forEach(([uzman, liste]) => {
+    if (gruplu) {
+      const kapali = hizKapali.has(uzman);
+      const bas = document.createElement("tr");
+      bas.className = `hiz-grup${kapali ? " kapali" : ""}`;
+      bas.dataset.hizGrup = uzman;
+      bas.innerHTML = `<td colspan="6"><span class="hg-ok" aria-hidden="true">${kapali ? "▸" : "▾"}</span>${esc(uzman)} <span class="count">${liste.length}</span></td>`;
+      tb.appendChild(bas);
+      if (kapali) return;
+    }
+    liste.forEach((h) => hizSatiriEkle(tb, h));
+  });
+  $("#hizClearFiltersBtn")?.classList.toggle("hidden", !hizHasActiveFilters());
+}
+
+const HIZ_SECILMEDI = "(uzman seçilmedi)";
+const hizUzmanAdi = (h) => (h.uzman_adi && h.uzman_adi !== "—" ? h.uzman_adi : HIZ_SECILMEDI);
+function hizUzmanGruplari(list) {
+  const m = new Map();
+  list.forEach((h) => { const u = hizUzmanAdi(h); if (!m.has(u)) m.set(u, []); m.get(u).push(h); });
+  return [...m].sort((a, b) => (a[0] === HIZ_SECILMEDI) - (b[0] === HIZ_SECILMEDI) || a[0].localeCompare(b[0], "tr"));
+}
+const canFaturaGeriAl = (h) => isAdmin() || (session && h.fatura_giren_id === session.id);
+
+function hizSatiriEkle(tb, h) {
     const tr = document.createElement("tr");
+    const geriBilgi = h.son_geri_alma ? ` · Daha önce geri alındı: ${h.son_geri_alma.kim || "—"}, ${formatDT(h.son_geri_alma.zaman)}` : "";
     const act = h.fatura_girildi
-      ? `<span style="color:var(--ink-3);font-size:12px">✓ ${esc(h.fatura_giren_adi || "—")} · ${formatDT(h.fatura_zamani)}</span>`
+      ? `<span class="hiz-girildi" title="Girdi: ${esc(h.fatura_giren_adi || "—")} · ${esc(formatDateFull(h.fatura_zamani))}${esc(geriBilgi)}">✓ ${esc(h.fatura_giren_adi || "—")} · ${formatDT(h.fatura_zamani)}</span>${canFaturaGeriAl(h) ? `<button class="ab-geri" data-hiz-geri="${h.istem_id}" data-tip="Geri Al" aria-label="Fatura girişini geri al">${GERI_IKON}</button>` : ""}`
       : `<button class="act" data-hiz="${h.istem_id}">Gir</button>`;
-    tr.innerHTML = `<td class="c-pat" data-pat="${esc(h.patoloji_no)}" style="cursor:pointer">${esc(h.patoloji_no)}</td>
+    tr.innerHTML = `<td class="c-pat" data-pat="${esc(h.patoloji_no)}" style="cursor:pointer">${esc(h.patoloji_no)}${h.yazdirma ? yazdirIkonuHTML(h.yazdirma) : ""}</td>
       ${kisiTd(h.isteyen_adi, h.isteyen_kisaltma)}
       ${kisiTd(h.uzman_adi === "—" ? null : h.uzman_adi, h.uzman_kisaltma)}
       <td>${esc(hizOzetSayilar(h))}${h.tekrar ? TEKRAR_BADGE : ""}</td>
       <td style="color:var(--ink-3);font-size:12px">${formatDT(h.created_at)}</td>
-      <td>${act}</td>`;
+      <td><div class="dacts">${act}</div></td>`;
     tb.appendChild(tr);
-  });
-  $("#hizClearFiltersBtn")?.classList.toggle("hidden", !hizHasActiveFilters());
+}
+
+async function faturaGeriAl(h) {
+  if (!confirm(`${h.patoloji_no}\n\nFatura girişi geri alınsın mı?\n(Girilmemiş olarak işaretlenir; geri alma kim/ne zaman olarak kaydedilir.)`)) return;
+  try {
+    await Api.faturaGeriAl(h.istem_id);
+    toast("Fatura girişi geri alındı");
+    await loadHizmetler();
+  } catch (e) {
+    toast(e && e.code === "42501" ? "Bu girişi yalnız işaretleyen kişi ya da yönetici geri alabilir" : "Geri alınamadı", true);
+  }
+}
+
+// Hizmetler yazdırma (bağlam "hizmetler"): uzmana göre gruplu, sekreterin
+// HBYS'ye gireceği sade liste. Basılan istemlerin TÜM kalemleri kaydedilir.
+function hizmetlerYazdir(mod = "gorunen") {
+  const gorunen = getVisibleHizmetler();
+  const list = mod === "yazdirilmamis" ? gorunen.filter((h) => h.yazdirilmamis) : gorunen;
+  if (!list.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
+  const ozet = (h) => h.ozet.map((o) => `${o.count} ${grupKisa(o.grup)}`).join(", ") || "—";
+  const gruplar = hizUzmanGruplari(list.slice().sort((a, b) => yazdirSirasi(a, b)));
+  $("#yazdirAlani").innerHTML = `
+    <div class="yl-bas"><div class="yl-baslik">Hizmetler — HBYS Giriş Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
+    <div class="yl-alt">${list.length} istem · ${gruplar.length} uzman · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
+    <table class="yl-tablo">
+      <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Uzman</th><th>Özet</th><th>Tarih</th></tr></thead>
+      <tbody>${gruplar.map(([uzman, liste]) => `<tr class="yl-grup"><td colspan="5">${esc(uzman)} (${liste.length})</td></tr>`
+        + liste.map((h) => `<tr>
+          <td class="yl-kutu"><span class="kutu"></span></td>
+          <td class="yl-id">${esc(h.patoloji_no)}</td>
+          <td>${esc(kisaAd(h.uzman_adi === "—" ? null : h.uzman_adi, h.uzman_kisaltma))}</td>
+          <td>${esc(ozet(h))}${h.tekrar ? " (tekrar)" : ""}</td>
+          <td>${esc(formatDT(h.created_at))}</td>
+        </tr>`).join("")).join("")}</tbody>
+    </table>`;
+  yazdirmayiBaslat({ baglam: "hizmetler", kalemIdler: list.flatMap((h) => h.kalem_idler || []) });
 }
 
 async function markFatura(istemId) {
@@ -3381,7 +3722,7 @@ function showTestGrubuForm(existing) {
       <div class="m-sec"><p class="m-label">Sıra</p><input class="finput" id="gSira" type="number" value="${existing ? existing.sira : 80}"></div>
       <div class="m-sec"><p class="m-label">Kısa ad <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— çapraz uyarı ("+HK") ve kesit özeti ("2 boş lam İHK")</span></p><input class="finput" id="gKisa" value="${existing && existing.kisa_ad ? esc(existing.kisa_ad) : ""}" placeholder="ör. HK" maxlength="12"></div>
       <div class="m-sec"><p class="m-label">Ekip</p>
-        <select class="finput" id="gEkip"><option value="">— yok —</option>${EKIPLER.filter(([k]) => k !== "sekreter").map(([k, l]) => `<option value="${k}" ${existing && existing.ekip === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <select class="finput" id="gEkip"><option value="">— yok —</option>${EKIPLER.filter(([k]) => k !== "sekreter" && k !== "arsiv").map(([k, l]) => `<option value="${k}" ${existing && existing.ekip === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="m-sec"><label class="chkrow"><input type="checkbox" id="gKesit" ${existing && existing.kesit_gerektirir ? "checked" : ""}> Kesit gerektirir <span style="color:var(--ink-3);font-weight:400">— bu gruptaki istekler kesit ekibinin listesine "boş lam" olarak düşer</span></label></div>
     </div>
     <div class="rail-foot">
@@ -4097,12 +4438,24 @@ function yazdirSirasi(a, b) {
 }
 const kisaAd = (ad, kisa) => kisa || (ad ? initials(ad) : "—");
 
-function calismaListesiYazdir() {
-  if (kesitEkraniMi()) { kesitListesiYazdir(); return; }
-  const secili = rows.filter((r) => bulkSelected.has(r.kalem_id));
+// Yazdır menüsünün dağıtıcısı — ekrana göre liste ve bağlam:
+//   arşiv ekranı → arsiv · kesit ekranı + diğer kuyruk görünümleri → calisma
+// mod: "yazdirilmamis" (o bağlamda kaydı olmayanlar) | "secili" | "gorunen"
+function yazdirSecim(mod) {
+  if (arsivEkraniMi()) return arsivListesiYazdir(mod);
+  if (kesitEkraniMi()) return kesitListesiYazdir(mod);
+  return calismaListesiYazdir(mod);
+}
+const YAZDIR_BOS = { yazdirilmamis: "Yazdırılmamış kayıt yok — hepsi daha önce yazdırılmış", secili: "Seçili kayıt yok", gorunen: "Yazdırılacak kayıt yok" };
+
+function calismaListesiYazdir(mod = "gorunen") {
+  const gorunen = getVisibleRows();
+  const ana = mod === "secili" ? rows.filter((r) => bulkSelected.has(r.kalem_id))
+    : mod === "yazdirilmamis" ? gorunen.filter((r) => !r.yazdirmalar?.calisma) : gorunen;
+  if (!ana.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
   // Grup / Ekibim görünümünde ilişkili kalemler de basılır, "ilişkili" işaretli
-  // (kesitçi de görsün); blokta ana kalemlerden sonra gelir.
-  const list = iliskiliEkle(secili.length ? secili : getVisibleRows()).map(({ r, ilsk }) => ({ ...r, __iliskili: ilsk }))
+  // (kesitçi de görsün); blokta ana kalemlerden sonra gelir. Kayda girmez.
+  const list = iliskiliEkle(ana).map(({ r, ilsk }) => ({ ...r, __iliskili: ilsk }))
     .sort((a, b) => yazdirSirasi({ ...a, test_adi: "" }, { ...b, test_adi: "" }) || (a.__iliskili - b.__iliskili)
       || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr"));
   if (!list.length) { toast("Yazdırılacak kalem yok", true); return; }
@@ -4127,12 +4480,14 @@ function calismaListesiYazdir() {
         </tr>`;
       }).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat();
+  yazdirmayiBaslat({ baglam: "calisma", kalemIdler: ana.map((r) => r.kalem_id) });
 }
 
-function yazdirmayiBaslat() {
+// kayit: { baglam, kalemIdler } — basılan kalemler o bağlamla kaydedilir.
+function yazdirmayiBaslat(kayit) {
   document.body.classList.add("yazdiriliyor");
   window.print();
+  if (kayit && kayit.kalemIdler.length) yazdirmaKaydet(kayit.kalemIdler, kayit.baglam);
   // Ekran düzenine dönüş bir sonraki tık/dokunuşta — bazı mobil tarayıcılarda
   // print() hemen döner ve "afterprint"e güvenmek önizlemeyi boşaltabilir.
   document.addEventListener("pointerdown", () => {

@@ -174,6 +174,7 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .note-by{display:inline-block;margin-right:5px;padding:0 4px;border-radius:4px;background:var(--line-2);color:var(--ink-3);font-size:10.5px;font-weight:700;letter-spacing:.02em;vertical-align:1px}
 .note-more{display:inline-block;margin-left:6px;padding:0 6px;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:700;white-space:nowrap;vertical-align:1px}
 .exportbox{position:relative}
+.exportbox > button{white-space:nowrap}
 .barrow.dimmed{opacity:.45;pointer-events:none}
 .case-banner{display:flex;align-items:center;gap:14px;padding:10px 26px;background:var(--accent-soft);border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)}
 .case-banner b{color:var(--accent)}
@@ -830,3 +831,42 @@ tbody tr.iliskili .c-pat, tbody tr.iliskili .c-blok{font-weight:600}
 
 /* Uzun bildirim (hata nedeni) telefonda ekrana sığsın */
 .toast{max-width:min(560px, calc(100vw - 24px));text-align:center;line-height:1.4}
+
+/* ---------------- Arşiv ekranı ---------------- */
+.c-arsiv{font-size:var(--fs-id);font-weight:700;font-variant-numeric:tabular-nums}
+thead th.sayi, td.sayi{text-align:center}
+td .sifir{color:var(--ink-3);font-weight:400}
+tbody tr.row-cikarildi > td{opacity:.5}
+tbody tr.row-cikarildi:hover > td{opacity:.8}
+.ab-cikar{border-color:color-mix(in srgb, var(--blue-i) 55%, transparent);background:var(--blue-b);color:var(--blue-i)}
+.ab-cikar:hover{border-color:var(--blue-i);background:var(--blue-b);color:var(--blue-i);filter:brightness(.96)}
+.badge-kesit.cikti{background:var(--blue-b);color:var(--blue-i);border:1px solid color-mix(in srgb, var(--blue-i) 40%, transparent)}
+
+/* Telefonda arşiv tablosu ekrana sığsın: tarih ve çıkarma bilgisi gizli
+   (satır soluk + ↺ kalır; ayrıntı bloğa dokununca). */
+@media (max-width:640px){
+  .genis{display:none}
+  th.c-tarih, td.c-tarih{display:none}
+  tr.arsiv-satir .kesim-bilgi{display:none}
+}
+
+/* ---------------- Yazdırma kaydı ---------------- */
+.yz-ikon{display:inline-flex;align-items:center;margin-left:5px;color:var(--ink-3);vertical-align:-1px;cursor:help}
+.yz-ikon:hover{color:var(--accent)}
+.yzbox .thopt:disabled{opacity:.45;cursor:not-allowed}
+.geri-al-bant{position:fixed;left:50%;bottom:78px;transform:translate(-50%, 160%);display:flex;align-items:center;gap:12px;background:var(--bar-bg);color:var(--bar-ink);font-size:13px;font-weight:560;padding:9px 10px 9px 16px;border-radius:9px;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:95;opacity:0;pointer-events:none;transition:transform .25s ease, opacity .25s ease;max-width:calc(100vw - 24px)}
+.geri-al-bant.show{transform:translate(-50%, 0);opacity:1;pointer-events:auto}
+.geri-al-bant .linkbtn{color:var(--bar-ink);white-space:nowrap}
+
+/* ---------------- Hizmetler: uzman grupları + Gir geri alma ---------------- */
+tbody tr.hiz-grup{cursor:pointer;background:var(--paper)}
+tbody tr.hiz-grup > td{padding-top:12px;font-weight:700;font-size:13px;color:var(--ink);border-bottom:1.5px solid var(--line-strong)}
+tbody tr.hiz-grup .count{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;background:var(--line-2);color:var(--ink-2);border-radius:20px;padding:1px 7px}
+tbody tr.hiz-grup .hg-ok{display:inline-block;width:16px;color:var(--ink-3)}
+tbody tr.hiz-grup.kapali > td{opacity:.75}
+.hiz-girildi{color:var(--ink-3);font-size:12px;white-space:nowrap}
+
+@media print{
+  .yl-tablo .yl-sayi{text-align:center;width:46pt}
+  .yl-tablo tr.yl-grup td{font-weight:700;font-size:10.5pt;padding-top:12pt;border-bottom:1pt solid #000;border-top:none}
+}

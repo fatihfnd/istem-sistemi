@@ -86,7 +86,7 @@ Günlük ham veri yedeğinden ayrı ve ek. Aynı altyapı: Vault'taki service_ro
 | hucre, yayma | sito | — | Hücre, Yayma |
 | kesit | kesit | — | Kesit |
 
-- Varsayılanlar yalnız kolon ilk eklendiğinde yazılır; sonra **Test Grupları** sayfasından düzenlenir (ekip, kesit gerektirir, kısa ad). Kullanıcının ekibi (`immun / histomol / sito / kesit / sekreter`) **Kullanıcılar** sayfasından atanır; sekreter girişte Hizmetler'de açılır.
+- Varsayılanlar yalnız kolon ilk eklendiğinde yazılır; sonra **Test Grupları** sayfasından düzenlenir (ekip, kesit gerektirir, kısa ad). Kullanıcının ekibi (`immun / histomol / sito / kesit / arsiv / sekreter`) **Kullanıcılar** sayfasından atanır; sekreter girişte Hizmetler'de açılır.
 - **İş Kuyruğu:** üstte kapsam çipleri (Benim İsteklerim · Ekibim · Tümü · her aktif grup), altında durum sekmeleri (Bekleyen / İşlemde / Tamamlandı / Hepsi; sayaçlar kapsama göre). Varsayılan: uzman/asistan → Benim İsteklerim, teknisyen → Ekibim, yönetici → Tümü.
 - **Kesit ekranı** (kesit grubunun çipi / kesit ekibinin "Ekibim"i): satır = patoloji no + blok; kesilecek = (kesit gerektiren grupta Bekleyen ve `kesildi_at` boş) veya (kesit grubunda Tamamlandı değil). **Kesildi** (`blok_kesildi`, yönetici + teknisyen) yalnız satırda görünen kalemlere uygulanır: kesit gerektirenlere `kesildi_at/kesen_id` (durum Bekleyen kalır → diğer ekranlarda "Kesit hazır"), kesit grubundakiler Tamamlandı. `blok_kesildi_geri_al` son işlemi geri alır (işleme alınmış kalemlere dokunmaz).
 - Aynı patoloji no + blokta başka gruptan tamamlanmamış istek varsa satırda "+HK" gibi çapraz uyarı rozeti çıkar.
@@ -110,6 +110,15 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 2. SQL Editor: `push_sema.sql` (3 parça).
 3. SQL Editor: dosyanın sonundaki "KURULUM" sorgusu (anahtar üretimi) + iki kontrol sorgusu.
 4. Teşhis: `select * from push_gonderimleri order by created_at desc limit 10;`
+
+## 1i) Arşiv ekibi, yazdırma kayıtları, Hizmetler gruplama (`arsiv_yazdirma_sema.sql`)
+`ekip_sema.sql`'den sonra, **kod deploy edilmeden önce** çalıştırın (idempotent; teslimde 3 parça). İstem kuyruğu görünümünün (`istem_kuyruk_v`) son hali bu dosyadadır; `ekip_sema.sql` yeniden çalıştırılırsa görünümü geri almaz.
+
+- **Arşiv ekibi** (`kullanicilar.ekip = 'arsiv'`, Kullanıcılar sayfasından): "Ekibim" arşiv ekranıdır ve rolü ne olursa olsun varsayılan açılır. Satır = patoloji no + blok; kapsam = kesit gerektiren gruplar + kesit grubu, tamamlanmamış tüm kalemler. Sütunlar: İHK için (ekibi `immun` olan gruplar) · YK/HK için (geri kalanı: YK, HK, MOL, FISH) · Acil · İstem tarihi. Boya adı gösterilmez.
+- Sekmeler Hepsi (varsayılan) / Çıkarılacak / Çıkarıldı; çıkarılmışlar altta ve soluk. **Çıkarıldı** (`blok_cikarildi`: yönetici, teknisyen ya da arşiv ekibi) satırda görünen damgasız kalemlere `blok_cikarildi_at/blok_cikaran_id` yazar; ↺ son çıkarmayı geri alır. Kesit ve diğer ekranlarda aşama: Kesit bekleniyor → **Blok çıkarıldı** → Kesit hazır.
+- **Yazdırma kaydı** (`yazdirma_kayitlari`): her baskıda basılan kalemler bağlamıyla kaydedilir — `calisma` (İş Kuyruğu ve Kesit ekranı), `arsiv`, `hizmetler`. Yazdır menüsü: **Yazdırılmamışları yazdır** (o bağlamda hiç kaydı olmayanlar), Seçilileri, Görünenleri. Bir satırın tüm kalemleri yazdırılmışsa yazıcı ikonu çıkar (üzerinde / dokununca kim, ne zaman). Tarayıcı yazdırma penceresinde "İptal"i bildirmediği için kayıt baskı başlarken düşer; 15 sn "Yazdırılmadı — geri al" bandı çıkar (kişi yalnız kendi, 15 dakikadan yeni kayıtlarını silebilir). İlişkili satırlar basılır ama kaydedilmez.
+- Arşiv çıktısı: Patoloji No | Blok | İHK | YK/HK | Acil, patoloji no ve bloğa göre sıralı.
+- **Hizmetler:** "Uzmana göre grupla" (varsayılan açık, tarayıcıda hatırlanır; başlığa tıklayınca kapanır). Yazdır (bağlam `hizmetler`): uzmana göre gruplu Patoloji No | Uzman | Özet ("3 İHK, 1 HK") | Tarih. Girilmiş satırdaki ↺ girişi geri alır — yalnız işaretleyen kişi ya da yönetici (veritabanında trigger ile zorunlu); her giriş ve geri alma `fatura_gecmisi`'ne kim/ne zaman olarak yazılır.
 
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):
