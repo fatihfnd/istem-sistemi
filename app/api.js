@@ -29,6 +29,20 @@
   // RLS bir DELETE'i reddettiğinde PostgREST hata DÖNMEZ — sadece 0 satır
   // siler. Silme çağrıları bu yüzden .select("id") ile dönen satırları
   // kontrol eder; hiç satır dönmediyse bu hatayı fırlatır.
+  // kullanicilar satırı → uygulamanın oturum nesnesi (bkz. login / getCurrentAuthSession).
+  const PROFIL_KOLONLARI = "id,ad_soyad,kisaltma,ekip,rol,is_admin,avatar_url";
+  function profilOturumu(p) {
+    return {
+      id: p.id,
+      ad_soyad: p.ad_soyad,
+      kisaltma: p.kisaltma || null,
+      ekip: p.ekip || null,
+      rol: p.rol,
+      is_admin: Boolean(p.is_admin),
+      avatar_url: p.avatar_url || null,
+    };
+  }
+
   function forbiddenError() {
     const e = new Error("Bu işlem için yetkiniz yok");
     e.isForbidden = true;
@@ -107,6 +121,10 @@
       return must(data, error);
     },
 
+    // Oturum (uygulama profili) TEK yerden kurulur — giriş ve sayfa yüklemesi
+    // aynı alanları döner. (Eskiden ekip/kisaltma sorgulanıp burada
+    // atılıyordu → herkes "ekibiniz atanmamış" görüyordu.)
+    // NOT: profil sorgularının select'i ile bu alanlar birlikte güncellenmeli.
     async login(kullaniciId, pin) {
       const { data: row, error: e1 } = await client
         .from("kullanicilar_login_v")
@@ -121,11 +139,11 @@
         if (!e2) {
           const { data: profile, error: e3 } = await client
             .from("kullanicilar")
-            .select("id,ad_soyad,kisaltma,ekip,rol,is_admin,avatar_url")
+            .select(PROFIL_KOLONLARI)
             .eq("id", kullaniciId)
             .maybeSingle();
           if (e3 || !profile) return null;
-          return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin), avatar_url: profile.avatar_url || null };
+          return profilOturumu(profile);
         }
       }
 
@@ -159,11 +177,11 @@
       if (!session) return null;
       const { data: profile, error } = await client
         .from("kullanicilar")
-        .select("id,ad_soyad,kisaltma,ekip,rol,is_admin,avatar_url")
+        .select(PROFIL_KOLONLARI)
         .eq("auth_user_id", session.user.id)
         .maybeSingle();
       if (error || !profile) return null;
-      return { id: profile.id, ad_soyad: profile.ad_soyad, rol: profile.rol, is_admin: Boolean(profile.is_admin), avatar_url: profile.avatar_url || null };
+      return profilOturumu(profile);
     },
 
     // ---------------- Kendi profilim (herkes, sadece kendi hesabı) ----------------

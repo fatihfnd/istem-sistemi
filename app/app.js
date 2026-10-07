@@ -534,6 +534,7 @@ async function handleLogout() {
 // ---------------- App init ----------------
 async function initApp(user) {
   session = user;
+  profilSonOkuma = Date.now();
   if (window.Tema) Tema.kullaniciYukle(user.id); // kişisel tema/mod/yoğunluk
   $("#authOverlay").classList.add("hidden");
   $("#appRoot").classList.remove("hidden");
@@ -590,6 +591,33 @@ function gruplariUygula(list) {
   GRUP_BILGI = Object.fromEntries(list.map((g) => [g.kod, g]));
 }
 
+// ---------------- Profil tazeleme ----------------
+// Profil her SAYFA YÜKLEMESİNDE zaten veritabanından okunur (boot →
+// getCurrentAuthSession). Uygulama günlerce açık kalırsa diye ayrıca: uygulama
+// içinde sayfa değiştirirken ve uygulamaya geri dönülünce (en sık dakikada bir).
+// Ekip, rol, yönetici yetkisi ya da kısaltma değiştiyse menü, çipler ve
+// varsayılan kapsam hemen yenilenir.
+let profilSonOkuma = 0;
+async function profilTazele() {
+  if (!session || Date.now() - profilSonOkuma < 60000) return;
+  profilSonOkuma = Date.now();
+  let yeni;
+  try { yeni = await Api.getCurrentAuthSession(); } catch (e) { return; }
+  if (!yeni || !session || yeni.id !== session.id) return;
+  const degisen = ["ad_soyad", "kisaltma", "ekip", "rol", "is_admin", "avatar_url"].filter((k) => (yeni[k] ?? null) !== (session[k] ?? null));
+  if (!degisen.length) return;
+  const yetkiDegisti = degisen.some((k) => k === "ekip" || k === "rol" || k === "is_admin");
+  Object.assign(session, yeni);
+  renderMe();
+  $("#meName").textContent = session.ad_soyad;
+  $("#meRole").textContent = (ROL_LABEL[session.rol] || session.rol) + (session.is_admin ? " · Yönetici" : "");
+  applyRoleUI();
+  if (!pageAllowed(currentPage)) { navigate("kuyruk"); return; }
+  if (yetkiDegisti) kapsam = varsayilanKapsam();
+  if (currentPage === "kuyruk") renderTable();
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") profilTazele(); });
+
 function scheduleReload() {
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(loadQueue, 150);
@@ -607,6 +635,7 @@ async function refreshGruplar() {
 
 // ---------------- Router ----------------
 function navigate(page) {
+  profilTazele(); // arka planda — ekip/rol değiştiyse çıkış-giriş gerekmesin
   if (!pageAllowed(page)) page = "kuyruk";
   currentPage = page;
   $$("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.page === page));
