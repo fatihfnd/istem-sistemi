@@ -4021,20 +4021,31 @@ async function kkOnizle() {
     return;
   }
   kkSatirlar = kontrolEslestir(liste, kkHavuz);
-  renderKkOnizleme();
+  kkElle = false;
+  renderKkOnizleme(false);
 }
 
-// Seçimlere göre güncel tablo: aynı teste birden çok satır düşerse listede
-// SONRA gelen geçerli, öncekiler "çakışma".
+// Seçimlere göre güncel durum. Aynı teste birden çok satır bağlıysa HEPSİ
+// "çakışma" — kullanıcı hangisinin kullanılacağını seçene ya da birini
+// atlayana kadar hiçbiri kaydedilmez. Çakışmaya düşen satır, çözülünce de
+// Çakışma bölümünde kalır (cakismaTest) ki seçim görünür olsun.
 function kkDurum() {
   const byId = new Map(kkHavuz.map((t) => [t.id, t]));
-  const son = new Map();
-  kkSatirlar.forEach((s) => { if (s.secim) son.set(s.secim, s); });
+  const testSatirlari = new Map();
+  kkSatirlar.forEach((s) => {
+    if (!s.secim || s.yol === "tabyok") return;
+    if (!testSatirlari.has(s.secim)) testSatirlari.set(s.secim, []);
+    testSatirlari.get(s.secim).push(s);
+  });
   const d = { byId, eslesen: [], degisecek: [], ayni: [], eslesmeyen: [], cakisma: [], tabYok: [] };
   kkSatirlar.forEach((s) => {
     if (s.yol === "tabyok") { d.tabYok.push(s); return; }
     if (!s.secim) { d.eslesmeyen.push(s); return; }
-    if (son.get(s.secim) !== s) { d.cakisma.push(s); return; }
+    if (testSatirlari.get(s.secim).length > 1) {
+      if (!s.cakismaTest) s.cakismaTest = s.secim;
+      d.cakisma.push(s);
+      return;
+    }
     d.eslesen.push(s);
     const t = byId.get(s.secim);
     ((t.kontrol || "") === s.kontrol ? d.ayni : d.degisecek).push(s);
@@ -4046,6 +4057,11 @@ function kkTestEtiketi(t) {
   return `${esc(t.ad)}${t.klon ? ` <small class="kk-klon">${esc(t.klon)}</small>` : ""}${t.aktif ? "" : ` <small class="kk-pasif">pasif</small>`}`;
 }
 const kkKontrolHucre = (v) => (v ? esc(v) : `<span class="kk-bos">boş</span>`);
+// "CD68 (KP1)" ↔ katalogda klonu KP1 olan CD68: çakışmada ipucu.
+function kkKlonUyumu(s, t) {
+  const m = /\(([^)]*)\)/.exec(s.ad);
+  return Boolean(m && t && t.klon && antikorAnahtar(m[1]) === antikorAnahtar(t.klon));
+}
 
 function kkSecenekler(s) {
   const grupAd = Object.fromEntries(GROUPS);
@@ -4058,44 +4074,75 @@ function kkSecenekler(s) {
     + [...gruplar].map(([g, list]) => `<optgroup label="${esc(grupAd[g] || TIP[g] || g)}">${list.map(opt).join("")}</optgroup>`).join("");
 }
 
-const KK_YOL = { yok: "eşleşmedi", belirsiz: "birden çok aday", parantez: "parantez dışı eşleşti" };
+const KK_YOL = { tam: "doğrudan eşleşti", yok: "eşleşmedi", belirsiz: "birden çok aday", parantez: "parantez dışı eşleşti" };
+let kkElle = false; // önizlemede elle seçim yapıldı mı (İptal'de sorulur)
 
-function renderKkOnizleme() {
+function renderKkOnizleme(konumuKoru = true) {
+  const wrap = $("#kkWrap");
+  const y = konumuKoru ? wrap.scrollTop : 0;
   const d = kkDurum();
-  const elle = kkSatirlar.filter((s) => s.yol === "yok" || s.yol === "belirsiz" || s.yol === "parantez");
-  const tamDegisecek = d.degisecek.filter((s) => s.yol === "tam");
-  const tamAyni = d.ayni.filter((s) => s.yol === "tam");
+  const cakismali = kkSatirlar.filter((s) => s.cakismaTest);
+  const elle = kkSatirlar.filter((s) => !s.cakismaTest && (s.yol === "yok" || s.yol === "belirsiz" || s.yol === "parantez"));
+  const tamDegisecek = d.degisecek.filter((s) => s.yol === "tam" && !s.cakismaTest);
+  const tamAyni = d.ayni.filter((s) => s.yol === "tam" && !s.cakismaTest);
   // Katalogda hiç karşılığı olmayan (ve elle bağlanmamış) satırlar — Toplu Ekle için.
   const yoklar = d.eslesmeyen.filter((s) => s.yol === "yok");
+  // Çakışma grupları (ilk bağlandıkları teste göre); çözülmemiş = o teste hâlâ >1 satır bağlı.
+  const cGruplar = new Map();
+  cakismali.forEach((s) => { if (!cGruplar.has(s.cakismaTest)) cGruplar.set(s.cakismaTest, []); cGruplar.get(s.cakismaTest).push(s); });
+  const cozulmemis = [...cGruplar].filter(([tid]) => d.cakisma.some((s) => s.secim === tid));
   const sonuc = (s) => {
     if (!s.secim) return `<span class="kk-rozet atla">atlanacak</span>`;
-    if (d.cakisma.includes(s)) return `<span class="kk-rozet uyari">çakışma</span>`;
+    if (d.cakisma.includes(s)) return `<span class="kk-rozet uyari">seçim bekliyor</span>`;
     return d.degisecek.includes(s) ? `<span class="kk-rozet degis">değişecek</span>` : `<span class="kk-rozet">aynı</span>`;
   };
-  $("#kkWrap").innerHTML = `
-    <div class="kk-ozet">
-      <span><b>${kkSatirlar.length}</b> satır</span>
-      <span><b>${d.eslesen.length}</b> eşleşen</span>
-      <span class="degis"><b>${d.degisecek.length}</b> değişecek</span>
-      <span><b>${d.ayni.length}</b> aynı kalacak</span>
-      <span class="${d.eslesmeyen.length ? "uyari" : ""}"><b>${d.eslesmeyen.length}</b> eşleşmeyen</span>
-      ${d.cakisma.length ? `<span class="uyari"><b>${d.cakisma.length}</b> çakışma</span>` : ""}
-      ${d.tabYok.length ? `<span class="uyari"><b>${d.tabYok.length}</b> okunamayan</span>` : ""}
+  const secici = (s) => `<select class="finput kk-sec" data-kk="${kkSatirlar.indexOf(s)}">${kkSecenekler(s)}</select>`;
+  const n = d.degisecek.length;
+
+  wrap.innerHTML = `
+    <div class="kk-bar">
+      <div class="kk-ozet">
+        <span><b>${kkSatirlar.length}</b> satır</span>
+        <span><b>${d.eslesen.length}</b> eşleşen</span>
+        <span class="degis"><b>${n}</b> değişecek</span>
+        <span><b>${d.ayni.length}</b> aynı kalacak</span>
+        <span class="${d.eslesmeyen.length ? "uyari" : ""}"><b>${d.eslesmeyen.length}</b> eşleşmeyen</span>
+        ${cozulmemis.length ? `<button type="button" class="kk-cip uyari" id="kkCakismaCip" title="Çakışma bölümüne git"><b>${cozulmemis.length}</b> çakışma — seçim bekliyor</button>` : ""}
+        ${d.tabYok.length ? `<span class="uyari"><b>${d.tabYok.length}</b> okunamayan</span>` : ""}
+      </div>
+      <div class="kk-bar-ikincil">
+        <button class="btn-ghost btn-sm" id="kkDuzenle">← Listeyi düzenle</button>
+        ${yoklar.length ? `<button class="btn-ghost btn-sm" id="kkKopyala" title="Katalogda hiç bulunmayanları 'Toplu Ekle'ye yapıştırmak için">Katalogda olmayanları kopyala (${yoklar.length})</button>` : ""}
+      </div>
+      <div class="kk-bar-aks">
+        <button class="btn-ghost" id="kkIptal">İptal</button>
+        <button class="btn-primary" id="kkUygula" ${n ? "" : "disabled"}>${n ? `${n} kontrolü kaydet` : "Kaydedilecek değişiklik yok"}</button>
+      </div>
     </div>
+    ${cGruplar.size ? `<div class="kk-bolum" id="kkCakisma"><h3>Çakışma <span class="count">${cGruplar.size}</span></h3>
+      <p class="kk-not">Aynı teste birden çok satır bağlandı. Hangisinin kullanılacağını seçin ("Bunu kullan" diğerlerini atlar) ya da satırları başka teste bağlayın / atlayın. Çözülmeden kaydedilmez.</p>
+      ${[...cGruplar].map(([tid, satirlar]) => {
+        const t = d.byId.get(tid);
+        const bekliyor = d.cakisma.some((s) => s.secim === tid);
+        return `<div class="kk-cgrup${bekliyor ? " bekliyor" : ""}">
+          <div class="kk-cbas">${kkTestEtiketi(t)}<span class="kk-cmevcut">mevcut kontrol: ${kkKontrolHucre(t.kontrol)}</span>${bekliyor ? `<span class="kk-rozet uyari">seçim bekliyor</span>` : `<span class="kk-rozet">çözüldü</span>`}</div>
+          <div class="kk-kaydir"><table class="kk-tablo kk-ctablo"><tbody>${satirlar.map((s) => `<tr>
+            <td class="kk-no">${s.no}</td>
+            <td><b>${esc(s.ad)}</b>${kkKlonUyumu(s, t) ? `<div class="kk-yol">klon katalogla aynı</div>` : ""}</td>
+            <td>${kkKontrolHucre(s.kontrol)}</td>
+            <td><button class="btn-ghost btn-sm" data-kk-kullan="${kkSatirlar.indexOf(s)}" ${s.secim === tid && !bekliyor ? "disabled" : ""}>Bunu kullan</button></td>
+            <td>${secici(s)}</td>
+            <td>${sonuc(s)}</td></tr>`).join("")}</tbody></table></div>
+        </div>`;
+      }).join("")}</div>` : ""}
     ${elle.length ? `<div class="kk-bolum"><h3>Elle bakılacak <span class="count">${elle.length}</span></h3>
       <p class="kk-not">Eşleşmeyen, birden çok adayı olan ya da parantez dışı eşleşen satırlar. Katalogdaki bir teste bağlayın ya da "Atla"da bırakın — eşleşmeyenler kataloğa eklenmez.</p>
       <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Kontrol</th><th>Katalogdaki test</th><th>Mevcut kontrol</th><th></th></tr></thead><tbody>
       ${elle.map((s) => {
         const t = s.secim && d.byId.get(s.secim);
         return `<tr><td class="kk-no">${s.no}</td><td><b>${esc(s.ad)}</b><div class="kk-yol">${KK_YOL[s.yol]}</div></td><td>${kkKontrolHucre(s.kontrol)}</td>
-          <td><select class="finput kk-sec" data-kk="${kkSatirlar.indexOf(s)}">${kkSecenekler(s)}</select></td>
-          <td>${t ? kkKontrolHucre(t.kontrol) : ""}</td><td>${sonuc(s)}</td></tr>`;
+          <td>${secici(s)}</td><td>${t ? kkKontrolHucre(t.kontrol) : ""}</td><td>${sonuc(s)}</td></tr>`;
       }).join("")}
-      </tbody></table></div></div>` : ""}
-    ${d.cakisma.length ? `<div class="kk-bolum"><h3>Çakışma <span class="count">${d.cakisma.length}</span></h3>
-      <p class="kk-not">Aynı teste birden çok satır düştü; listede sonra gelen satır geçerli, bunlar yok sayılır.</p>
-      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Kontrol</th><th>Katalogdaki test</th></tr></thead><tbody>
-      ${d.cakisma.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkKontrolHucre(s.kontrol)}</td><td>${kkTestEtiketi(d.byId.get(s.secim))}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     ${d.tabYok.length ? `<div class="kk-bolum"><h3>Okunamayan satırlar <span class="count">${d.tabYok.length}</span></h3>
       <p class="kk-not">Kontrol sütunu yok (TAB ile ayrılmamış) — atlandı. Excel'de iki sütunu birlikte seçip kopyalayın.</p>
@@ -4105,37 +4152,60 @@ function renderKkOnizleme() {
       ${tamDegisecek.map((s) => { const t = d.byId.get(s.secim); return `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(t)}</td><td class="kk-eski">${kkKontrolHucre(t.kontrol)}</td><td><b>${kkKontrolHucre(s.kontrol)}</b></td></tr>`; }).join("")}
       </tbody></table></div>` : `<p class="kk-not">Doğrudan eşleşenlerde değişecek kontrol yok.</p>`}</div>
     ${tamAyni.length ? `<details class="kk-bolum"><summary>Aynı kalacak <span class="count">${tamAyni.length}</span></summary>
-      <div class="kk-kaydir"><table class="kk-tablo"><tbody>${tamAyni.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(d.byId.get(s.secim))}</td><td>${kkKontrolHucre(s.kontrol)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
-    <div class="kk-aks">
-      <button class="btn-ghost" id="kkDuzenle">← Listeyi düzenle</button>
-      ${yoklar.length ? `<button class="btn-ghost" id="kkKopyala" title="Katalogda hiç bulunmayanları 'Toplu Ekle'ye yapıştırmak için">Katalogda olmayanları kopyala (${yoklar.length})</button>` : ""}
-      <button class="btn-primary" id="kkUygula" ${d.degisecek.length ? "" : "disabled"}>${d.degisecek.length ? `Uygula — ${d.degisecek.length} testin kontrolü değişecek` : "Değişecek kontrol yok"}</button>
-    </div>`;
+      <div class="kk-kaydir"><table class="kk-tablo"><tbody>${tamAyni.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(d.byId.get(s.secim))}</td><td>${kkKontrolHucre(s.kontrol)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}`;
+  wrap.scrollTop = y;
 
   $$("#kkWrap [data-kk]").forEach((sel) => {
     const s = kkSatirlar[Number(sel.dataset.kk)];
     sel.value = s.secim || "";
-    sel.onchange = () => { s.secim = sel.value; renderKkOnizleme(); };
+    sel.onchange = () => { s.secim = sel.value; kkElle = true; renderKkOnizleme(); };
   });
-  $("#kkDuzenle").onclick = kkGirisGoster;
+  // "Bunu kullan": bu satır gruptaki teste bağlanır, o teste bağlı diğerleri atlanır.
+  $$("#kkWrap [data-kk-kullan]").forEach((b) => {
+    b.onclick = () => {
+      const s = kkSatirlar[Number(b.dataset.kkKullan)];
+      const tid = s.cakismaTest;
+      kkSatirlar.forEach((x) => { if (x !== s && x.secim === tid) x.secim = ""; });
+      s.secim = tid;
+      kkElle = true;
+      renderKkOnizleme();
+    };
+  });
+  const cakismayaGit = () => {
+    const el = $("#kkCakisma"); if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.classList.remove("vurgu"); void el.offsetWidth; el.classList.add("vurgu");
+  };
+  $("#kkCakismaCip")?.addEventListener("click", cakismayaGit);
+  $("#kkDuzenle").onclick = () => { kkGirisGoster(); $("#kkWrap").scrollTop = 0; };
+  $("#kkIptal").onclick = () => {
+    if (kkElle && !confirm("Önizlemedeki seçimler kaybolacak, hiçbir şey kaydedilmeyecek. Çıkılsın mı?")) return;
+    kkMetin = ""; kkSatirlar = []; kkElle = false;
+    renderTestKatalogPage();
+  };
   $("#kkKopyala")?.addEventListener("click", () => {
     const metin = yoklar.map((s) => s.ad).join("\n");
     panoyaKopyala(metin, `${yoklar.length} ad kopyalandı — Toplu Ekle'ye yapıştırabilirsiniz`, () => {
       // Pano izni yoksa: liste seçili bir kutuda — elle kopyalanır.
       $("#kkKopyaKutu")?.remove();
       $("#kkKopyaNot")?.remove();
-      $(".kk-aks").insertAdjacentHTML("afterend", `<p class="kk-not" id="kkKopyaNot" style="margin-top:12px">Panoya yazılamadı — listeyi buradan kopyalayın (Ctrl+C):</p><textarea id="kkKopyaKutu" class="kk-metin" style="min-height:120px" readonly>${esc(metin)}</textarea>`);
+      $(".kk-bar").insertAdjacentHTML("afterend", `<p class="kk-not" id="kkKopyaNot" style="margin-top:12px">Panoya yazılamadı — listeyi buradan kopyalayın (Ctrl+C):</p><textarea id="kkKopyaKutu" class="kk-metin" style="min-height:120px" readonly>${esc(metin)}</textarea>`);
       $("#kkKopyaKutu").select();
     });
   });
   $("#kkUygula").onclick = async () => {
+    if (cozulmemis.length) {
+      toast(`${cozulmemis.length} çakışma çözülmeden kaydedilemez — hangi satırın kullanılacağını seçin ya da birini atlayın`, true);
+      cakismayaGit();
+      return;
+    }
     const liste = d.degisecek.map((s) => ({ id: s.secim, kontrol: s.kontrol || null }));
-    if (!confirm(`${liste.length} testin kontrolü güncellenecek. Devam edilsin mi?`)) return;
+    if (!confirm(`${liste.length} testin kontrolü kaydedilecek. Devam edilsin mi?`)) return;
     $("#kkUygula").disabled = true;
     try {
       const r = await Api.katalogKontrolYukle(liste);
       toast(`${r.guncellenen} testin kontrolü güncellendi`);
-      kkMetin = ""; kkSatirlar = [];
+      kkMetin = ""; kkSatirlar = []; kkElle = false;
       renderTestKatalogPage();
     } catch (e) {
       toast(e && e.code === "42501" ? "Kontrol listesini yalnız yönetici yükleyebilir" : "Kaydedilemedi", true);

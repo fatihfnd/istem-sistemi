@@ -881,7 +881,28 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
 .kontrol{font-style:italic;font-family:var(--sans)}
 
 /* ---------------- Kontrol listesi yükle ---------------- */
-.kk-wrap{padding:6px 26px 40px;max-width:1180px}
+/* Kendi kaydırma kabı: .app taşanı keser (overflow:hidden), her sayfa
+   kendi kabını getirir (.tablewrap, .devlist …). */
+.kk-wrap{flex:1;min-height:0;overflow-y:auto;padding:0 26px 40px}
+.kk-wrap > *{max-width:1180px}
+/* Sayaç + Kaydet/İptal: kaydırırken üstte yapışık */
+.kk-bar{position:sticky;top:0;z-index:5;background:var(--paper);display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 0;border-bottom:1px solid var(--line);margin-bottom:4px}
+.kk-bar .kk-ozet{margin:0;flex:1 1 auto}
+.kk-bar-ikincil, .kk-bar-aks{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.kk-bar-ikincil{margin-left:auto}
+.kk-bar-ikincil > button, .kk-bar-aks > button{flex:none}
+.kk-cip{font:inherit;font-size:12.5px;cursor:pointer;color:var(--ink-2);background:var(--card);border:1px solid var(--amber-i);border-radius:20px;padding:4px 11px}
+.kk-cip b{color:var(--ink)}
+.kk-cip:hover{background:var(--amber-b)}
+.kk-bolum{scroll-margin-top:130px}
+.kk-bolum.vurgu{animation:kkVurgu 1.8s ease}
+@keyframes kkVurgu{0%,55%{box-shadow:0 0 0 3px var(--amber-b);border-radius:10px}100%{box-shadow:0 0 0 3px transparent}}
+.kk-cgrup{border:1px solid var(--line-2);border-radius:10px;background:var(--card);margin-bottom:10px;overflow:hidden}
+.kk-cgrup.bekliyor{border-color:var(--amber-i)}
+.kk-cbas{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:8px 10px;font-size:13px;font-weight:650;border-bottom:1px solid var(--line-2)}
+.kk-cmevcut{font-weight:400;font-size:12px;color:var(--ink-3)}
+.kk-cbas .kk-rozet{margin-left:auto}
+.kk-ctablo{border:0;border-radius:0}
 .kk-acik{font-size:13px;color:var(--ink-2);line-height:1.55;margin:0 0 10px;max-width:860px}
 .kk-metin{display:block;width:100%;min-height:320px;font-family:var(--mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);color:var(--ink);tab-size:28;resize:vertical;outline:0}
 .kk-metin:focus{border-color:var(--accent)}
@@ -913,7 +934,13 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
 .kk-rozet.degis{background:var(--accent-soft);color:var(--accent)}
 .kk-rozet.atla{background:transparent;border:1px dashed var(--line-strong);color:var(--ink-3)}
 .kk-rozet.uyari{background:var(--amber-b, #fef3c7);color:var(--amber-i, #b45309)}
-@media (max-width:900px){ .kk-wrap{padding:6px 16px 32px} }
+/* Telefonda sayfa belge düzeyinde kayar ve .app (overflow:hidden) yapışkanı
+   engeller — düğmeler ekranın altına sabitlenir. */
+@media (max-width:900px){
+  .kk-wrap{overflow:visible;padding:0 16px 96px}
+  .kk-bar{position:static}
+  .kk-bar-aks{position:fixed;left:0;right:0;bottom:0;z-index:50;margin:0;justify-content:flex-end;background:var(--card);border-top:1px solid var(--line);box-shadow:0 -6px 18px rgba(0,0,0,.08);padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+}
 
 @media print{
   .yl-kontrol{font-style:italic;font-size:9pt;font-weight:400;margin-top:1pt}
