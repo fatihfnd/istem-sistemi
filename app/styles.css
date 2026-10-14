@@ -826,6 +826,9 @@ tbody tr.iliskili > td{opacity:.58;border-top-color:transparent}
 tbody tr.iliskili:hover > td, tbody tr.iliskili.sel > td{opacity:.9}
 tbody tr.iliskili .c-durum{padding-left:calc(var(--cell-px) + 16px)}
 tbody tr.iliskili .c-pat, tbody tr.iliskili .c-blok{font-weight:600}
+/* "İlişkilileri dahil et": seçilebilir, aksiyonlu — daha az soluk */
+tbody tr.iliskili.dahil > td{opacity:.86}
+tbody tr.iliskili.dahil.bulk-checked > td{opacity:1}
 .ilsk-etiket{display:inline-block;padding:0 5px;border-radius:4px;border:1px dashed var(--line-strong);color:var(--ink-3);background:transparent;font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.03em;white-space:nowrap;line-height:1.5}
 .ilsk-satir{margin-top:3px;font-size:12px;font-weight:500;color:var(--ink-3);line-height:1.4}
 @media print{
@@ -945,3 +948,20 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
 @media print{
   .yl-kontrol{font-style:italic;font-size:9pt;font-weight:400;margin-top:1pt}
 }
+
+/* ---------------- "Yazıyor…" (Presence) ---------------- */
+.yaziyor-serit{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px;margin:0 26px 8px;padding:5px 12px;border-radius:8px;background:var(--accent-soft);color:var(--ink-2);font-size:12.5px;line-height:1.4}
+.yaziyor-serit::before{content:"✎";color:var(--accent);font-weight:700}
+.yaziyor-serit .ys-kayit b{color:var(--ink)}
+.yaziyor-serit .ys-grup{color:var(--ink-3)}
+.yaziyor-isaret{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-family:var(--sans);font-size:10.5px;font-weight:700;white-space:nowrap;vertical-align:1px;animation:yaziyorNabiz 1.6s ease-in-out infinite}
+@keyframes yaziyorNabiz{0%,100%{opacity:1}50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){ .yaziyor-isaret{animation:none} }
+@media (max-width:900px){ .yaziyor-serit{margin:0 16px 8px} }
+
+/* ---------------- Yazdır menüsü: sıralama ---------------- */
+.yz-ayrac{height:1px;background:var(--line-2);margin:4px 2px}
+.yz-baslik{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);padding:4px 10px 2px}
+.yz-sira .yz-nokta{display:inline-block;width:10px;height:10px;border-radius:50%;border:1.5px solid var(--line-strong);margin-right:7px;vertical-align:-1px;box-sizing:border-box}
+.yz-sira.on .yz-nokta{border-color:var(--accent);background:radial-gradient(circle, var(--accent) 0 40%, transparent 45%)}
+.yz-sira.on{font-weight:650}

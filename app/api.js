@@ -991,6 +991,29 @@
       return istem;
     },
 
+    // ---------------- "Yazıyor…" (Realtime Presence; yaziyor_sema.sql) ----------------
+    // Private kanal: yalnız oturum açmış kullanıcılar katılır (realtime.messages
+    // politikası). Dönen: { yayinla(veri | null), kapat() }. Abonelik
+    // tamamlanmadan istenen yayın, kanal hazır olunca (ve her yeniden
+    // bağlanmada) uygulanır. Kanal açılamazsa sessizce kapalı kalır.
+    yaziyorKanali(sekmeKey, onSync) {
+      let hazir = false, istenen = null, kapandi = false;
+      const ch = client.channel("istem-yaziyor", { config: { private: true, presence: { key: sekmeKey } } });
+      const uygula = () => {
+        if (!hazir || kapandi) return;
+        Promise.resolve(istenen ? ch.track(istenen) : ch.untrack()).catch(() => {});
+      };
+      ch.on("presence", { event: "sync" }, () => onSync(ch.presenceState()));
+      ch.subscribe((status) => {
+        hazir = status === "SUBSCRIBED";
+        if (hazir) uygula();
+      });
+      return {
+        yayinla(veri) { istenen = veri; uygula(); },
+        kapat() { kapandi = true; client.removeChannel(ch); },
+      };
+    },
+
     // Boya tekrarı — yeni istem başlığı + Bekleyen kalem + log tek
     // transaction'da, sunucuda (bkz. yetki_sema.sql → tekrar_iste).
     // Dönen değer yeni kalemin id'si.

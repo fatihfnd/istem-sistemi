@@ -293,6 +293,9 @@ let kesitSekme = "kesilecek"; // kesit ekranı: "kesilecek" | "kesildi" | "hepsi
 let arsivSekme = "hepsi";     // arşiv ekranı: "hepsi" | "cikarilacak" | "cikarildi"
 let GRUP_BILGI = {};          // grup kodu -> {kod, ad, ekip, kesit_gerektirir, kisa_ad, sira, aktif}
 let secimModu = false;        // dokunmatik: uzun basınca açılan seçim modu
+let yaziyorKanal = null;      // "Yazıyor…" Presence kanalı (Api.yaziyorKanali)
+let yazanlar = [];            // şu an istem yazan BAŞKA kullanıcılar
+let yaziyorSon = null, yaziyorTimer = null, yaziyorBosTimer = null;
 const KESILDI_GUN = 7;        // "Kesildi" sekmesi: son kaç günün kesimleri
 let sortCol = null, sortDir = "asc";
 let caseView = null; // aktifken bir patoloji_no string'i (vaka görünümü)
@@ -392,7 +395,7 @@ function toggleBulkSelect(kalemId) {
 // kasıtlı olarak DEĞİŞMEZ: ardışık Shift+tık'larla aynı temelden aralık
 // büyütülüp küçültülebilsin (Windows Gezgini deseni).
 function selectRange(fromId, toId) {
-  const ids = getVisibleRows().map((r) => r.kalem_id);
+  const ids = secilebilirSatirlar().map((r) => r.kalem_id);
   const i1 = ids.indexOf(fromId), i2 = ids.indexOf(toId);
   if (i1 === -1 || i2 === -1) { toggleBulkSelect(toId); return; }
   const [lo, hi] = i1 < i2 ? [i1, i2] : [i2, i1];
@@ -404,7 +407,7 @@ function selectRange(fromId, toId) {
 // uygulanmış) satırların hepsi zaten seçiliyse seçimlerini kaldırır, aksi
 // halde hepsini seçime ekler. Görünmeyen ama seçili satırlara dokunmaz.
 function toggleAllVisibleSelection() {
-  const ids = getVisibleRows().map((r) => r.kalem_id);
+  const ids = secilebilirSatirlar().map((r) => r.kalem_id);
   const allOn = ids.length > 0 && ids.every((id) => bulkSelected.has(id));
   ids.forEach((id) => (allOn ? bulkSelected.delete(id) : bulkSelected.add(id)));
   syncBulkUI();
@@ -413,7 +416,7 @@ function toggleAllVisibleSelection() {
 // Vaka grubunun başındaki kısayol — o patoloji no'nun GÖRÜNEN tüm
 // satırları (tablo içinde dağınık olsalar bile) aynı mantıkla seçilir/kaldırılır.
 function toggleCaseSelection(patNo) {
-  const ids = getVisibleRows().filter((r) => r.patoloji_no === patNo).map((r) => r.kalem_id);
+  const ids = secilebilirSatirlar().filter((r) => patNorm(r.patoloji_no) === patNorm(patNo)).map((r) => r.kalem_id);
   const allOn = ids.length > 0 && ids.every((id) => bulkSelected.has(id));
   ids.forEach((id) => (allOn ? bulkSelected.delete(id) : bulkSelected.add(id)));
   syncBulkUI();
@@ -433,7 +436,7 @@ function syncBulkUI() {
     if (cb) cb.checked = on;
   });
 
-  const visible = $("#rows") ? getVisibleRows() : [];
+  const visible = $("#rows") ? secilebilirSatirlar() : [];
   const all = $("[data-bulk-all]");
   if (all) {
     const n = visible.filter((r) => bulkSelected.has(r.kalem_id)).length;
@@ -452,7 +455,7 @@ function syncBulkUI() {
     });
   }
   $$("#rows [data-case-sel]").forEach((btn) => {
-    const ids = visible.filter((r) => r.patoloji_no === btn.dataset.caseSel);
+    const ids = visible.filter((r) => patNorm(r.patoloji_no) === patNorm(btn.dataset.caseSel));
     btn.classList.toggle("on", ids.length > 0 && ids.every((r) => bulkSelected.has(r.kalem_id)));
   });
   renderBulkBar();
@@ -519,6 +522,7 @@ async function handleLogout() {
   // cihazın push aboneliği silinir (en fazla 3 sn beklenir, çıkışı engellemez).
   await Promise.race([bildirimleriKapat({ sessiz: true }).catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
   pushDurum = { yuklendi: false, abone: false, tercihler: new Set(), mesgul: false };
+  yaziyorKapat();
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -538,6 +542,7 @@ async function handleLogout() {
 async function initApp(user) {
   session = user;
   profilSonOkuma = Date.now();
+  yaziyorBaslat();
   if (window.Tema) Tema.kullaniciYukle(user.id); // kişisel tema/mod/yoğunluk
   $("#authOverlay").classList.add("hidden");
   $("#appRoot").classList.remove("hidden");
@@ -688,6 +693,7 @@ function renderQueuePage() {
       <button type="button" class="zil" id="zilBtn"></button>
     </div>
     <div class="ekip-uyari hidden" id="ekipUyari" role="status">Ekibiniz atanmamış — yöneticiye bildirin</div>
+    <div class="yaziyor-serit hidden" id="yaziyorSerit" role="status" aria-live="polite"></div>
     <div class="kapsamlar" id="kapsamlar" role="tablist" aria-label="Kapsam"></div>
     <div class="barrow" id="barrow">
       <div class="tabs" id="tabs"></div>
@@ -734,8 +740,11 @@ function renderQueuePage() {
   if (caseView !== null) { $("#barrow").classList.add("dimmed"); $("#kapsamlar").classList.add("dimmed"); }
 
   $("#kapsamlar").addEventListener("change", (e) => {
-    if (!e.target.matches("[data-ilsk-toggle]")) return;
-    try { localStorage.setItem(ILSK_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
+    if (e.target.matches("[data-ilsk-toggle]")) {
+      try { localStorage.setItem(ILSK_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
+    } else if (e.target.matches("[data-ilsk-dahil]")) {
+      try { localStorage.setItem(ILSK_DAHIL_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
+    } else return;
     clearBulkSelection();
     renderTable();
   });
@@ -856,8 +865,8 @@ function renderQueuePage() {
     if (!tr) return;
     const r = rows.find((x) => x.kalem_id === tr.dataset.kalem);
     if (!r) return;
-    // İlişkili satır: yalnız bilgi — detay açılır, çoklu seçime girmez.
-    if (tr.classList.contains("iliskili")) { showDetail(r); return; }
+    // İlişkili satır ("dahil et" kapalıyken): yalnız bilgi — detay açılır, çoklu seçime girmez.
+    if (tr.classList.contains("iliskili") && !tr.classList.contains("dahil")) { showDetail(r); return; }
     // Dokunmatik seçim modu: dokunmak seçimi değiştirir, detay açmaz.
     if (secimModu && bulkSelected.size) { toggleBulkSelect(r.kalem_id); return; }
     // Shift/Ctrl+tık: sadece çoklu seçimi yönetir, detay panelini AÇMAZ
@@ -881,7 +890,7 @@ function renderQueuePage() {
     uzunBasildi = false;
     clearTimeout(uzunBasTimer);
     const tr = e.target.closest("tr[data-kalem], tr[data-blok]");
-    if (!tr || tr.classList.contains("iliskili") || e.touches.length > 1) return;
+    if (!tr || (tr.classList.contains("iliskili") && !tr.classList.contains("dahil")) || e.touches.length > 1) return;
     dokunmaBas = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     uzunBasTimer = setTimeout(() => {
       uzunBasildi = true;
@@ -1183,8 +1192,8 @@ function renderTable() {
   renderCaseBanner();
   renderFiltreCipleri();
   tb.innerHTML = "";
-  if (arsivEkraniMi()) { renderArsivSatirlari(tb); updateCounts(); syncBulkUI(); return; }
-  if (kesitEkraniMi()) { renderKesitSatirlari(tb); updateCounts(); syncBulkUI(); return; }
+  if (arsivEkraniMi()) { renderArsivSatirlari(tb); updateCounts(); syncBulkUI(); yaziyorGoster(); return; }
+  if (kesitEkraniMi()) { renderKesitSatirlari(tb); updateCounts(); syncBulkUI(); yaziyorGoster(); return; }
   const acik = acikBlokHaritasi();
 
   const list = getVisibleRows();
@@ -1200,10 +1209,13 @@ function renderTable() {
     const tr = document.createElement("tr");
     tr.dataset.kalem = r.kalem_id;
     if (ilsk) {
-      // İlişkili: yalnız bilgi — soluk, girintili, aksiyonsuz, seçilemez.
+      // İlişkili: girintili, "ilişkili" etiketli. "İlişkilileri dahil et" açıksa
+      // seçilebilir ve kendi aksiyonları vardır; kapalıysa yalnız bilgi.
       tr.classList.add("iliskili");
       if (r.kalem_id === selId) tr.classList.add("sel");
-      tr.innerHTML = iliskiliSatirHTML(r);
+      const dahil = iliskiliDahil();
+      if (dahil) tr.classList.add("dahil", `row-${r.durum}`);
+      tr.innerHTML = iliskiliSatirHTML(r, dahil);
       tb.appendChild(tr);
       return;
     }
@@ -1235,14 +1247,15 @@ function renderTable() {
   });
   updateCounts();
   syncBulkUI();
+  yaziyorGoster();
 }
 
 // Durum hücresi: rozet (gerçek durum, HER ZAMAN) + bitişiğinde küçük ↺
 // (geri al; yalnız yetkisi olana — canRevert) + tek birincil buton (yalnız
 // bir sonraki adım; Tamamlandı'da yok). ↺ olmayan satırda aynı genişlikte
 // boşluk kalır ki birincil butonlar alt alta hizalı dursun.
-function durumAksiyon(r) {
-  const pill = `<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>`;
+function durumAksiyon(r, onEk = "") {
+  const pill = `${onEk}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>`;
   if (!canAdvance()) {
     // Uzman/asistan: yalnız rozet; kendi Bekleyen kalemine "İptal Et".
     const iptal = r.durum === "bekleyen" && canDeleteKalem(r)
@@ -1410,34 +1423,62 @@ function renderKapsamlar() {
   $("#ekipUyari")?.classList.toggle("hidden", !(teknisyen && !ekibimVar()));
   el.innerHTML = cipler.map(([k, l], i) => `${i === ayrac ? `<span class="kcip-ayrac" aria-hidden="true"></span>` : ""}<button class="kcip${kapsam === k ? " on" : ""}" data-kapsam="${k}" role="tab" aria-selected="${kapsam === k}">${esc(l)}</button>`).join("")
     + (iliskiliKapsamMi()
-      ? `<label class="ilsk-anahtar" title="Aynı patoloji no + bloktaki (blok yoksa aynı istemdeki) diğer grupların tamamlanmamış kalemleri, ana kalemin altında soluk gösterilir"><input type="checkbox" data-ilsk-toggle ${iliskiliTercih() ? "checked" : ""}> İlişkilileri göster</label>`
+      ? `<label class="ilsk-anahtar" title="Aynı patoloji no + bloktaki (blok yoksa aynı vakanın bloksuz) diğer grupların tamamlanmamış kalemleri, ana kalemin altında gösterilir"><input type="checkbox" data-ilsk-toggle ${iliskiliTercih() ? "checked" : ""}> İlişkilileri göster</label>`
+        + (iliskiliTercih() ? `<label class="ilsk-anahtar" title="Açıkken ilişkili satırlar da seçilebilir ve kendi İşleme Al / Tamamla düğmeleri olur; tümünü seç ve vaka seçimi onları da kapsar. Sayaçlar yalnız ana grubu sayar."><input type="checkbox" data-ilsk-dahil ${iliskiliDahilTercih() ? "checked" : ""}> İlişkilileri dahil et</label>` : "")
       : "");
 }
 
 // ---------------- İlişkili kalemler (grup çipi / Ekibim) ----------------
-// Ana kalemlerin (kapsam içindekilerin) aynı patoloji no + bloğundaki — blok
-// boşsa aynı istemindeki — KAPSAM DIŞI, tamamlanmamış kalemler: yalnız bilgi.
-// Sayaçlara girmez, seçilemez, aksiyon butonu yoktur.
+// Ana kalemlerin (kapsam içindekilerin) aynı vaka + bloğundaki KAPSAM DIŞI,
+// tamamlanmamış kalemleri. İstem kaydından bağımsız (farklı zamanda girilmiş
+// istemler de); blok boşsa aynı vakanın bloksuz kalemleri birbirine ilişkili.
+// "İlişkilileri dahil et" açıksa seçilebilir ve kendi aksiyonları vardır;
+// sayaçlara hiçbir durumda girmez.
 const ILSK_KEY = "istem_iliskili";
+const ILSK_DAHIL_KEY = "istem_iliskili_dahil";
 function iliskiliTercih() {
   try { return localStorage.getItem(ILSK_KEY) !== "0"; } catch (e) { return true; }
 }
+function iliskiliDahilTercih() {
+  try { return localStorage.getItem(ILSK_DAHIL_KEY) !== "0"; } catch (e) { return true; }
+}
 const iliskiliKapsamMi = () => caseView === null && !arsivEkraniMi() && (kapsam === "ekibim" || kapsam.startsWith("g:"));
 const iliskiliAktif = () => iliskiliKapsamMi() && iliskiliTercih();
-const iliskiAnahtari = (r) => (r.blok_no ? `b\u0000${r.patoloji_no}\u0000${r.blok_no}` : `i\u0000${r.istem_id}`);
+const iliskiliDahil = () => iliskiliAktif() && iliskiliDahilTercih();
+
+// Karşılaştırma anahtarları: blokta boşluklar (tire çevresindekiler dahil)
+// ve büyük/küçük harf yok sayılır — "1 - 2" = "1-2", "a1" = "A1"; patoloji
+// no'da boşluklar. Ekranda bloğun ilk görülen yazılışı gösterilir.
+function blokAnahtar(b) {
+  return String(b || "").replace(/[\u2010-\u2015]/g, "-").replace(/\s+/g, "")
+    .replace(/[İIıŞşĞğÜüÖöÇç]/g, (c) => TR_SADE[c]).toLowerCase();
+}
+const patNorm = (p) => String(p || "").replace(/\s+/g, "").toUpperCase();
+const vakaBlokAnahtari = (r) => patNorm(r.patoloji_no) + "\u0000" + blokAnahtar(r.blok_no);
+const iliskiAnahtari = vakaBlokAnahtari;
+
+// Seçim kapsamı (tümünü seç, vaka kısayolu, Shift aralığı): görünen ana
+// satırlar + "dahil et" açıksa ilişkililer — ekrandaki sırayla.
+function secilebilirSatirlar() {
+  const ana = getVisibleRows();
+  if (kesitEkraniMi() || arsivEkraniMi() || !iliskiliDahil()) return ana;
+  return iliskiliEkle(ana).map((x) => x.r);
+}
 
 // Dönen: [{ r, ilsk }] — her ilişkili kalem BİR kez, o bloğun (ardışık) ana
-// kalemlerinin hemen altında; ana kalemlerle karışmaz.
-function iliskiliEkle(ana, havuzKaynak = rows) {
+// kalemlerinin hemen altında, kendi içinde giriş sırasıyla (ya da verilen sırayla).
+function iliskiliEkle(ana, havuzKaynak = rows, sirala = null) {
   if (!iliskiliAktif()) return ana.map((r) => ({ r, ilsk: false }));
   const anaIdler = new Set(ana.map((r) => r.kalem_id));
   const havuz = new Map();
-  const ekle = (k, x) => { if (!havuz.has(k)) havuz.set(k, []); havuz.get(k).push(x); };
   havuzKaynak.forEach((x) => {
     if (x.durum === "tamamlandi" || anaIdler.has(x.kalem_id) || kapsamaUyar(x)) return;
-    if (x.blok_no) ekle(`b\u0000${x.patoloji_no}\u0000${x.blok_no}`, x);
-    ekle(`i\u0000${x.istem_id}`, x);
+    const k = iliskiAnahtari(x);
+    if (!havuz.has(k)) havuz.set(k, []);
+    havuz.get(k).push(x);
   });
+  const cmp = sirala || girisKarsilastirici(havuzKaynak);
+  havuz.forEach((l) => l.sort(cmp));
   const out = [], gosterildi = new Set();
   ana.forEach((r, i) => {
     out.push({ r, ilsk: false });
@@ -1451,10 +1492,11 @@ function iliskiliEkle(ana, havuzKaynak = rows) {
   });
   return out;
 }
-function iliskiliSatirHTML(r) {
-  return `<td class="bulkcell"></td>
-      <td class="c-durum"><div class="dacts"><span class="ilsk-etiket">ilişkili</span><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div></td>
-      <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span></td>
+function iliskiliSatirHTML(r, dahil = false) {
+  const etiket = `<span class="ilsk-etiket">ilişkili</span>`;
+  return `<td class="bulkcell">${dahil ? `<input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç">` : ""}</td>
+      <td class="c-durum">${dahil ? durumAksiyon(r, etiket) : `<div class="dacts">${etiket}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div>`}</td>
+      <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span>${dahil ? yazdirIkonu([r], "calisma") : ""}</td>
       <td class="c-blok">${esc(r.blok_no)}</td>
       <td class="c-test">${esc(r.test_adi)}${kesitRozeti(r)}${klonKontrolHTML(r)}</td>
       <td>${tipTag(r.grup)}</td>
@@ -1468,7 +1510,8 @@ function iliskiliSatirHTML(r) {
 function blokIliskilileri(b, items) {
   if (!iliskiliAktif()) return [];
   const satirda = new Set([...items, ...b.kesilecek].map((r) => r.kalem_id));
-  return rows.filter((x) => x.patoloji_no === b.pat && (x.blok_no || "") === b.blok && x.durum !== "tamamlandi" && !satirda.has(x.kalem_id));
+  return rows.filter((x) => vakaBlokAnahtari(x) === b.key && x.durum !== "tamamlandi" && !satirda.has(x.kalem_id))
+    .sort(girisKarsilastirici(rows));
 }
 const iliskiliOzet = (list) => list.map((x) => `${grupKisa(x.grup)} ${x.test_adi} (${PILL[x.durum][1]})`).join(" · ");
 function renderDurumSekmeleri() {
@@ -1532,7 +1575,7 @@ function acikBlokHaritasi() {
   const m = new Map();
   rows.forEach((r) => {
     if (r.durum === "tamamlandi" || !r.blok_no) return;
-    const k = r.patoloji_no + "\u0000" + r.blok_no;
+    const k = vakaBlokAnahtari(r);
     if (!m.has(k)) m.set(k, []);
     m.get(k).push(r);
   });
@@ -1540,7 +1583,7 @@ function acikBlokHaritasi() {
 }
 function caprazRozet(r, acik) {
   if (!r.blok_no) return "";
-  const digerleri = (acik.get(r.patoloji_no + "\u0000" + r.blok_no) || []).filter((x) => x.grup !== r.grup);
+  const digerleri = (acik.get(vakaBlokAnahtari(r)) || []).filter((x) => x.grup !== r.grup);
   if (!digerleri.length) return "";
   return [...new Set(digerleri.map((x) => x.grup))].map((g) => {
     const l = digerleri.filter((x) => x.grup === g);
@@ -1589,7 +1632,7 @@ function kesitBloklari() {
     const kesilecek = (E && r.durum !== "tamamlandi") || (K && !E && r.durum === "bekleyen" && !r.kesildi_at);
     const kesilen = !kesilecek && r.kesildi_at && new Date(r.kesildi_at).getTime() >= sinir;
     if (!kesilecek && !kesilen) return;
-    const key = r.patoloji_no + "\u0000" + (r.blok_no || "");
+    const key = vakaBlokAnahtari(r);
     if (!m.has(key)) m.set(key, { key, pat: r.patoloji_no, blok: r.blok_no || "", kesilecek: [], kesilen: [] });
     m.get(key)[kesilecek ? "kesilecek" : "kesilen"].push(r);
   });
@@ -1717,7 +1760,7 @@ async function blokKesildiGeriAl(b) {
 // teknisyeni notları ve diğer istekleri görsün; kaleme tıklayınca detayı.
 function showBlokDetay(b) {
   selId = null;
-  const kalemler = rows.filter((r) => r.patoloji_no === b.pat && (r.blok_no || "") === b.blok)
+  const kalemler = rows.filter((r) => vakaBlokAnahtari(r) === b.key)
     .sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
   const notlar = blokNotlari(kalemler);
   $("#rail").innerHTML = `<div class="rail-head"><h2>Blok ${esc(b.pat)} · ${esc(b.blok || "—")}</h2><button class="rx" id="closeDetail">×</button></div>
@@ -1748,7 +1791,7 @@ function blokNotlari(kalemler) {
 function kesitListesiYazdir(mod = "gorunen") {
   let bloklar = bloklariSec(gorunenBloklar(), mod, "calisma");
   if (!bloklar.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
-  bloklar = bloklar.slice().sort((a, b) => yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
+  bloklar = blokYazdirSirala(bloklar);
   const kalemSayisi = bloklar.reduce((n, b) => n + blokKalemleri(b).length, 0);
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Kesit Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
@@ -1769,7 +1812,7 @@ function kesitListesiYazdir(mod = "gorunen") {
         </tr>`;
       }).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat({ baglam: "calisma", kalemIdler: bloklar.flatMap((b) => blokKalemleri(b).map((r) => r.kalem_id)) });
+  yazdirmayiBaslat({ baglam: "calisma", kalemIdler: bloklar.flatMap((b) => blokKalemleri(b).map((r) => r.kalem_id)), patlar: bloklar.map((b) => b.pat) });
 }
 // Blok satırları için mod seçimi: seçili = içinde seçili kalem olan bloklar;
 // yazdırılmamış = en az bir kalemi o bağlamda hiç yazdırılmamış bloklar.
@@ -1793,7 +1836,7 @@ function arsivBloklari() {
   const m = new Map();
   rows.forEach((r) => {
     if (r.durum === "tamamlandi" || !(grupK(r.grup) || grupE(r.grup))) return;
-    const key = r.patoloji_no + "\u0000" + (r.blok_no || "");
+    const key = vakaBlokAnahtari(r);
     if (!m.has(key)) m.set(key, { key, tur: "arsiv", pat: r.patoloji_no, blok: r.blok_no || "", kalemler: [] });
     m.get(key).kalemler.push(r);
   });
@@ -1876,7 +1919,7 @@ async function blokCikarildiGeriAl(b) {
 function arsivListesiYazdir(mod = "gorunen") {
   let bloklar = bloklariSec(gorunenArsivBloklari(), mod, "arsiv");
   if (!bloklar.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
-  bloklar = bloklar.slice().sort((a, b) => yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
+  bloklar = blokYazdirSirala(bloklar);
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Arşiv Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${bloklar.length} blok · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
@@ -1896,7 +1939,7 @@ function arsivListesiYazdir(mod = "gorunen") {
         </tr>`;
       }).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat({ baglam: "arsiv", kalemIdler: bloklar.flatMap((b) => b.kalemler.map((r) => r.kalem_id)) });
+  yazdirmayiBaslat({ baglam: "arsiv", kalemIdler: bloklar.flatMap((b) => b.kalemler.map((r) => r.kalem_id)), patlar: bloklar.map((b) => b.pat) });
 }
 
 // ================================================================
@@ -1914,18 +1957,33 @@ function yazdirMenuHTML(seciliVar) {
       <button class="thopt" type="button" data-yz="yazdirilmamis"><b>Yazdırılmamışları yazdır</b></button>
       ${seciliVar ? `<button class="thopt" type="button" data-yz="secili">Seçilileri yazdır</button>` : ""}
       <button class="thopt" type="button" data-yz="gorunen">Görünenleri yazdır</button>
+      <div class="yz-ayrac" role="separator"></div>
+      <div class="yz-baslik">Sıralama</div>
+      ${YZ_SIRALAR.map(([k, l]) => `<button class="thopt yz-sira" type="button" data-yz-sira="${k}" aria-pressed="false"><span class="yz-nokta" aria-hidden="true"></span>${l}</button>`).join("")}
     </div>
   </div>`;
 }
 function bindYazdirMenu(boxSel, onPick) {
   const box = $(boxSel); if (!box) return;
   const panel = box.querySelector(".thfilter");
+  const siraIsaretle = () => panel.querySelectorAll("[data-yz-sira]").forEach((b) => {
+    const on = b.dataset.yzSira === yazdirSiraTercih();
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
   box.querySelector(".yzbtn").addEventListener("click", (e) => {
     e.stopPropagation();
     const secili = panel.querySelector('[data-yz="secili"]');
     if (secili) secili.disabled = bulkSelected.size === 0;
+    siraIsaretle();
     panel.classList.toggle("open");
   });
+  // Sıralama seçimi menüyü kapatmaz; tarayıcıda hatırlanır.
+  panel.querySelectorAll("[data-yz-sira]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    try { localStorage.setItem(YZ_SIRA_KEY, b.dataset.yzSira); } catch (err) { /* hatırlanmaz */ }
+    siraIsaretle();
+  }));
   panel.querySelectorAll("[data-yz]").forEach((b) => b.addEventListener("click", (e) => {
     e.stopPropagation();
     panel.classList.remove("open");
@@ -1983,6 +2041,140 @@ function geriAlBandi(metin, dugme, onGeriAl) {
   geriAlTimer = setTimeout(kapat, 15000);
 }
 
+// ================================================================
+// "YAZIYOR…" — Supabase Realtime Presence, private kanal "istem-yaziyor"
+// (yaziyor_sema.sql: yalnız oturum açmış kullanıcılar). Tablo yok.
+//   anahtar: sekme kimliği · yük: { kullanici_id, kisaltma, ad_soyad,
+//   patoloji_no, gruplar, zaman }
+// İstek Ver formunda patoloji no doluyken yayınlanır; form kapanınca, istem
+// gönderilince, formda 2 dk etkileşim olmayınca ve çıkışta kalkar (sekme
+// kapanınca sunucu düşürür). Herkes dinler; kişinin kendisi listelenmez.
+// ================================================================
+const YAZIYOR_SURE = 2 * 60 * 1000;
+const SEKME_KEY = window.crypto && crypto.randomUUID ? crypto.randomUUID() : `s${Date.now()}${Math.random().toString(36).slice(2)}`;
+function yaziyorBaslat() {
+  if (yaziyorKanal || !Api.yaziyorKanali) return;
+  try { yaziyorKanal = Api.yaziyorKanali(SEKME_KEY, yaziyorSync); } catch (e) { yaziyorKanal = null; }
+}
+function yaziyorKapat() {
+  yaziyorBirak();
+  if (yaziyorKanal) { try { yaziyorKanal.kapat(); } catch (e) { /* önemli değil */ } }
+  yaziyorKanal = null;
+  yazanlar = [];
+  yaziyorGoster();
+}
+function yaziyorSync(durum) {
+  const tekil = new Map(); // kişi + vaka başına bir kayıt (iki sekme = tek satır)
+  Object.values(durum || {}).forEach((liste) => (liste || []).forEach((m) => {
+    if (!m || !m.patoloji_no || (session && m.kullanici_id === session.id)) return;
+    const k = m.kullanici_id + "\u0000" + patNorm(m.patoloji_no);
+    const v = tekil.get(k);
+    if (!v || (m.zaman || 0) > (v.zaman || 0)) tekil.set(k, m);
+  }));
+  yazanlar = [...tekil.values()].sort((a, b) => (a.zaman || 0) - (b.zaman || 0));
+  yaziyorGoster();
+}
+function yaziyorFormDegisti() {
+  clearTimeout(yaziyorTimer);
+  yaziyorTimer = setTimeout(yaziyorYayinla, 400);
+  clearTimeout(yaziyorBosTimer);
+  yaziyorBosTimer = setTimeout(yaziyorBirak, YAZIYOR_SURE);
+}
+function yaziyorYayinla() {
+  const inp = $("#mPat");
+  const pat = inp ? inp.value.trim() : "";
+  if (!pat || !session || !yaziyorKanal) { yaziyorBirak(); return; }
+  const gruplar = [...new Set(collectPickedTestler().map((t) => t.grup))];
+  const imza = JSON.stringify([pat, gruplar]);
+  if (imza === yaziyorSon) return; // değişiklik yok
+  yaziyorSon = imza;
+  yaziyorKanal.yayinla({ kullanici_id: session.id, kisaltma: session.kisaltma || initials(session.ad_soyad), ad_soyad: session.ad_soyad, patoloji_no: pat, gruplar, zaman: Date.now() });
+}
+function yaziyorBirak() {
+  clearTimeout(yaziyorTimer);
+  clearTimeout(yaziyorBosTimer);
+  if (yaziyorSon !== null && yaziyorKanal) yaziyorKanal.yayinla(null);
+  yaziyorSon = null;
+}
+window.addEventListener("pagehide", () => yaziyorBirak());
+
+const yaziyorKimler = (l) => l.map((y) => y.ad_soyad || y.kisaltma || "?").join(", ");
+// Şerit (İş Kuyruğu üstü) + aynı vakanın satırlarında "✎ yazılıyor" işareti.
+// Tablo yeniden çizilmez; yalnız işaretler eklenir/kalkar.
+function yaziyorGoster() {
+  const el = $("#yaziyorSerit");
+  if (el) {
+    el.classList.toggle("hidden", !yazanlar.length);
+    el.innerHTML = yazanlar.map((y) => `<span class="ys-kayit" title="${esc(y.ad_soyad || "")}"><b>${esc(y.kisaltma || "?")}</b> · ${esc(y.patoloji_no)} için istem yazıyor…${y.gruplar && y.gruplar.length ? ` <span class="ys-grup">(${esc(y.gruplar.map(grupKisa).join(", "))})</span>` : ""}</span>`).join("");
+  }
+  const harita = new Map();
+  yazanlar.forEach((y) => { const k = patNorm(y.patoloji_no); if (!harita.has(k)) harita.set(k, []); harita.get(k).push(y); });
+  $$("#rows .c-pat").forEach((td) => {
+    const l = harita.get(patNorm(td.querySelector(".pat-no")?.textContent));
+    let isaret = td.querySelector(".yaziyor-isaret");
+    if (!l) { if (isaret) isaret.remove(); return; }
+    if (!isaret) {
+      td.insertAdjacentHTML("beforeend", `<span class="yaziyor-isaret">✎ yazılıyor</span>`);
+      isaret = td.querySelector(".yaziyor-isaret");
+    }
+    isaret.title = `${yaziyorKimler(l)} şu anda bu vaka için istem yazıyor`;
+  });
+}
+// Yazdırılacak listede şu an başkasının istem yazdığı vaka varsa sorar.
+function yaziyorYazdirOnayi(patlar) {
+  if (!yazanlar.length || !patlar || !patlar.length) return true;
+  const liste = new Set(patlar.map(patNorm));
+  const yazilan = [...new Set(yazanlar.filter((y) => liste.has(patNorm(y.patoloji_no))).map((y) => y.patoloji_no))];
+  if (!yazilan.length) return true;
+  return confirm(`${yazilan.join(", ")} için hâlâ istem yazılıyor, yine de yazdırılsın mı?`);
+}
+
+// ================================================================
+// ÇIKTI SIRALAMASI — Yazdır menüsünden; tüm çıktılarda tek tercih (localStorage)
+//   giris: istemin zamanı, aynı istemin kalemleri giriliş sırasıyla
+//          (kalem created_at — yaziyor_sema.sql'den sonra satır satır;
+//          eski kayıtlarda eşitse blok, sonra test adı)
+//   pat:   patoloji no (yıl, numara), blok, test adı
+// ================================================================
+const YZ_SIRA_KEY = "istem_yazdir_sira";
+const YZ_SIRALAR = [["giris", "Giriş sırası"], ["pat", "Patoloji no / blok"]];
+function yazdirSiraTercih() {
+  try { return localStorage.getItem(YZ_SIRA_KEY) === "pat" ? "pat" : "giris"; } catch (e) { return "giris"; }
+}
+// created_at ISO metin olarak karşılaştırılır (mikrosaniye korunur).
+function girisKarsilastirici(liste) {
+  const istemZamani = new Map();
+  rows.concat(liste || []).forEach((r) => {
+    const z = istemZamani.get(r.istem_id);
+    if (!z || String(r.created_at) < z) istemZamani.set(r.istem_id, String(r.created_at));
+  });
+  return (a, b) => String(istemZamani.get(a.istem_id) || "").localeCompare(String(istemZamani.get(b.istem_id) || ""))
+    || String(a.istem_id).localeCompare(String(b.istem_id))
+    || String(a.created_at).localeCompare(String(b.created_at))
+    || String(a.blok_no || "").localeCompare(String(b.blok_no || ""), "tr", { numeric: true })
+    || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr", { numeric: true });
+}
+const patBlokKarsilastir = (a, b) => yazdirSirasi({ ...a, blok_no: blokAnahtar(a.blok_no) }, { ...b, blok_no: blokAnahtar(b.blok_no) });
+const yazdirKarsilastirici = (liste) => (yazdirSiraTercih() === "pat" ? patBlokKarsilastir : girisKarsilastirici(liste));
+// Çalışma listesi satırları: ana kalemler tercih edilen sırayla, ilişkililer
+// ana kalemin hemen altında. Seçilerek basılan ilişkili (kapsam dışı) kalem,
+// ana kalemi listede yoksa kendi sırasında — yine "ilişkili" işaretli.
+function yazdirSatirlari(ana) {
+  const cmp = yazdirKarsilastirici(ana);
+  if (!iliskiliAktif()) return ana.slice().sort(cmp).map((r) => ({ r, ilsk: false }));
+  const anaK = ana.filter(kapsamaUyar);
+  const yerlesen = new Set(iliskiliEkle(anaK.slice().sort(cmp), rows, cmp).map((x) => x.r.kalem_id));
+  const tek = ana.filter((r) => !kapsamaUyar(r) && !yerlesen.has(r.kalem_id));
+  return iliskiliEkle([...anaK, ...tek].sort(cmp), rows, cmp).map(({ r, ilsk }) => ({ r, ilsk: ilsk || !kapsamaUyar(r) }));
+}
+// Blok çıktıları (kesit, arşiv): giriş = bloğun en eski kalemi.
+function blokYazdirSirala(bloklar) {
+  const pat = (a, b) => yazdirSirasi({ patoloji_no: a.pat, blok_no: blokAnahtar(a.blok) }, { patoloji_no: b.pat, blok_no: blokAnahtar(b.blok) });
+  if (yazdirSiraTercih() === "pat") return bloklar.slice().sort(pat);
+  const ilk = (b) => String(enEski(blokKalemleri(b)) || "");
+  return bloklar.slice().sort((a, b) => ilk(a).localeCompare(ilk(b)) || pat(a, b));
+}
+
 // ---------------- Toplu aksiyonlar (İş Kuyruğu çoklu seçim) ----------------
 function renderBulkBar() {
   const bar = $("#bulkBar");
@@ -2001,13 +2193,15 @@ function renderBulkBar() {
   ["#bulkTekrarBtn", "#bulkSilBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit));
   $("#bulkSilBtn").textContent = ilerlet ? "Sil" : "İptal Et";
   if (!n) return;
-  const gorunen = getVisibleRows();
+  const gorunen = secilebilirSatirlar();
   const tumu = gorunen.length > 0 && n === gorunen.length && gorunen.every((r) => bulkSelected.has(r.kalem_id));
+  const ilskN = !kesit && iliskiliAktif()
+    ? [...bulkSelected].filter((id) => { const r = rows.find((x) => x.kalem_id === id); return r && !kapsamaUyar(r); }).length : 0;
   if (kesit) {
     const bloklar = gorunenBloklar().filter((b) => blokKalemleri(b).some((r) => bulkSelected.has(r.kalem_id))).length;
     $("#bulkCount").textContent = `${bloklar} blok (${n} kalem) seçili${tumu ? " · görünenlerin tümü" : ""}`;
   } else {
-    $("#bulkCount").textContent = `${n} seçili${tumu ? ` · görünen ${gorunen.length} satırın tümü` : ""}`;
+    $("#bulkCount").textContent = `${n} seçili${ilskN ? ` (${ilskN} ilişkili)` : ""}${tumu ? ` · görünen ${gorunen.length} satırın tümü` : ""}`;
   }
 }
 
@@ -2157,7 +2351,10 @@ function showEmpty() {
 (function railIzle() {
   const rail = $("#rail");
   if (!rail) return;
-  const guncelle = () => rail.classList.toggle("acik", Boolean(rail.querySelector(".rail-head")));
+  const guncelle = () => {
+    rail.classList.toggle("acik", Boolean(rail.querySelector(".rail-head")));
+    if (!rail.querySelector("#mPat")) yaziyorBirak(); // İstek Ver formu kapandı
+  };
   new MutationObserver(guncelle).observe(rail, { childList: true });
   guncelle();
 })();
@@ -2731,6 +2928,7 @@ function showForm(prefill) {
         const inp = $("#mPat");
         if (!inp) return; // form bu arada kapatıldı
         inp.value = deger;
+        yaziyorFormDegisti();
         inp.classList.add("ocr-dolu");
         $("#mPatOcr").classList.remove("hidden");
         inp.focus();
@@ -2764,6 +2962,10 @@ function showForm(prefill) {
     prio = b.dataset.p;
   });
   $("#submitForm").onclick = submitForm;
+  // "Yazıyor…": formdaki her etkileşim yayını tazeler (2 dk sessizlikte düşer;
+  // form kapanınca railIzle düşürür).
+  const govde = rail.querySelector(".rail-body");
+  ["input", "change", "click", "keydown"].forEach((ev) => govde.addEventListener(ev, yaziyorFormDegisti));
 }
 
 function addBlockChip(v) {
@@ -2797,6 +2999,7 @@ async function submitForm() {
   $("#submitForm").disabled = true;
   try {
     await Api.createIstem({ patoloji_no: patNo, istem_yapan_id: session.id, uzman_id, oncelik: prio, not_metni, bloklar, testler });
+    yaziyorBirak();
     setDurumTab("all");
     $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
     toast("İstek oluşturuldu");
@@ -3436,7 +3639,8 @@ function hizmetlerYazdir(mod = "gorunen") {
   const list = mod === "yazdirilmamis" ? gorunen.filter((h) => h.yazdirilmamis) : gorunen;
   if (!list.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
   const ozet = (h) => h.ozet.map((o) => `${o.count} ${grupKisa(o.grup)}`).join(", ") || "—";
-  const gruplar = hizUzmanGruplari(list.slice().sort((a, b) => yazdirSirasi(a, b)));
+  const gruplar = hizUzmanGruplari(list.slice().sort(yazdirSiraTercih() === "pat" ? yazdirSirasi
+    : (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || yazdirSirasi(a, b)));
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Hizmetler — HBYS Giriş Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${list.length} istem · ${gruplar.length} uzman · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
@@ -3451,7 +3655,7 @@ function hizmetlerYazdir(mod = "gorunen") {
           <td>${esc(formatDT(h.created_at))}</td>
         </tr>`).join("")).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat({ baglam: "hizmetler", kalemIdler: list.flatMap((h) => h.kalem_idler || []) });
+  yazdirmayiBaslat({ baglam: "hizmetler", kalemIdler: list.flatMap((h) => h.kalem_idler || []), patlar: list.map((h) => h.patoloji_no) });
 }
 
 async function markFatura(istemId) {
@@ -4771,7 +4975,7 @@ function yazdirSirasi(a, b) {
     : pa ? -1 : pb ? 1 : String(a.patoloji_no).localeCompare(String(b.patoloji_no), "tr", { numeric: true });
   return c
     || String(a.blok_no || "").localeCompare(String(b.blok_no || ""), "tr", { numeric: true })
-    || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr");
+    || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr", { numeric: true });
 }
 const kisaAd = (ad, kisa) => kisa || (ad ? initials(ad) : "—");
 
@@ -4791,10 +4995,10 @@ function calismaListesiYazdir(mod = "gorunen") {
     : mod === "yazdirilmamis" ? gorunen.filter((r) => !r.yazdirmalar?.calisma) : gorunen;
   if (!ana.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
   // Grup / Ekibim görünümünde ilişkili kalemler de basılır, "ilişkili" işaretli
-  // (kesitçi de görsün); blokta ana kalemlerden sonra gelir. Kayda girmez.
-  const list = iliskiliEkle(ana).map(({ r, ilsk }) => ({ ...r, __iliskili: ilsk }))
-    .sort((a, b) => yazdirSirasi({ ...a, test_adi: "" }, { ...b, test_adi: "" }) || (a.__iliskili - b.__iliskili)
-      || String(a.test_adi || "").localeCompare(String(b.test_adi || ""), "tr"));
+  // (kesitçi de görsün), ana kalemin hemen altında. Sıra: Yazdır menüsündeki
+  // tercih. Bilgi olarak eklenen ilişkililer kayda girmez; seçilerek basılanlar
+  // (ana listede oldukları için) girer.
+  const list = yazdirSatirlari(ana).map(({ r, ilsk }) => ({ ...r, __iliskili: ilsk }));
   if (!list.length) { toast("Yazdırılacak kalem yok", true); return; }
   const vakaSayisi = new Set(list.map((r) => r.patoloji_no)).size;
   const ilskSayisi = list.filter((r) => r.__iliskili).length;
@@ -4817,11 +5021,13 @@ function calismaListesiYazdir(mod = "gorunen") {
         </tr>`;
       }).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat({ baglam: "calisma", kalemIdler: ana.map((r) => r.kalem_id) });
+  yazdirmayiBaslat({ baglam: "calisma", kalemIdler: ana.map((r) => r.kalem_id), patlar: list.map((r) => r.patoloji_no) });
 }
 
-// kayit: { baglam, kalemIdler } — basılan kalemler o bağlamla kaydedilir.
+// kayit: { baglam, kalemIdler, patlar } — basılan kalemler o bağlamla
+// kaydedilir; listedeki bir vaka için şu an istem yazılıyorsa önce sorulur.
 function yazdirmayiBaslat(kayit) {
+  if (kayit && !yaziyorYazdirOnayi(kayit.patlar)) { $("#yazdirAlani").innerHTML = ""; return; }
   document.body.classList.add("yazdiriliyor");
   window.print();
   if (kayit && kayit.kalemIdler.length) yazdirmaKaydet(kayit.kalemIdler, kayit.baglam);
