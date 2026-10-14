@@ -55,12 +55,12 @@ const SUTUN_DUZ = ["Zaman", "Patoloji No (güncel)", "Alan", "Eski", "Yeni", "Ka
 
 // "Düzeltildi" sütunu — uygulamadaki duzeltmeOzeti ile aynı biçim:
 // "Patoloji no: 17730/26 → 17703/26; Blok: A1 → A2" (eski = İLK girilen).
-const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", blok_no: "Blok", uzman: "Uzman adına", oncelik: "Öncelik" };
+const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
 const duzDeger = (alan: string, v: unknown) => String((alan === "oncelik" ? ONCELIK[String(v)] ?? v : v) || "—");
 export function duzeltmeOzeti(r: Satir): string {
   const d = r.duzeltmeler as Record<string, { eski?: string }> | null | undefined;
   if (!d) return "";
-  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, uzman: r.uzman_adi, oncelik: r.oncelik };
+  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik };
   return Object.keys(DUZ_ALAN).filter((a) => d[a])
     .map((a) => `${DUZ_ALAN[a]}: ${duzDeger(a, d[a].eski)} → ${duzDeger(a, guncel[a])}`).join("; ");
 }

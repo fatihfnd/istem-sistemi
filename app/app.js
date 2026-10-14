@@ -1238,7 +1238,7 @@ function renderTable() {
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}${yazdirIkonu([r], "calisma")}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
-      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}</td>
+      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam", duzRozet(r, "uzman") + duzEski(r, "uzman"))}
@@ -1500,7 +1500,7 @@ function iliskiliSatirHTML(r, dahil = false) {
       <td class="c-durum">${dahil ? durumAksiyon(r, etiket) : `<div class="dacts">${etiket}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div>`}</td>
       <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}${dahil ? yazdirIkonu([r], "calisma") : ""}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${duzEski(r, "blok_no")}</td>
-      <td class="c-test">${esc(r.test_adi)}${kesitRozeti(r)}${klonKontrolHTML(r)}</td>
+      <td class="c-test">${esc(r.test_adi)}${duzRozet(r, "test")}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, null, duzRozet(r, "uzman") + duzEski(r, "uzman"))}
@@ -2050,7 +2050,7 @@ function geriAlBandi(metin, dugme, onGeriAl) {
 // notlarına yazılır. r.duzeltmeler: { alan: { eski (İLK girilen), yeni, kim,
 // kisaltma, zaman (son), adet } }
 // ================================================================
-const DUZ_ALAN = { patoloji_no: "Patoloji no", blok_no: "Blok", uzman: "Uzman adına", oncelik: "Öncelik" };
+const DUZ_ALAN = { patoloji_no: "Patoloji no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
 const duzBilgi = (r, alan) => (r && r.duzeltmeler && r.duzeltmeler[alan]) || null;
 const duzDeger = (alan, v) => (alan === "oncelik" ? (PRIO[v] && PRIO[v][1]) || v || "—" : v || "—");
 const canDuzelt = (r) => Boolean(session && (isAdmin() || r.istem_yapan_id === session.id));
@@ -2068,7 +2068,7 @@ const blokTumKalemler = (b) => (b.tur === "arsiv" ? b.kalemler : [...b.kesilecek
 // Excel / yedek: "Patoloji no: 17730/26 → 17703/26; Blok: A1 → A2"
 function duzeltmeOzeti(r) {
   if (!r.duzeltmeler) return "";
-  const guncel = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, uzman: r.uzman_adi, oncelik: r.oncelik };
+  const guncel = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik };
   return Object.keys(DUZ_ALAN).filter((a) => r.duzeltmeler[a])
     .map((a) => `${DUZ_ALAN[a]}: ${duzDeger(a, r.duzeltmeler[a].eski)} → ${duzDeger(a, guncel[a])}`).join("; ");
 }
@@ -2111,20 +2111,42 @@ function duzeltmeFormu(r) {
   const uzmanlar = UZMANLAR.slice();
   if (r.uzman_id && !uzmanlar.some((u) => u.id === r.uzman_id)) uzmanlar.push({ id: r.uzman_id, ad_soyad: r.uzman_adi || "—" });
   let oncelik = r.oncelik;
+  // Test: katalogdaki aktif testler (grup grup). Satırda test_id yok — mevcut
+  // test ad + klon + gruptan bulunur; bulunamazsa (pasif / serbest metin)
+  // "mevcut" seçeneği olarak kalır (değer boş = değişmez).
+  const testKilit = r.durum !== "bekleyen";
+  const mevcutTestId = ((CAT[r.grup] || []).find((t) => t.ad === r.test_adi && (t.klon || "") === (r.klon || "")) || {}).id || "";
+  const testById = new Map(Object.values(CAT).flat().map((t) => [t.id, t]));
+  const grupAd = (g) => (GROUPS.find(([k]) => k === g) || [g, TIP[g] || g])[1];
+  const testSecenek = `${mevcutTestId ? "" : `<option value="" selected>${esc(r.test_adi)} (mevcut)</option>`}`
+    + GROUPS.filter(([g]) => (CAT[g] || []).length).map(([g, l]) => `<optgroup label="${esc(l)}">${CAT[g].map((t) =>
+      `<option value="${t.id}" ${t.id === mevcutTestId ? "selected" : ""}>${esc(t.ad)}${t.klon ? ` (${esc(t.klon)})` : ""}</option>`).join("")}</optgroup>`).join("");
+  let faturaGirildi = false;
   alan.innerHTML = `<div class="duz-form">
       <div class="duz-baslik">İstemi düzelt</div>
-      <div class="duz-ipucu">Test adı düzeltilemez — yanlış test için kalemi silip yeni istek verin. Her düzeltme kayda geçer ve istemin notlarına yazılır.</div>
+      <div class="duz-ipucu">Her düzeltme kayda geçer ve istemin notlarına yazılır.</div>
       <label class="m-label" for="dzPat">Patoloji No <span class="duz-ipucu">— istemin tüm kalemleri</span></label>
       <input class="finput" id="dzPat" value="${esc(r.patoloji_no)}" autocomplete="off">
       <label class="m-label" for="dzBlok">Blok</label>
       <input class="finput" id="dzBlok" value="${esc(r.blok_no || "")}" autocomplete="off">
       ${ayniBlok.length ? `<label class="duz-kutu"><input type="checkbox" id="dzBlokHepsi" checked> Bu istemin aynı bloktaki diğer ${ayniBlok.length} kalemine de uygula (${esc(ayniBlok.map((x) => x.test_adi).join(", "))})</label>` : ""}
+      <label class="m-label" for="dzTest">Test <span class="duz-ipucu">— yalnız bu kalem; klon ve kontrol katalogdan gelir</span></label>
+      <select class="finput" id="dzTest" ${testKilit ? "disabled" : ""}>${testSecenek}</select>
+      ${testKilit ? `<div class="duz-ipucu duz-kilit">🔒 Test yalnız Bekleyen kalemde düzeltilebilir — önce Bekleyen'e geri alın.</div>` : ""}
+      <div class="duz-uyari hidden" id="dzFaturaUyari">⚠ Bu istemin faturası girildi, düzeltme fatura özetini değiştirir. Kaydedilirse fatura işareti kaldırılır, sekreter Hizmetler'de yeniden görür.</div>
       <label class="m-label" for="dzUzman">Uzman adına</label>
       <select class="finput" id="dzUzman"><option value="">— seçilmedi —</option>${uzmanlar.map((u) => `<option value="${u.id}" ${u.id === r.uzman_id ? "selected" : ""}>${esc(u.ad_soyad)}</option>`).join("")}</select>
       <div class="m-label">Öncelik</div>
       <div class="prios" id="dzPrio">${["rutin", "acil", "stat"].map((p) => `<button type="button" data-p="${p}" class="${p === r.oncelik ? "on" : ""}">${PRIO[p][1]}</button>`).join("")}</div>
       <div class="duz-aks"><button type="button" class="btn-ghost btn-sm" id="dzIptal">İptal</button><button type="button" class="btn-primary btn-sm" id="dzKaydet">Kaydet</button></div>
     </div>`;
+  // Fatura durumu (Hizmetler'de "Gir") — test değişirse uyarı için.
+  if (Api.istemFaturaDurumu) Api.istemFaturaDurumu(r.istem_id).then((v) => { faturaGirildi = Boolean(v); testDegisti(); }).catch(() => {});
+  const testDegisti = () => {
+    const el = $("#dzFaturaUyari"), sec = $("#dzTest");
+    if (el && sec) el.classList.toggle("hidden", !(faturaGirildi && sec.value && sec.value !== mevcutTestId));
+  };
+  $("#dzTest").onchange = testDegisti;
   $("#dzPrio").onclick = (e) => {
     const b = e.target.closest("[data-p]"); if (!b) return;
     oncelik = b.dataset.p;
@@ -2148,16 +2170,25 @@ function duzeltmeFormu(r) {
       satirlar.push(`Uzman adına: ${r.uzman_adi || "—"} → ${uzman ? (uzmanlar.find((u) => u.id === uzman) || {}).ad_soyad || "?" : "—"}`);
     }
     if (oncelik !== r.oncelik) { degisiklik.oncelik = oncelik; satirlar.push(`Öncelik: ${PRIO[r.oncelik][1]} → ${PRIO[oncelik][1]}`); }
+    const yeniTest = testKilit ? "" : $("#dzTest").value;
+    let faturaNotu = "";
+    if (yeniTest && yeniTest !== mevcutTestId) {
+      const t = testById.get(yeniTest);
+      degisiklik.testler = [{ kalem_id: r.kalem_id, test_id: yeniTest }];
+      satirlar.push(`Test: ${r.test_adi} → ${t ? t.ad : "?"}${t && t.grup !== r.grup ? ` (${grupAd(r.grup)} → ${grupAd(t.grup)} — kalem o grubun listesine geçer)` : ""}`);
+      if (faturaGirildi) faturaNotu = "\n\n⚠ Bu istemin faturası girildi, düzeltme fatura özetini değiştirir. Fatura işareti kaldırılacak, sekreter Hizmetler'de yeniden görecek.";
+    }
     if (!satirlar.length) { toast("Değişiklik yok"); return; }
-    if (!confirm(`Şu düzeltmeler kaydedilecek ve kayda geçecek (geri alınamaz, yalnız yeniden düzeltilebilir):\n\n${satirlar.join("\n")}\n\nDevam edilsin mi?`)) return;
+    if (!confirm(`Şu düzeltmeler kaydedilecek ve kayda geçecek (geri alınamaz, yalnız yeniden düzeltilebilir):\n\n${satirlar.join("\n")}${faturaNotu}\n\nDevam edilsin mi?`)) return;
     $("#dzKaydet").disabled = true;
     try {
       const sonuc = await Api.istemDuzelt(r.istem_id, degisiklik);
-      toast(`Düzeltildi — ${sonuc && sonuc.duzeltilen != null ? sonuc.duzeltilen : satirlar.length} değişiklik kayda geçti`);
+      toast(`Düzeltildi — ${sonuc && sonuc.duzeltilen != null ? sonuc.duzeltilen : satirlar.length} değişiklik kayda geçti${sonuc && sonuc.fatura_kaldirildi ? " · fatura işareti kaldırıldı" : ""}`);
       duzeltmeAcik = false;
       await loadQueue(); // açık detayı da yeniler
     } catch (e) {
-      toast(e && e.code === "42501" ? "Bu istemi yalnız giren kişi ya da yönetici düzeltebilir" : (e && e.message) || "Düzeltilemedi", true);
+      toast(e && e.code === "42501" && /Bekleyen/.test(e.message || "") ? e.message
+        : e && e.code === "42501" ? "Bu istemi yalnız giren kişi ya da yönetici düzeltebilir" : (e && e.message) || "Düzeltilemedi", true);
       const b = $("#dzKaydet"); if (b) b.disabled = false;
     }
   };
@@ -2595,7 +2626,7 @@ async function showDetail(r) {
       <div class="d-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}</div>${duzEski(r, "blok_no")}
       ${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}
     </div>
-    <div class="d-test"><div class="n">${esc(r.test_adi)}</div>${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}${r.kontrol ? `<div class="c kontrol">Kontrol: ${esc(r.kontrol)}</div>` : ""}</div>
+    <div class="d-test"><div class="n">${esc(r.test_adi)}${duzRozet(r, "test")}</div>${duzEski(r, "test")}${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}${r.kontrol ? `<div class="c kontrol">Kontrol: ${esc(r.kontrol)}</div>` : ""}</div>
     ${tekrarInfo}
     ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button></div>` : ""}
     <div class="d-grid">
@@ -5182,7 +5213,7 @@ function calismaListesiYazdir(mod = "gorunen") {
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(r.patoloji_no)}${duzNot(r, "patoloji_no")}</td>
           <td class="yl-id">${esc(r.blok_no || "—")}${duzNot(r, "blok_no")}</td>
-          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${r.kontrol ? `<div class="yl-kontrol">K: ${esc(r.kontrol)}</div>` : ""}</td>
+          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${r.kontrol ? `<div class="yl-kontrol">K: ${esc(r.kontrol)}</div>` : ""}${duzNot(r, "test")}</td>
           <td>${ONC[r.oncelik] || ""}${duzNot(r, "oncelik")}</td>
           <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}${duzNot(r, "uzman")}</td>
           <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>

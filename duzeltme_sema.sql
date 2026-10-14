@@ -5,6 +5,7 @@
 -- (yeni kod istem_kuyruk_v.duzeltmeler / eski_patoloji_nolar kolonlarını
 -- okur). İDEMPOTENT'tir. istem_kuyruk_v'nin SON HALİ bu dosyadadır;
 -- daha eski dosyalar yeniden çalıştırılırsa görünümü geri almaz.
+-- istem_duzelt'in son hali (test alanı) test_duzeltme_sema.sql'dedir.
 -- ============================================================
 
 begin;
@@ -71,6 +72,15 @@ begin;
 --                 bloklar?: [{ kalem_id, blok_no }] }  — test adı yok.
 -- Değişen her alan → istem_duzeltmeleri satırı + istem_notlari notu.
 -- ------------------------------------------------------------
+-- test_duzeltme_sema.sql çalıştıysa fonksiyonun son hali (test alanıyla)
+-- oradadır — o durumda burada YENİDEN TANIMLANMAZ.
+do $fn$
+begin
+  if not exists (
+    select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+    where ns.nspname = 'public' and p.proname = 'istem_duzelt' and p.prosrc like '%testler%'
+  ) then
+    execute $sql$
 create or replace function public.istem_duzelt(p_istem_id uuid, p_degisiklik jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -170,6 +180,9 @@ begin
 
   return jsonb_build_object('duzeltilen', n);
 end $$;
+    $sql$;
+  end if;
+end $fn$;
 
 revoke all on function public.istem_duzelt(uuid, jsonb) from public, anon;
 grant execute on function public.istem_duzelt(uuid, jsonb) to authenticated;

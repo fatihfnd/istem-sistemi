@@ -244,8 +244,9 @@ revoke all on function public.blok_cikarildi_geri_al(uuid[]) from public, anon;
 grant execute on function public.blok_cikarildi_geri_al(uuid[]) to authenticated;
 
 -- ------------------------------------------------------------
--- 6) Fatura girişi: geri alma YALNIZ işaretleyen kişi ve yönetici; her
--- giriş ve geri alma fatura_gecmisi'ne (kim, ne zaman) yazılır.
+-- 6) Fatura girişi: geri alma YALNIZ işaretleyen kişi ve yönetici (istisna:
+-- test düzeltmesi — istem_duzelt içinde istem.test_duzeltme bayrağıyla; bkz.
+-- test_duzeltme_sema.sql); her giriş ve geri alma fatura_gecmisi'ne yazılır.
 -- auth.uid() boşsa (SQL Editor) yetki kontrolü yapılmaz, kayıt yine düşer.
 -- ------------------------------------------------------------
 create or replace function public.istemler_fatura_kaydi() returns trigger
@@ -257,6 +258,7 @@ begin
     return new;
   end if;
   if old.fatura_girildi and not coalesce(new.fatura_girildi, false) and auth.uid() is not null
+     and coalesce(current_setting('istem.test_duzeltme', true), '') <> 'on'
      and not (public.is_admin() or old.fatura_giren_id = ben) then
     raise exception 'Bu fatura girişini yalnız işaretleyen kişi ya da yönetici geri alabilir' using errcode = '42501';
   end if;

@@ -1069,6 +1069,12 @@
       if (error) throw error;
       return data;
     },
+    // Hizmetler'de "Gir" işaretli mi (test düzeltmesi uyarısı için).
+    async istemFaturaDurumu(istemId) {
+      const { data, error } = await client.from("istemler").select("fatura_girildi").eq("id", istemId).maybeSingle();
+      if (error) throw error;
+      return Boolean(data && data.fatura_girildi);
+    },
     // İstemin düzeltme geçmişi (yeni → eski); tablo yoksa boş.
     async getDuzeltmeler(istemId) {
       const [{ data, error }, kullaniciMap] = await Promise.all([

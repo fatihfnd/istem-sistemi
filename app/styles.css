@@ -987,3 +987,7 @@ td.c-kisi .duz-eski{overflow:hidden;text-overflow:ellipsis}
 @media print{
   .yl-duz{font-size:8.5pt;font-weight:400;font-style:italic;font-family:var(--sans);white-space:normal}
 }
+
+.duz-uyari{margin-top:8px;padding:7px 9px;border-radius:7px;background:var(--amber-b);color:var(--amber-i);border:1px solid color-mix(in srgb, var(--amber-i) 40%, transparent);font-size:12px;font-weight:600;line-height:1.4}
+.duz-kilit{margin-top:4px}
+select.finput:disabled{opacity:.6;cursor:not-allowed}
