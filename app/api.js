@@ -405,10 +405,10 @@
       return data;
     },
 
-    async createTestKatalogEntry({ grup, ad, klon, sira }) {
+    async createTestKatalogEntry({ grup, ad, klon, kontrol, sira }) {
       const { data, error } = await client
         .from("test_katalog")
-        .insert({ grup, ad, klon: klon || null, sira: sira ?? 0 })
+        .insert({ grup, ad, klon: klon || null, kontrol: kontrol || null, sira: sira ?? 0 })
         .select()
         .single();
       if (error) throw error;
@@ -437,9 +437,32 @@
       return data;
     },
 
-    async updateTestKatalogEntry(id, { ad, klon, sira }) {
-      const { error } = await client.from("test_katalog").update({ ad, klon: klon || null, sira: sira ?? 0 }).eq("id", id);
+    async updateTestKatalogEntry(id, { ad, klon, kontrol, sira }) {
+      const { error } = await client.from("test_katalog").update({ ad, klon: klon || null, kontrol: kontrol || null, sira: sira ?? 0 }).eq("id", id);
       if (error) throw error;
+    },
+
+    // Kontrol listesi eşleştirmesi için TÜM katalog (aktif + pasif, tüm gruplar).
+    async getKatalogTumu() {
+      const out = [];
+      for (;;) {
+        const { data, error } = await client
+          .from("test_katalog")
+          .select("id,grup,ad,klon,kontrol,aktif")
+          .order("grup").order("sira").order("id")
+          .range(out.length, out.length + 999);
+        must(data, error);
+        out.push(...data);
+        if (data.length < 1000) return out;
+      }
+    },
+
+    // Onaylanan kontrol listesini tek işlemde yazar (kontrol_sema.sql).
+    // liste: [{id, kontrol}] — dönen: {guncellenen}
+    async katalogKontrolYukle(liste) {
+      const { data, error } = await client.rpc("katalog_kontrol_yukle", { p_liste: liste });
+      if (error) throw error;
+      return data;
     },
 
     async setTestKatalogAktif(id, aktif) {
@@ -455,7 +478,7 @@
     async getTestKatalogByGrup(grup) {
       const { data, error } = await client
         .from("test_katalog")
-        .select("id,grup,ad,klon,sira,aktif")
+        .select("id,grup,ad,klon,kontrol,sira,aktif")
         .eq("grup", grup)
         .order("sira");
       return must(data, error);

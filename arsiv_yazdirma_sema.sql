@@ -5,8 +5,8 @@
 -- ekip_sema.sql ve push_sema.sql'den SONRA, YENİ KOD DEPLOY EDİLMEDEN
 -- ÖNCE çalıştırın (yeni kod istem_kuyruk_v'nin blok_cikarildi_at /
 -- yazdirmalar kolonlarını okur). İDEMPOTENT'tir.
--- istem_kuyruk_v'nin SON HALİ bu dosyadadır — ekip_sema.sql ya da daha
--- eski dosyaları yeniden çalıştırırsanız ardından bunu da çalıştırın.
+-- istem_kuyruk_v'nin son hali kontrol_sema.sql'dedir; bu dosya yeniden
+-- çalıştırılırsa görünümü geri almaz (kontrol kolonu varsa dokunmaz).
 -- ============================================================
 
 begin;
@@ -104,6 +104,15 @@ begin;
 -- 4) Kuyruk görünümü — yeni kolonlar SONA eklenir: blok çıkarma + bağlam
 -- başına son yazdırma ({ "calisma": {zaman, kim, kisaltma}, ... }).
 -- ------------------------------------------------------------
+-- kontrol_sema.sql çalıştıysa görünüm daha fazla kolonludur (kontrol) —
+-- o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'kontrol'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -163,7 +172,10 @@ left join kullanicilar isteyen on isteyen.id = i.istem_yapan_id
 left join kullanicilar uzman   on uzman.id   = i.uzman_id
 left join kullanicilar kesen   on kesen.id   = ik.kesen_id
 left join kullanicilar cikaran on cikaran.id = ik.blok_cikaran_id
-left join cihazlar c        on c.id = ik.cihaz_id;
+left join cihazlar c        on c.id = ik.cihaz_id
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

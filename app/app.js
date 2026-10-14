@@ -19,6 +19,7 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Blok", value: (r) => r.blok_no },
   { label: "Test", value: (r) => r.test_adi },
   { label: "Klon", value: (r) => r.klon || "" },
+  { label: "Kontrol", value: (r) => r.kontrol || "" },
   { label: "Tip", value: (r) => TIP[r.grup] || "Diğer" },
   { label: "İsteyen", value: (r) => r.isteyen_adi || "" },
   { label: "Uzman Adına", value: (r) => r.uzman_adi || "" },
@@ -1223,7 +1224,7 @@ function renderTable() {
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${yazdirIkonu([r], "calisma")}</td>
       <td class="c-blok">${esc(r.blok_no)}${caprazRozet(r, acik)}</td>
-      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
+      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam")}
@@ -1455,7 +1456,7 @@ function iliskiliSatirHTML(r) {
       <td class="c-durum"><div class="dacts"><span class="ilsk-etiket">ilişkili</span><span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div></td>
       <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span></td>
       <td class="c-blok">${esc(r.blok_no)}</td>
-      <td class="c-test">${esc(r.test_adi)}${kesitRozeti(r)}${r.klon ? `<small>${esc(r.klon)}</small>` : ""}</td>
+      <td class="c-test">${esc(r.test_adi)}${kesitRozeti(r)}${klonKontrolHTML(r)}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma)}
@@ -2149,6 +2150,25 @@ function showEmpty() {
   renderTable();
 }
 
+// Sağ panel yalnız içinde başlıklı bir panel (istek detayı, form) varken
+// açıktır — boş durum ("Bir istek seç") hiçbir genişlikte yer kaplamaz.
+// Açık/kapalı, CSS :has() yerine sınıfla: :has() eski Firefox'ta (ESR 115)
+// yok ve orada orta genişlikte panel hiç açılmıyordu.
+(function railIzle() {
+  const rail = $("#rail");
+  if (!rail) return;
+  const guncelle = () => rail.classList.toggle("acik", Boolean(rail.querySelector(".rail-head")));
+  new MutationObserver(guncelle).observe(rail, { childList: true });
+  guncelle();
+})();
+
+// Test hücresinin alt satırı: "L26 · K: Tonsil". Kontrol italik ve renksiz
+// (siyah-beyaz baskıda da ayrışır); ikisi de boşsa hiçbir şey çıkmaz.
+function klonKontrolHTML(r) {
+  if (!r.klon && !r.kontrol) return "";
+  return `<small>${r.klon ? esc(r.klon) : ""}${r.klon && r.kontrol ? " · " : ""}${r.kontrol ? `<span class="kontrol">K: ${esc(r.kontrol)}</span>` : ""}</small>`;
+}
+
 async function showDetail(r) {
   selId = r.kalem_id;
   if (yeniKalemler.delete(r.kalem_id)) renderYeniBildirim();
@@ -2212,7 +2232,7 @@ async function showDetail(r) {
 
   $("#detailBody").innerHTML = `
     <div class="d-pat">${esc(r.patoloji_no)}</div><div class="d-blok">${esc(r.blok_no)}</div>
-    <div class="d-test"><div class="n">${esc(r.test_adi)}</div>${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}</div>
+    <div class="d-test"><div class="n">${esc(r.test_adi)}</div>${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}${r.kontrol ? `<div class="c kontrol">Kontrol: ${esc(r.kontrol)}</div>` : ""}</div>
     ${tekrarInfo}
     ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button></div>` : ""}
     <div class="d-grid">
@@ -3615,6 +3635,7 @@ function renderTestKatalogPage() {
       <h1>Test Kataloğu</h1>
       <div class="sub">Antikor/test kataloğu — gruplar "Test Grupları" sayfasından yönetilir.</div>
       <div class="spacer"></div>
+      <button class="btn-ghost btn-sm" id="kontrolYukleBtn">Kontrol listesi yükle</button>
       <button class="btn-ghost btn-sm" id="bulkTestBtn">Toplu Ekle</button>
       <button class="btn-primary btn-sm" id="newTestBtn">+ Yeni Test</button>
     </div>
@@ -3624,6 +3645,7 @@ function renderTestKatalogPage() {
   renderTkGroups();
   $("#newTestBtn").onclick = () => { if (tkGrup) showTestKatalogForm(tkGrup, null); else toast("Önce bir grup seçin/oluşturun", true); };
   $("#bulkTestBtn").onclick = () => showTestKatalogBulkForm(tkGrup);
+  $("#kontrolYukleBtn").onclick = renderKontrolYukle;
   loadTkList();
 }
 
@@ -3655,7 +3677,7 @@ function renderTkList() {
   }
   wrap.innerHTML = tkList.map((t) => `
     <div class="devrow" data-id="${t.id}">
-      <div><div class="nm">${esc(t.ad)}</div>${t.klon ? `<div class="tip">Klon ${esc(t.klon)}</div>` : ""}</div>
+      <div><div class="nm">${esc(t.ad)}</div>${t.klon || t.kontrol ? `<div class="tip">${[t.klon ? `Klon ${esc(t.klon)}` : "", t.kontrol ? `<span class="kontrol">K: ${esc(t.kontrol)}</span>` : ""].filter(Boolean).join(" · ")}</div>` : ""}</div>
       <div class="grow"></div>
       <span class="status ${t.aktif ? "aktif" : "pasif"}">${t.aktif ? "Aktif" : "Pasif"}</span>
     </div>`).join("");
@@ -3785,6 +3807,7 @@ function showTestKatalogForm(grup, existing) {
       <div class="m-sec"><p class="m-label">Grup</p><div class="v" style="font-size:13px">${esc(TIP[grup] || grup)}</div></div>
       <div class="m-sec"><p class="m-label">Ad</p><input class="finput" id="tkAd" value="${existing ? esc(existing.ad) : ""}" placeholder="ör. ER"></div>
       <div class="m-sec"><p class="m-label">Klon <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— opsiyonel</span></p><input class="finput" id="tkKlon" value="${existing && existing.klon ? esc(existing.klon) : ""}" placeholder="ör. SP1"></div>
+      <div class="m-sec"><p class="m-label">Kontrol <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— opsiyonel, iş listesinde test adının altında görünür</span></p><input class="finput" id="tkKontrol" maxlength="200" value="${existing && existing.kontrol ? esc(existing.kontrol) : ""}" placeholder="ör. Tonsil"></div>
       <div class="m-sec"><p class="m-label">Sıra</p><input class="finput" id="tkSira" type="number" value="${existing ? existing.sira : 0}"></div>
     </div>
     <div class="rail-foot">
@@ -3817,11 +3840,12 @@ function showTestKatalogForm(grup, existing) {
     const ad = $("#tkAd").value.trim();
     if (!ad) { toast("Ad girin", true); return; }
     const klon = $("#tkKlon").value.trim();
+    const kontrol = $("#tkKontrol").value.trim().replace(/\s+/g, " ");
     const sira = Number($("#tkSira").value) || 0;
     $("#saveTk").disabled = true;
     try {
-      if (existing) await Api.updateTestKatalogEntry(existing.id, { ad, klon, sira });
-      else await Api.createTestKatalogEntry({ grup, ad, klon, sira });
+      if (existing) await Api.updateTestKatalogEntry(existing.id, { ad, klon, kontrol, sira });
+      else await Api.createTestKatalogEntry({ grup, ad, klon, kontrol, sira });
       toast(existing ? "Test güncellendi" : "Test eklendi");
       CAT = await Api.getTestKatalog();
       await loadTkList();
@@ -3891,6 +3915,249 @@ function showTestKatalogBulkForm(defaultGrup) {
       const btn = $("#saveBulkTk"); if (btn) btn.disabled = false;
     }
   };
+}
+
+// ================================================================
+// KONTROL LİSTESİ YÜKLE (Test Kataloğu, yönetici)
+// Excel'den yapıştırılan "Antikor <TAB> Kontrol" satırları katalogla
+// eşleştirilir; önizleme onaylanınca tek işlemde yazılır
+// (katalog_kontrol_yukle). Eşleşmeyenler kataloğa EKLENMEZ.
+// ================================================================
+const TR_SADE = { "İ": "i", "I": "i", "ı": "i", "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g", "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c" };
+// Eşleştirme anahtarı: Türkçe harfler sadeleşir, aksanlar atılır, küçük harf;
+// boşluk, tire (- – —), nokta ve parantez yok sayılır. "/" korunur.
+//   "Bcl-2" = "BCL2" · "CK 5/6" = "CK5/6" · "PAX-8" = "Pax8"
+function antikorAnahtar(s) {
+  return String(s || "").replace(/[İIıŞşĞğÜüÖöÇç]/g, (c) => TR_SADE[c])
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/[\s\-‐-―.()]/g, "");
+}
+const parantezIcsiz = (s) => String(s || "").replace(/\([^)]*\)/g, " ");
+
+// Satırlar: { no, ad, kontrol, tabYok }. Başlık (ilk satırda "antikor" ya da
+// "kontrol") atlanır; kontrol "X" ise boş. TAB'sız satır uyarıya düşer
+// (kontrolü boş sayıp mevcut değeri silmesin diye).
+function kontrolListesiAyristir(metin) {
+  const satirlar = String(metin || "").replace(/\r/g, "").split("\n")
+    .map((l, i) => ({ no: i + 1, l })).filter((x) => x.l.trim());
+  if (satirlar.length && /antikor|kontrol/.test(antikorAnahtar(satirlar[0].l))) satirlar.shift();
+  return satirlar.map(({ no, l }) => {
+    const parca = l.split("\t");
+    const ad = parca[0].trim().replace(/\s+/g, " ");
+    let kontrol = (parca[1] || "").trim().replace(/\s+/g, " ");
+    if (/^x$/i.test(kontrol)) kontrol = "";
+    return { no, ad, kontrol, tabYok: parca.length < 2 };
+  }).filter((s) => s.ad);
+}
+
+// Eşleştirme İmmün ekibinin gruplarındaki testlerle (aktif + pasif). Aynı
+// anahtara birden çok test düşerse aktif olan seçilir; yine birden çoksa
+// "belirsiz" (elle seçilir). Tam eşleşme yoksa parantez içi atılarak bir
+// tur daha denenir ("Ki-67 (MIB-1)" → "Ki-67") — önizlemede işaretli.
+function kontrolEslestir(liste, havuz) {
+  let gruplar = Object.values(GRUP_BILGI).filter((g) => g.ekip === "immun").map((g) => g.kod);
+  if (!gruplar.length) gruplar = ["ihc"];
+  const dizin = new Map();
+  havuz.filter((t) => gruplar.includes(t.grup)).forEach((t) => {
+    const k = antikorAnahtar(t.ad);
+    if (!dizin.has(k)) dizin.set(k, []);
+    dizin.get(k).push(t);
+  });
+  const bul = (k) => {
+    let c = dizin.get(k) || [];
+    if (c.length > 1 && c.some((t) => t.aktif)) c = c.filter((t) => t.aktif);
+    return c;
+  };
+  return liste.map((s) => {
+    if (s.tabYok) return { ...s, yol: "tabyok", adaylar: [], secim: "" };
+    const k = antikorAnahtar(s.ad);
+    let adaylar = bul(k), yol = "tam";
+    if (!adaylar.length) {
+      const k2 = antikorAnahtar(parantezIcsiz(s.ad));
+      if (k2 && k2 !== k) { adaylar = bul(k2); yol = "parantez"; }
+    }
+    if (!adaylar.length) yol = "yok";
+    else if (adaylar.length > 1) yol = "belirsiz";
+    return { ...s, yol, adaylar, secim: adaylar.length === 1 ? adaylar[0].id : "" };
+  });
+}
+
+let kkMetin = "";
+let kkHavuz = [];    // katalogdaki tüm testler: {id, grup, ad, klon, kontrol, aktif}
+let kkSatirlar = []; // ayrıştırılmış + eşleştirilmiş liste satırları
+
+function renderKontrolYukle() {
+  showEmpty();
+  $("#mainView").innerHTML = `
+    <div class="page-head">
+      <button class="btn-ghost btn-sm" id="kkGeri">← Test Kataloğu</button>
+      <h1>Kontrol listesi yükle</h1>
+      <div class="spacer"></div>
+    </div>
+    <div class="kk-wrap" id="kkWrap"></div>`;
+  $("#kkGeri").onclick = renderTestKatalogPage;
+  kkGirisGoster();
+}
+
+function kkGirisGoster() {
+  $("#kkWrap").innerHTML = `
+    <p class="kk-acik">Excel'de iki sütunu (Antikor, Kontrol) seçip kopyalayın ve aşağıya yapıştırın. Başlık satırı varsa atlanır; kontrolü <b>X</b> olanlar boş kabul edilir. Antikor adları katalogla büyük/küçük harf, boşluk, tire, nokta ve parantez farkı gözetilmeden eşleştirilir ("Bcl-2" = "BCL2"). Önizlemeden önce hiçbir şey kaydedilmez.</p>
+    <textarea id="kkMetin" class="kk-metin" spellcheck="false" placeholder="Antikor&#9;Kullanılacak Kontrol&#10;Bcl-2&#9;Tonsil&#10;CD20&#9;Tonsil&#10;HMB-45&#9;X">${esc(kkMetin)}</textarea>
+    <div class="kk-aks"><button class="btn-primary" id="kkOnizle">Önizle</button></div>`;
+  $("#kkOnizle").onclick = kkOnizle;
+}
+
+async function kkOnizle() {
+  kkMetin = $("#kkMetin").value;
+  const liste = kontrolListesiAyristir(kkMetin);
+  if (!liste.length) { toast("Yapıştırılmış satır yok", true); return; }
+  const btn = $("#kkOnizle");
+  btn.disabled = true;
+  try {
+    kkHavuz = await Api.getKatalogTumu();
+  } catch (e) {
+    toast("Katalog okunamadı", true);
+    btn.disabled = false;
+    return;
+  }
+  kkSatirlar = kontrolEslestir(liste, kkHavuz);
+  renderKkOnizleme();
+}
+
+// Seçimlere göre güncel tablo: aynı teste birden çok satır düşerse listede
+// SONRA gelen geçerli, öncekiler "çakışma".
+function kkDurum() {
+  const byId = new Map(kkHavuz.map((t) => [t.id, t]));
+  const son = new Map();
+  kkSatirlar.forEach((s) => { if (s.secim) son.set(s.secim, s); });
+  const d = { byId, eslesen: [], degisecek: [], ayni: [], eslesmeyen: [], cakisma: [], tabYok: [] };
+  kkSatirlar.forEach((s) => {
+    if (s.yol === "tabyok") { d.tabYok.push(s); return; }
+    if (!s.secim) { d.eslesmeyen.push(s); return; }
+    if (son.get(s.secim) !== s) { d.cakisma.push(s); return; }
+    d.eslesen.push(s);
+    const t = byId.get(s.secim);
+    ((t.kontrol || "") === s.kontrol ? d.ayni : d.degisecek).push(s);
+  });
+  return d;
+}
+
+function kkTestEtiketi(t) {
+  return `${esc(t.ad)}${t.klon ? ` <small class="kk-klon">${esc(t.klon)}</small>` : ""}${t.aktif ? "" : ` <small class="kk-pasif">pasif</small>`}`;
+}
+const kkKontrolHucre = (v) => (v ? esc(v) : `<span class="kk-bos">boş</span>`);
+
+function kkSecenekler(s) {
+  const grupAd = Object.fromEntries(GROUPS);
+  const sirali = kkHavuz.slice().sort((a, b) => a.ad.localeCompare(b.ad, "tr"));
+  const gruplar = new Map();
+  sirali.forEach((t) => { if (!gruplar.has(t.grup)) gruplar.set(t.grup, []); gruplar.get(t.grup).push(t); });
+  const opt = (t) => `<option value="${t.id}">${esc(t.ad)}${t.klon ? ` (${esc(t.klon)})` : ""}${t.aktif ? "" : " — pasif"}</option>`;
+  return `<option value="">— Atla —</option>`
+    + (s.adaylar.length > 1 ? `<optgroup label="Adaylar">${s.adaylar.map(opt).join("")}</optgroup>` : "")
+    + [...gruplar].map(([g, list]) => `<optgroup label="${esc(grupAd[g] || TIP[g] || g)}">${list.map(opt).join("")}</optgroup>`).join("");
+}
+
+const KK_YOL = { yok: "eşleşmedi", belirsiz: "birden çok aday", parantez: "parantez dışı eşleşti" };
+
+function renderKkOnizleme() {
+  const d = kkDurum();
+  const elle = kkSatirlar.filter((s) => s.yol === "yok" || s.yol === "belirsiz" || s.yol === "parantez");
+  const tamDegisecek = d.degisecek.filter((s) => s.yol === "tam");
+  const tamAyni = d.ayni.filter((s) => s.yol === "tam");
+  // Katalogda hiç karşılığı olmayan (ve elle bağlanmamış) satırlar — Toplu Ekle için.
+  const yoklar = d.eslesmeyen.filter((s) => s.yol === "yok");
+  const sonuc = (s) => {
+    if (!s.secim) return `<span class="kk-rozet atla">atlanacak</span>`;
+    if (d.cakisma.includes(s)) return `<span class="kk-rozet uyari">çakışma</span>`;
+    return d.degisecek.includes(s) ? `<span class="kk-rozet degis">değişecek</span>` : `<span class="kk-rozet">aynı</span>`;
+  };
+  $("#kkWrap").innerHTML = `
+    <div class="kk-ozet">
+      <span><b>${kkSatirlar.length}</b> satır</span>
+      <span><b>${d.eslesen.length}</b> eşleşen</span>
+      <span class="degis"><b>${d.degisecek.length}</b> değişecek</span>
+      <span><b>${d.ayni.length}</b> aynı kalacak</span>
+      <span class="${d.eslesmeyen.length ? "uyari" : ""}"><b>${d.eslesmeyen.length}</b> eşleşmeyen</span>
+      ${d.cakisma.length ? `<span class="uyari"><b>${d.cakisma.length}</b> çakışma</span>` : ""}
+      ${d.tabYok.length ? `<span class="uyari"><b>${d.tabYok.length}</b> okunamayan</span>` : ""}
+    </div>
+    ${elle.length ? `<div class="kk-bolum"><h3>Elle bakılacak <span class="count">${elle.length}</span></h3>
+      <p class="kk-not">Eşleşmeyen, birden çok adayı olan ya da parantez dışı eşleşen satırlar. Katalogdaki bir teste bağlayın ya da "Atla"da bırakın — eşleşmeyenler kataloğa eklenmez.</p>
+      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Kontrol</th><th>Katalogdaki test</th><th>Mevcut kontrol</th><th></th></tr></thead><tbody>
+      ${elle.map((s) => {
+        const t = s.secim && d.byId.get(s.secim);
+        return `<tr><td class="kk-no">${s.no}</td><td><b>${esc(s.ad)}</b><div class="kk-yol">${KK_YOL[s.yol]}</div></td><td>${kkKontrolHucre(s.kontrol)}</td>
+          <td><select class="finput kk-sec" data-kk="${kkSatirlar.indexOf(s)}">${kkSecenekler(s)}</select></td>
+          <td>${t ? kkKontrolHucre(t.kontrol) : ""}</td><td>${sonuc(s)}</td></tr>`;
+      }).join("")}
+      </tbody></table></div></div>` : ""}
+    ${d.cakisma.length ? `<div class="kk-bolum"><h3>Çakışma <span class="count">${d.cakisma.length}</span></h3>
+      <p class="kk-not">Aynı teste birden çok satır düştü; listede sonra gelen satır geçerli, bunlar yok sayılır.</p>
+      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Kontrol</th><th>Katalogdaki test</th></tr></thead><tbody>
+      ${d.cakisma.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkKontrolHucre(s.kontrol)}</td><td>${kkTestEtiketi(d.byId.get(s.secim))}</td></tr>`).join("")}
+      </tbody></table></div></div>` : ""}
+    ${d.tabYok.length ? `<div class="kk-bolum"><h3>Okunamayan satırlar <span class="count">${d.tabYok.length}</span></h3>
+      <p class="kk-not">Kontrol sütunu yok (TAB ile ayrılmamış) — atlandı. Excel'de iki sütunu birlikte seçip kopyalayın.</p>
+      <div class="kk-kaydir"><table class="kk-tablo"><tbody>${d.tabYok.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
+    <div class="kk-bolum"><h3>Değişecek <span class="count">${tamDegisecek.length}</span></h3>
+      ${tamDegisecek.length ? `<div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Katalogdaki test</th><th>Mevcut kontrol</th><th>Yeni kontrol</th></tr></thead><tbody>
+      ${tamDegisecek.map((s) => { const t = d.byId.get(s.secim); return `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(t)}</td><td class="kk-eski">${kkKontrolHucre(t.kontrol)}</td><td><b>${kkKontrolHucre(s.kontrol)}</b></td></tr>`; }).join("")}
+      </tbody></table></div>` : `<p class="kk-not">Doğrudan eşleşenlerde değişecek kontrol yok.</p>`}</div>
+    ${tamAyni.length ? `<details class="kk-bolum"><summary>Aynı kalacak <span class="count">${tamAyni.length}</span></summary>
+      <div class="kk-kaydir"><table class="kk-tablo"><tbody>${tamAyni.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(d.byId.get(s.secim))}</td><td>${kkKontrolHucre(s.kontrol)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+    <div class="kk-aks">
+      <button class="btn-ghost" id="kkDuzenle">← Listeyi düzenle</button>
+      ${yoklar.length ? `<button class="btn-ghost" id="kkKopyala" title="Katalogda hiç bulunmayanları 'Toplu Ekle'ye yapıştırmak için">Katalogda olmayanları kopyala (${yoklar.length})</button>` : ""}
+      <button class="btn-primary" id="kkUygula" ${d.degisecek.length ? "" : "disabled"}>${d.degisecek.length ? `Uygula — ${d.degisecek.length} testin kontrolü değişecek` : "Değişecek kontrol yok"}</button>
+    </div>`;
+
+  $$("#kkWrap [data-kk]").forEach((sel) => {
+    const s = kkSatirlar[Number(sel.dataset.kk)];
+    sel.value = s.secim || "";
+    sel.onchange = () => { s.secim = sel.value; renderKkOnizleme(); };
+  });
+  $("#kkDuzenle").onclick = kkGirisGoster;
+  $("#kkKopyala")?.addEventListener("click", () => {
+    const metin = yoklar.map((s) => s.ad).join("\n");
+    panoyaKopyala(metin, `${yoklar.length} ad kopyalandı — Toplu Ekle'ye yapıştırabilirsiniz`, () => {
+      // Pano izni yoksa: liste seçili bir kutuda — elle kopyalanır.
+      $("#kkKopyaKutu")?.remove();
+      $("#kkKopyaNot")?.remove();
+      $(".kk-aks").insertAdjacentHTML("afterend", `<p class="kk-not" id="kkKopyaNot" style="margin-top:12px">Panoya yazılamadı — listeyi buradan kopyalayın (Ctrl+C):</p><textarea id="kkKopyaKutu" class="kk-metin" style="min-height:120px" readonly>${esc(metin)}</textarea>`);
+      $("#kkKopyaKutu").select();
+    });
+  });
+  $("#kkUygula").onclick = async () => {
+    const liste = d.degisecek.map((s) => ({ id: s.secim, kontrol: s.kontrol || null }));
+    if (!confirm(`${liste.length} testin kontrolü güncellenecek. Devam edilsin mi?`)) return;
+    $("#kkUygula").disabled = true;
+    try {
+      const r = await Api.katalogKontrolYukle(liste);
+      toast(`${r.guncellenen} testin kontrolü güncellendi`);
+      kkMetin = ""; kkSatirlar = [];
+      renderTestKatalogPage();
+    } catch (e) {
+      toast(e && e.code === "42501" ? "Kontrol listesini yalnız yönetici yükleyebilir" : "Kaydedilemedi", true);
+      const b = $("#kkUygula"); if (b) b.disabled = false;
+    }
+  };
+}
+
+function panoyaKopyala(metin, mesaj, olmazsa) {
+  const yedek = () => {
+    const ta = document.createElement("textarea");
+    ta.value = metin; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    if (ok) toast(mesaj);
+    else if (olmazsa) olmazsa();
+    else toast("Kopyalanamadı", true);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(metin).then(() => toast(mesaj), yedek);
+  else yedek();
 }
 
 // ---------------- Görünüm: tema / mod / tablo yoğunluğu ----------------
@@ -4473,7 +4740,7 @@ function calismaListesiYazdir(mod = "gorunen") {
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(r.patoloji_no)}</td>
           <td class="yl-id">${esc(r.blok_no || "—")}</td>
-          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}</td>
+          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${r.kontrol ? `<div class="yl-kontrol">K: ${esc(r.kontrol)}</div>` : ""}</td>
           <td>${ONC[r.oncelik] || ""}</td>
           <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}</td>
           <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>

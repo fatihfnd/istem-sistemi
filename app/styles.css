@@ -433,7 +433,7 @@ td.c-durum{width:1%}
     transform:translateY(-100%); opacity:0; visibility:hidden; pointer-events:none;
     transition:transform .22s ease, opacity .22s ease, visibility 0s linear .22s;
   }
-  .rail:has(.rail-head){
+  .rail.acik{
     transform:translateY(0); opacity:1; visibility:visible; pointer-events:auto;
     transition:transform .22s ease, opacity .22s ease, visibility 0s linear 0s;
   }
@@ -676,10 +676,14 @@ tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-a
 .yedek-tur[data-tur=haftalik]{background:var(--violet-b);color:var(--violet-i)}
 .yedek-tur[data-tur=aylik]{background:var(--green-b);color:var(--green-i)}
 
-/* ---------------- Orta genişlik (dizüstü / küçük monitör) ----------------
-   Sağ panel varsayılan kapalı; açılınca sağdan kayan panel (arkası
-   karartılmaz — tablo kullanılmaya devam edilir). ≥ 1600 px ve telefon
-   düzeni değişmez. */
+/* ---------------- Sağ panel: her genişlikte varsayılan kapalı ----------------
+   .acik sınıfını app.js (railIzle) yönetir: panelde başlıklı içerik
+   (istek detayı, form) varken açık. ≥ 1600 px: açılınca tablonun yanında
+   durur, kapalıyken yer kaplamaz. 901–1599 px: sağdan kayan panel (arkası
+   karartılmaz, tabloyu itmez). Telefon: tam ekran (yukarıda). */
+@media (min-width:1600px){
+  .rail:not(.acik){display:none}
+}
 @media (min-width:901px) and (max-width:1599px){
   .rail{
     position:fixed; top:0; right:0; bottom:0; width:min(400px, 92vw); z-index:60;
@@ -687,7 +691,7 @@ tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-a
     transform:translateX(100%); visibility:hidden; pointer-events:none;
     transition:transform .22s ease, visibility 0s linear .22s;
   }
-  .rail:has(.rail-head){
+  .rail.acik{
     transform:translateX(0); visibility:visible; pointer-events:auto;
     transition:transform .22s ease, visibility 0s linear 0s;
   }
@@ -869,4 +873,48 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
 @media print{
   .yl-tablo .yl-sayi{text-align:center;width:46pt}
   .yl-tablo tr.yl-grup td{font-weight:700;font-size:10.5pt;padding-top:12pt;border-bottom:1pt solid #000;border-top:none}
+}
+
+/* ---------------- Kontrol (antikor kontrol dokusu) ----------------
+   Test adının altında, klonla aynı satırda: "L26 · K: Tonsil". Renge
+   dayanmaz — italik + küçük; siyah-beyaz baskıda da ayrışır. */
+.kontrol{font-style:italic;font-family:var(--sans)}
+
+/* ---------------- Kontrol listesi yükle ---------------- */
+.kk-wrap{padding:6px 26px 40px;max-width:1180px}
+.kk-acik{font-size:13px;color:var(--ink-2);line-height:1.55;margin:0 0 10px;max-width:860px}
+.kk-metin{display:block;width:100%;min-height:320px;font-family:var(--mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);color:var(--ink);tab-size:28;resize:vertical;outline:0}
+.kk-metin:focus{border-color:var(--accent)}
+.kk-aks{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px}
+.kk-aks > button{flex:none}
+.kk-ozet{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 6px}
+.kk-ozet span{font-size:12.5px;color:var(--ink-2);background:var(--card);border:1px solid var(--line);border-radius:20px;padding:4px 11px}
+.kk-ozet span b{color:var(--ink);font-variant-numeric:tabular-nums}
+.kk-ozet span.degis{border-color:var(--accent)}
+.kk-ozet span.uyari{border-color:var(--amber-i, #b45309)}
+.kk-bolum{margin-top:18px}
+.kk-bolum h3, .kk-bolum > summary{font-size:14px;font-weight:700;margin:0 0 6px;color:var(--ink)}
+.kk-bolum > summary{cursor:pointer}
+.kk-bolum .count{display:inline-block;margin-left:5px;font-size:11px;font-weight:700;background:var(--line-2);color:var(--ink-2);border-radius:20px;padding:1px 7px}
+.kk-not{font-size:12.5px;color:var(--ink-3);margin:0 0 8px}
+.kk-kaydir{overflow-x:auto}
+.kk-tablo{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);border:1px solid var(--line-2);border-radius:9px}
+.kk-tablo th{text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);padding:7px 9px;border-bottom:1px solid var(--line)}
+.kk-tablo td{padding:6px 9px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+.kk-tablo tr:last-child td{border-bottom:0}
+.kk-tablo .kk-no{color:var(--ink-3);font-size:11.5px;font-variant-numeric:tabular-nums;width:1%;white-space:nowrap}
+.kk-tablo select.kk-sec{min-width:200px;max-width:320px;padding:5px 8px;font-size:12.5px}
+.kk-yol{font-size:11px;color:var(--ink-3);font-style:italic}
+.kk-klon{font-family:var(--mono);color:var(--ink-3)}
+.kk-pasif{color:var(--ink-3);font-style:italic}
+.kk-bos{color:var(--ink-3);font-style:italic}
+.kk-eski{color:var(--ink-3)}
+.kk-rozet{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;background:var(--line-2);color:var(--ink-2);white-space:nowrap}
+.kk-rozet.degis{background:var(--accent-soft);color:var(--accent)}
+.kk-rozet.atla{background:transparent;border:1px dashed var(--line-strong);color:var(--ink-3)}
+.kk-rozet.uyari{background:var(--amber-b, #fef3c7);color:var(--amber-i, #b45309)}
+@media (max-width:900px){ .kk-wrap{padding:6px 16px 32px} }
+
+@media print{
+  .yl-kontrol{font-style:italic;font-size:9pt;font-weight:400;margin-top:1pt}
 }
