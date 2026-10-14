@@ -53,7 +53,7 @@ Deno.serve(async () => {
   // Veri okunamaz ya da dosya üretilemezse iki çıkış da imkânsız — tek ölümcül hata bu.
   let veri: YedekVerisi, bytes: ArrayBuffer;
   try {
-    const [istemler, kalemler, log, kuyruk, kullanicilar, gruplar, notlar] = await Promise.all([
+    const [istemler, kalemler, log, kuyruk, kullanicilar, gruplar, notlar, duzeltmeler] = await Promise.all([
       hepsiniOku(client, "istemler", "*", ["created_at", "id"]),
       hepsiniOku(client, "istem_kalemleri", "*", ["created_at", "id"]),
       hepsiniOku(client, "istem_log", "*", ["created_at", "id"]),
@@ -66,8 +66,14 @@ Deno.serve(async () => {
         console.error("[daily-backup] istem_notlari okunamadı:", e);
         return null;
       }),
+      // Düzeltme kaydı okunamazsa (duzeltme_sema.sql henüz çalışmadıysa) yedek
+      // yine alınır, yalnız "Düzeltmeler" sayfası olmaz.
+      hepsiniOku(client, "istem_duzeltmeleri", "*", ["created_at", "id"]).catch((e) => {
+        console.error("[daily-backup] istem_duzeltmeleri okunamadı:", e);
+        return null;
+      }),
     ]);
-    veri = { istemler, kalemler, log, kuyruk, kullanicilar, gruplar, notlar };
+    veri = { istemler, kalemler, log, kuyruk, kullanicilar, gruplar, notlar, duzeltmeler };
     bytes = XLSX.write(calismaKitabi(XLSX, veri), { type: "array", bookType: "xlsx" });
   } catch (e) {
     console.error("[daily-backup] Yedek üretilemedi:", e);

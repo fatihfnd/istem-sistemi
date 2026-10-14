@@ -965,3 +965,25 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
 .yz-sira .yz-nokta{display:inline-block;width:10px;height:10px;border-radius:50%;border:1.5px solid var(--line-strong);margin-right:7px;vertical-align:-1px;box-sizing:border-box}
 .yz-sira.on .yz-nokta{border-color:var(--accent);background:radial-gradient(circle, var(--accent) 0 40%, transparent 45%)}
 .yz-sira.on{font-weight:650}
+
+/* ---------------- İstem düzeltme ---------------- */
+.duz-rozet{display:inline-block;margin-left:6px;padding:0 5px;border-radius:4px;border:1px solid var(--line-strong);color:var(--ink-2);background:var(--paper);font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.02em;white-space:nowrap;vertical-align:1px;cursor:help}
+.duz-eski{font-size:11px;font-weight:400;color:var(--ink-3);text-decoration:line-through;opacity:.8;font-family:inherit;white-space:nowrap;margin-top:1px}
+td.c-kisi .duz-eski{overflow:hidden;text-overflow:ellipsis}
+.cikti-eski{display:inline-block;margin-top:3px;padding:1px 6px;border-radius:5px;background:var(--amber-b);color:var(--amber-i);border:1px solid color-mix(in srgb, var(--amber-i) 45%, transparent);font-family:var(--sans);font-size:10.5px;font-weight:700;white-space:nowrap}
+.rail-head .rx-duz{font-size:16px}
+.rail-head .rx-duz + .rx{margin-left:0}
+.duz-form{border:1px solid var(--line);border-radius:10px;background:var(--paper);padding:12px 12px 10px;margin-bottom:12px}
+.duz-form .m-label{margin-top:10px;display:block}
+.duz-baslik{font-weight:700;font-size:14px;color:var(--ink)}
+.duz-ipucu{font-size:11.5px;font-weight:400;color:var(--ink-3);text-transform:none;letter-spacing:0;margin-top:2px}
+.duz-kutu{display:flex;gap:7px;align-items:flex-start;font-size:12px;color:var(--ink-2);margin-top:6px;line-height:1.35}
+.duz-aks{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.duz-gecmis{margin-bottom:6px}
+.duz-satir{font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line-2)}
+.duz-satir:last-child{border-bottom:0}
+.duz-satir s{color:var(--ink-3)}
+.duz-kalem{color:var(--ink-3);font-size:11.5px}
+@media print{
+  .yl-duz{font-size:8.5pt;font-weight:400;font-style:italic;font-family:var(--sans);white-space:normal}
+}

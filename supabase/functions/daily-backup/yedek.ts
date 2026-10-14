@@ -35,6 +35,9 @@ export interface YedekVerisi {
   // ham istem_notlari — null: tablo okunamadı (ek_ozellikler_sema.sql henüz
   // çalışmadı); o zaman notlar eski tekil not_metni'nden yazılır.
   notlar: Satir[] | null;
+  // ham istem_duzeltmeleri (değiştirilemez düzeltme kaydı) — null: tablo
+  // okunamadı (duzeltme_sema.sql henüz çalışmadı); yedek yine alınır.
+  duzeltmeler?: Satir[] | null;
 }
 
 export interface Ozet {
@@ -47,7 +50,20 @@ export interface Ozet {
 
 const SUTUN_ISTEM = ["Patoloji No", "İsteyen", "Uzman Adına", "Öncelik", "Not", "Tarih", "Kalem Sayısı", "Tekrar", "Fatura Durumu", "Fatura Giren", "Fatura Zamanı"];
 // İlk 13 sütun = KUYRUK_EXPORT_COLS (app.js) ile aynı sıra/etiket.
-const SUTUN_KALEM = ["Patoloji No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme"];
+const SUTUN_KALEM = ["Patoloji No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
+const SUTUN_DUZ = ["Zaman", "Patoloji No (güncel)", "Alan", "Eski", "Yeni", "Kalem", "Düzelten"];
+
+// "Düzeltildi" sütunu — uygulamadaki duzeltmeOzeti ile aynı biçim:
+// "Patoloji no: 17730/26 → 17703/26; Blok: A1 → A2" (eski = İLK girilen).
+const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", blok_no: "Blok", uzman: "Uzman adına", oncelik: "Öncelik" };
+const duzDeger = (alan: string, v: unknown) => String((alan === "oncelik" ? ONCELIK[String(v)] ?? v : v) || "—");
+export function duzeltmeOzeti(r: Satir): string {
+  const d = r.duzeltmeler as Record<string, { eski?: string }> | null | undefined;
+  if (!d) return "";
+  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, uzman: r.uzman_adi, oncelik: r.oncelik };
+  return Object.keys(DUZ_ALAN).filter((a) => d[a])
+    .map((a) => `${DUZ_ALAN[a]}: ${duzDeger(a, d[a].eski)} → ${duzDeger(a, guncel[a])}`).join("; ");
+}
 const SUTUN_LOG = ["Zaman", "Patoloji No", "Blok", "Test", "Eski Durum", "Yeni Durum", "Değiştiren"];
 
 const yeniOnce = (a: Satir, b: Satir) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
@@ -118,6 +134,7 @@ export function okunabilirSayfalar(v: YedekVerisi) {
     "Cihaz": r.cihaz_adi ?? "",
     "Tekrar Kaynağı": r.tekrar_kaynagi_id ? kalemTanim(r.tekrar_kaynagi_id) : "",
     "Son Güncelleme": tarihSaat(r.updated_at),
+    "Düzeltildi": duzeltmeOzeti(r),
   }));
 
   const log = [...v.log].sort(yeniOnce).map((l) => {
@@ -133,7 +150,24 @@ export function okunabilirSayfalar(v: YedekVerisi) {
     };
   });
 
-  return { istemler, kalemler, log };
+  // Düzeltme kaydının tamamı (en yeni önce); patoloji no GÜNCEL hali.
+  const istemPat = new Map(v.istemler.map((i) => [i.id, i.patoloji_no]));
+  const duzeltmeler = v.duzeltmeler
+    ? [...v.duzeltmeler].sort(yeniOnce).map((d) => {
+        const k = d.kalem_id ? kalem.get(d.kalem_id) : null;
+        return {
+          "Zaman": tarihSaat(d.created_at),
+          "Patoloji No (güncel)": istemPat.get(d.istem_id) ?? "(silinmiş istem)",
+          "Alan": DUZ_ALAN[d.alan] ?? d.alan,
+          "Eski": duzDeger(d.alan, d.eski_deger),
+          "Yeni": duzDeger(d.alan, d.yeni_deger),
+          "Kalem": d.kalem_id ? (k ? `${k.blok_no || "—"} · ${k.test_adi}` : "(silinmiş kalem)") : "",
+          "Düzelten": ad(d.duzelten_id),
+        };
+      })
+    : null;
+
+  return { istemler, kalemler, log, duzeltmeler };
 }
 
 // ham_istem_log: veritabanı satırı BİREBİR (geri yükleme için ilk kolonlar
@@ -172,10 +206,12 @@ export function calismaKitabi(XLSX: any, v: YedekVerisi) {
   XLSX.utils.book_append_sheet(wb, sayfa(XLSX, s.istemler, SUTUN_ISTEM), "İstemler");
   XLSX.utils.book_append_sheet(wb, sayfa(XLSX, s.kalemler, SUTUN_KALEM), "İstem Kalemleri");
   XLSX.utils.book_append_sheet(wb, sayfa(XLSX, s.log, SUTUN_LOG), "Durum Geçmişi");
+  if (s.duzeltmeler) XLSX.utils.book_append_sheet(wb, sayfa(XLSX, s.duzeltmeler, SUTUN_DUZ), "Düzeltmeler");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(v.istemler), "ham_istemler");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(v.kalemler), "ham_istem_kalemleri");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hamLogBaglamli(v)), "ham_istem_log");
   if (v.notlar) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(v.notlar), "ham_istem_notlari");
+  if (v.duzeltmeler) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(v.duzeltmeler), "ham_istem_duzeltmeleri");
   return wb;
 }
 

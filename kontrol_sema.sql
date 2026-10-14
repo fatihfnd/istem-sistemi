@@ -4,8 +4,8 @@
 -- arsiv_yazdirma_sema.sql'den SONRA, YENİ KOD DEPLOY EDİLMEDEN ÖNCE
 -- çalıştırın (yeni kod test_katalog.kontrol ve istem_kuyruk_v.kontrol
 -- kolonlarını okur). İDEMPOTENT'tir.
--- istem_kuyruk_v'nin SON HALİ bu dosyadadır; ekip_sema.sql ve
--- arsiv_yazdirma_sema.sql yeniden çalıştırılırsa görünümü geri almaz.
+-- istem_kuyruk_v'nin son hali duzeltme_sema.sql'dedir; bu dosya yeniden
+-- çalıştırılırsa görünümü geri almaz (duzeltmeler kolonu varsa dokunmaz).
 -- ============================================================
 
 begin;
@@ -61,6 +61,15 @@ begin;
 -- ------------------------------------------------------------
 -- 3) Kuyruk görünümü — kontrol SONA eklenir (önceki kolonlar aynen).
 -- ------------------------------------------------------------
+-- duzeltme_sema.sql çalıştıysa görünüm daha fazla kolonludur (duzeltmeler…)
+-- — o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'duzeltmeler'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -121,7 +130,10 @@ left join kullanicilar isteyen on isteyen.id = i.istem_yapan_id
 left join kullanicilar uzman   on uzman.id   = i.uzman_id
 left join kullanicilar kesen   on kesen.id   = ik.kesen_id
 left join kullanicilar cikaran on cikaran.id = ik.blok_cikaran_id
-left join cihazlar c        on c.id = ik.cihaz_id;
+left join cihazlar c        on c.id = ik.cihaz_id
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

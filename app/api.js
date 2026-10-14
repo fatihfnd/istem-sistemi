@@ -10,8 +10,19 @@
   // config.js doldurulmadan gerçek bir Supabase client oluşturmayı deneme
   // (boş URL ile createClient senkron olarak fırlatır ve tüm script çöker).
   // Bunun yerine, ilk kullanımda net bir hata veren bir stub koy.
+  // realtime.worker: canlı tutma sinyali (heartbeat) Web Worker'da — arka
+  // plandaki sekmede tarayıcı zamanlayıcıları kısınca bağlantı kopmasın
+  // (kopunca sunucu o sekmenin "yazıyor" kaydını siler, canlı güncellemeler
+  // de gecikir). Desteklemeyen sürümde seçenek yok sayılır.
   const client = configured
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        realtime: {
+          worker: true,
+          heartbeatCallback: (durum) => {
+            if (durum !== "sent" && durum !== "ok") console.info("[yazıyor]", new Date().toLocaleTimeString("tr-TR"), "bağlantı sinyali:", durum);
+          },
+        },
+      })
     : new Proxy(
         {},
         {
@@ -741,7 +752,23 @@
         const { data, error } = await client.from("fatura_gecmisi").select("istem_id,kullanici_id,created_at").eq("islem", "geri_alindi").order("created_at", { ascending: false });
         return error ? [] : data;
       };
-      const [istemler, kullaniciMap, geriler] = await Promise.all([oku(), this.getKullaniciMap(), geriAlmalar()]);
+      // Düzeltmeler (duzeltme_sema.sql) — tablo yoksa boş.
+      const duzeltmeler = async () => {
+        const { data, error } = await client.from("istem_duzeltmeleri").select("istem_id,alan,eski_deger,duzelten_id,created_at").order("created_at", { ascending: true });
+        return error ? [] : data;
+      };
+      const [istemler, kullaniciMap, geriler, duzList] = await Promise.all([oku(), this.getKullaniciMap(), geriAlmalar(), duzeltmeler()]);
+      // istem_id -> { alanSon: {alan: son zaman}, eskiPat: [..], pat: {eski (ilk), kim, zaman} }
+      const duzIstem = new Map();
+      duzList.forEach((x) => {
+        if (!duzIstem.has(x.istem_id)) duzIstem.set(x.istem_id, { alanSon: {}, eskiPat: [], pat: null });
+        const d = duzIstem.get(x.istem_id);
+        d.alanSon[x.alan] = x.created_at;
+        if (x.alan === "patoloji_no") {
+          d.eskiPat.push(x.eski_deger);
+          d.pat = { eski: d.pat ? d.pat.eski : x.eski_deger, kim: kullaniciMap[x.duzelten_id]?.ad || "—", zaman: x.created_at };
+        }
+      });
       const ad = (id) => kullaniciMap[id]?.ad || "—";
       const sonGeri = new Map();
       geriler.forEach((g) => { if (!sonGeri.has(g.istem_id)) sonGeri.set(g.istem_id, { zaman: g.created_at, kim: ad(g.kullanici_id) }); });
@@ -758,11 +785,21 @@
         // yazdırılmışsa yazdırılmış sayılır.
         const sonKayitlar = kalemler.map((k) => (k.yazdirma_kayitlari || []).filter((y) => y.baglam === "hizmetler")
           .reduce((m, y) => (!m || y.created_at > m.created_at ? y : m), null));
-        const yazdirilmamis = !kalemler.length || sonKayitlar.some((y) => !y);
         const enSon = sonKayitlar.reduce((m, y) => (y && (!m || y.created_at > m.created_at) ? y : m), null);
+        // Çıktıdan SONRA düzeltilmişse çıktı eskidir: yeniden "yazdırılmamış"
+        // sayılır ve satırda uyarı çıkar (numara: patoloji no / blok).
+        const duz = duzIstem.get(i.id);
+        const enEskiBaski = sonKayitlar.every(Boolean) && sonKayitlar.length
+          ? sonKayitlar.reduce((m, y) => (!m || y.created_at < m ? y.created_at : m), null) : null;
+        const sonraki = duz && enEskiBaski ? Object.keys(duz.alanSon).filter((a) => new Date(duz.alanSon[a]) > new Date(enEskiBaski)) : [];
+        const cikti_eski = sonraki.length ? (sonraki.some((a) => a === "patoloji_no" || a === "blok_no") ? "numara" : "bilgi") : null;
+        const yazdirilmamis = !kalemler.length || sonKayitlar.some((y) => !y) || Boolean(cikti_eski);
         return {
           kalem_idler: kalemler.map((k) => k.id).filter(Boolean),
           yazdirilmamis,
+          cikti_eski,
+          eski_patoloji_nolar: duz ? duz.eskiPat : [],
+          pat_duzeltme: duz && duz.pat ? duz.pat : null,
           yazdirma: !yazdirilmamis && enSon ? { zaman: enSon.created_at, kim: ad(enSon.yazdiran_id), kisaltma: kullaniciMap[enSon.yazdiran_id]?.kisaltma || null } : null,
           fatura_giren_id: i.fatura_giren_id || null,
           son_geri_alma: sonGeri.get(i.id) || null,
@@ -994,24 +1031,53 @@
     // ---------------- "Yazıyor…" (Realtime Presence; yaziyor_sema.sql) ----------------
     // Private kanal: yalnız oturum açmış kullanıcılar katılır (realtime.messages
     // politikası). Dönen: { yayinla(veri | null), kapat() }. Abonelik
-    // tamamlanmadan istenen yayın, kanal hazır olunca (ve her yeniden
-    // bağlanmada) uygulanır. Kanal açılamazsa sessizce kapalı kalır.
-    yaziyorKanali(sekmeKey, onSync) {
+    // tamamlanmadan istenen yayın, kanal hazır olunca ve HER yeniden
+    // bağlanmada (sunucu kopan bağlantının kaydını siler) yeniden uygulanır.
+    // onDurum(status) uygulamaya da bildirilir; log(...) geçici debug çıktısı.
+    yaziyorKanali(sekmeKey, { onSync, onDurum, log = () => {} } = {}) {
       let hazir = false, istenen = null, kapandi = false;
       const ch = client.channel("istem-yaziyor", { config: { private: true, presence: { key: sekmeKey } } });
       const uygula = () => {
         if (!hazir || kapandi) return;
-        Promise.resolve(istenen ? ch.track(istenen) : ch.untrack()).catch(() => {});
+        const veri = istenen;
+        Promise.resolve(veri ? ch.track(veri) : ch.untrack())
+          .then((sonuc) => log(veri ? "track" : "untrack", sonuc, veri ? `${veri.patoloji_no} ${JSON.stringify(veri.gruplar)}` : ""))
+          .catch((e) => log(veri ? "track HATA" : "untrack HATA", (e && e.message) || e));
       };
-      ch.on("presence", { event: "sync" }, () => onSync(ch.presenceState()));
-      ch.subscribe((status) => {
+      ch.on("presence", { event: "sync" }, () => {
+        const st = ch.presenceState();
+        log("sync", Object.values(st).flat().map((m) => `${m.kisaltma || "?"}:${m.patoloji_no}`).join(", ") || "(kimse yazmıyor)");
+        if (onSync) onSync(st);
+      });
+      ch.subscribe((status, err) => {
         hazir = status === "SUBSCRIBED";
+        log("kanal", status, err ? (err.message || String(err)) : "");
         if (hazir) uygula();
+        if (onDurum) onDurum(status);
       });
       return {
         yayinla(veri) { istenen = veri; uygula(); },
-        kapat() { kapandi = true; client.removeChannel(ch); },
+        kapat() { kapandi = true; log("kanal kapatıldı"); client.removeChannel(ch); },
       };
+    },
+
+    // ---------------- İstem düzeltme (duzeltme_sema.sql) ----------------
+    // degisiklik: { patoloji_no?, uzman_id?, oncelik?, bloklar?: [{kalem_id, blok_no}] }
+    // Yetki (giren kişi / yönetici) ve kayıt + not veritabanında, tek işlemde.
+    async istemDuzelt(istemId, degisiklik) {
+      const { data, error } = await client.rpc("istem_duzelt", { p_istem_id: istemId, p_degisiklik: degisiklik });
+      if (error) throw error;
+      return data;
+    },
+    // İstemin düzeltme geçmişi (yeni → eski); tablo yoksa boş.
+    async getDuzeltmeler(istemId) {
+      const [{ data, error }, kullaniciMap] = await Promise.all([
+        client.from("istem_duzeltmeleri").select("id,istem_id,kalem_id,alan,eski_deger,yeni_deger,duzelten_id,created_at")
+          .eq("istem_id", istemId).order("created_at", { ascending: false }),
+        this.getKullaniciMap(),
+      ]);
+      if (error) return [];
+      return data.map((d) => ({ ...d, kim: kullaniciMap[d.duzelten_id]?.ad || "—", kisaltma: kullaniciMap[d.duzelten_id]?.kisaltma || null }));
     },
 
     // Boya tekrarı — yeni istem başlığı + Bekleyen kalem + log tek
