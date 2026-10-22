@@ -3,6 +3,8 @@
 -- İstatistikler'de "Uzman Adına" dağılımı
 --
 -- ek_ozellikler_sema.sql'den SONRA çalıştırın. İDEMPOTENT'tir.
+-- istatistik()'in son hali teslim_sema.sql'dedir (bu dosya yeniden
+-- çalıştırılırsa onu geri almaz).
 -- Önce Supabase panelinde "ozet-yedek" Edge Function'ını oluşturup
 -- deploy edin (cron işi o fonksiyonu çağırır; fonksiyon yoksa çağrı
 -- yalnızca 404 olarak loglanır, başka bir şey bozulmaz).
@@ -31,6 +33,15 @@ begin;
 --    sayılır ve tamamlanma dönemine yazılır
 --  - silinmiş kalemler (durum geçmişiyle birlikte silindikleri için) sayılmaz
 -- ------------------------------------------------------------
+-- teslim_sema.sql çalıştıysa fonksiyonun son hali (tamamlanma → teslim)
+-- oradadır — o durumda burada YENİDEN TANIMLANMAZ.
+do $fn$
+begin
+  if not exists (
+    select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+    where ns.nspname = 'public' and p.proname = 'istatistik' and p.prosrc like '%teslim_ort_saat%'
+  ) then
+    execute $sql$
 create or replace function public.istatistik(p_bas date, p_bit date, p_periyot text default 'week') returns jsonb
 language plpgsql stable security invoker set search_path = public as $$
 declare
@@ -125,6 +136,9 @@ begin
 
   return sonuc;
 end $$;
+    $sql$;
+  end if;
+end $fn$;
 
 revoke all on function public.istatistik(date, date, text) from public, anon;
 grant execute on function public.istatistik(date, date, text) to authenticated, service_role;

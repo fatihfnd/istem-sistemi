@@ -991,3 +991,35 @@ td.c-kisi .duz-eski{overflow:hidden;text-overflow:ellipsis}
 .duz-uyari{margin-top:8px;padding:7px 9px;border-radius:7px;background:var(--amber-b);color:var(--amber-i);border:1px solid color-mix(in srgb, var(--amber-i) 40%, transparent);font-size:12px;font-weight:600;line-height:1.4}
 .duz-kilit{margin-top:4px}
 select.finput:disabled{opacity:.6;cursor:not-allowed}
+
+/* ---------------- Teslim alındı (teslim_sema.sql) ---------------- */
+/* Gecikme rengi: amber (Bekleyen) ve FISH etiketinden ayrışan, dolu turuncu. */
+:root{--gec-i:#c2410c; --on-gec:#ffffff}
+:root[data-mod="koyu"]{--gec-i:#ff8f4f; --on-gec:#1d0b04}
+.ab-teslim{border-color:color-mix(in srgb, var(--accent) 55%, transparent);background:var(--accent-soft);color:var(--accent)}
+.ab-teslim:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);filter:brightness(.96)}
+.act-teslim{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.act-teslim:hover{filter:brightness(.96)}
+/* Uzman/asistan + yönetici: "✓ Teslim · FD · 22.10 10:30" */
+.teslim-bilgi{margin-left:4px;font-size:12px;font-weight:640;color:var(--green-i);white-space:nowrap;cursor:help}
+/* Teknisyen: Tamamlandı rozetinin yanında küçük işaret */
+.teslim-isaret{display:inline-block;margin-left:2px;padding:0 5px;border-radius:5px;background:var(--green-b);color:var(--green-i);border:1px solid color-mix(in srgb, var(--green-i) 40%, transparent);font-size:10.5px;font-weight:700;white-space:nowrap;cursor:help}
+/* "24+ sa" — teslim bekleyen, eşikten uzun süredir Tamamlandı */
+.badge-gec{display:inline-block;margin-left:5px;padding:1px 6px;border-radius:5px;background:var(--gec-i);color:var(--on-gec);font-family:var(--sans);font-size:10.5px;font-weight:800;letter-spacing:.02em;white-space:nowrap;cursor:help}
+tbody tr.row-teslim-gec:not(.sel){background:color-mix(in srgb, var(--gec-i) 6%, var(--paper))}
+tbody tr.row-teslim-gec:not(.sel):hover{background:color-mix(in srgb, var(--gec-i) 10%, var(--paper))}
+tbody tr.row-teslim-gec > td.c-durum{box-shadow:inset 3px 0 0 var(--gec-i)}
+.tabs .gec-say{font-size:11px;font-weight:700;color:var(--gec-i);white-space:nowrap}
+.teslim-not{margin:-6px 0 14px;font-size:12px;color:var(--ink-3);line-height:1.4}
+.tl .lbl .badge-gec{vertical-align:1px}
+/* Sistem ayarları (yönetici) — ayarlar panelinde */
+.ayarform{display:flex;flex-direction:column;gap:6px}
+.ayar-satir{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.ayar-giris{display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.ayar-giris input{width:78px}
+.ayar-not{font-size:11.5px;color:var(--ink-3);line-height:1.4}
+.ayarform .err{color:var(--danger);font-size:12px;min-height:1em}
+.ayarform .btnrow{display:flex;justify-content:flex-end}
+/* "Teslim bekleyen · N gecikmiş" ile sekmeler telefonda sığmayabilir — sarmalamak yerine yatay kaydır */
+#tabs button{white-space:nowrap}
+@media (max-width:900px){ #tabs{max-width:100%;overflow-x:auto;scrollbar-width:none} #tabs button{flex:none} }

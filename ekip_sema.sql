@@ -7,7 +7,8 @@
 -- yeni kolonlarını okur). İDEMPOTENT'tir.
 --
 -- Durum değişikliği kuralının (istem_kalemleri_geri_alma_kontrol) son hali
--- buradadır; istem_kuyruk_v'nin son hali arsiv_yazdirma_sema.sql'dedir.
+-- buradadır; istem_kuyruk_v'nin son hali teslim_sema.sql'dedir,
+-- blok_kesildi_geri_al'ın son hali de teslim_sema.sql'dedir.
 -- yetki_sema.sql ya da ek_ozellikler_sema.sql'i yeniden çalıştırırsanız
 -- ardından bunu ve arsiv_yazdirma_sema.sql'i de çalıştırın.
 -- ============================================================
@@ -237,6 +238,15 @@ end $$;
 --     geçmişinden), kesildi_at/kesen_id temizlenir, geçmişe kayıt düşer
 --  K) hâlâ Bekleyen ve kesildi_at dolu → kesildi_at/kesen_id temizlenir.
 --     İşleme alınmışsa (kesim fiilen kullanılmış) DOKUNULMAZ → atlanır.
+-- teslim_sema.sql çalıştıysa son hali (teslim alınmışları atlar) oradadır —
+-- o durumda burada YENİDEN TANIMLANMAZ.
+do $fn$
+begin
+  if not exists (
+    select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+    where ns.nspname = 'public' and p.proname = 'blok_kesildi_geri_al' and p.prosrc like '%teslim_at%'
+  ) then
+    execute $sql$
 create or replace function public.blok_kesildi_geri_al(p_kalem_ids uuid[]) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -280,6 +290,9 @@ begin
   return jsonb_build_object('geri', n_geri, 'damga', n_damga,
                             'atlanan', coalesce(array_length(ids, 1), 0) - n_geri - n_damga);
 end $$;
+    $sql$;
+  end if;
+end $fn$;
 
 revoke all on function public.blok_kesildi(uuid[]) from public, anon;
 grant execute on function public.blok_kesildi(uuid[]) to authenticated;

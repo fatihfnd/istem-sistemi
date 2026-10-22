@@ -120,6 +120,28 @@
     }
   }
 
+  // teslim_sema.sql çalışmadan önce görünümde teslim kolonları yok — bir kez
+  // anlaşılınca sayfa yenilenene kadar eski sorgu kullanılır.
+  let teslimKolonuYok = false;
+  const kolonYokHatasi = (e) => Boolean(e && (e.code === "42703" || /teslim_/.test(String(e.message || ""))));
+
+  async function kuyrukOku(eskiSinir, teslimli) {
+    const satirlar = [];
+    for (;;) {
+      let q = client.from("istem_kuyruk_v").select("*");
+      if (eskiSinir) {
+        q = q.or(`durum.neq.tamamlandi,created_at.gte."${eskiSinir}"${teslimli ? ",teslim_bekliyor.is.true" : ""}`);
+      }
+      const { data, error } = await q
+        .order("created_at", { ascending: false })
+        .order("kalem_id", { ascending: true })
+        .range(satirlar.length, satirlar.length + 999);
+      must(data, error);
+      if (!data.length) return satirlar;
+      satirlar.push(...data);
+    }
+  }
+
   const Api = {
     // ---------------- Auth (ad seç + PIN) ----------------
     // kullanicilar_login_v — authenticated-only kilitlemeden SONRA bile
@@ -904,28 +926,36 @@
     // Sayfa sayfa okunur: PostgREST tek istekte en fazla "max rows" (1000)
     // satır döner — eskiden kayıt sayısı büyüyünce en eski satırlar SESSİZCE
     // kayboluyordu. Dönen satır sayısı kadar ilerlenir, boş sayfada durulur.
+    // Teslim bekleyenler (teslim_sema.sql) eski olsa da HER ZAMAN gelir —
+    // teslim edilmeyen lam gözden kaybolmasın. Görünümde kolon yoksa (SQL
+    // henüz çalışmadıysa) eski sorguya düşülür.
     async listQueue({ eskiSinir } = {}) {
-      const satirlar = [];
-      for (;;) {
-        let q = client.from("istem_kuyruk_v").select("*");
-        if (eskiSinir) q = q.or(`durum.neq.tamamlandi,created_at.gte."${eskiSinir}"`);
-        const { data, error } = await q
-          .order("created_at", { ascending: false })
-          .order("kalem_id", { ascending: true })
-          .range(satirlar.length, satirlar.length + 999);
-        must(data, error);
-        if (!data.length) return satirlar;
-        satirlar.push(...data);
+      try {
+        return await kuyrukOku(eskiSinir, !teslimKolonuYok);
+      } catch (e) {
+        if (teslimKolonuYok || !kolonYokHatasi(e)) throw e;
+        teslimKolonuYok = true;
+        return kuyrukOku(eskiSinir, false);
       }
     },
 
-    // "Eski kayıtları göster (N)" için: gizlenen eski Tamamlandı sayısı.
+    // "Eski kayıtları göster (N)" için: gizlenen eski Tamamlandı sayısı
+    // (teslim bekleyenler gizlenmediği için sayılmaz).
     async gizliEskiSayisi(eskiSinir) {
-      const { count, error } = await client
-        .from("istem_kuyruk_v")
-        .select("kalem_id", { count: "exact", head: true })
-        .eq("durum", "tamamlandi")
-        .lt("created_at", eskiSinir);
+      const say = (teslimli) => {
+        let q = client
+          .from("istem_kuyruk_v")
+          .select("kalem_id", { count: "exact", head: true })
+          .eq("durum", "tamamlandi")
+          .lt("created_at", eskiSinir);
+        if (teslimli) q = q.eq("teslim_bekliyor", false);
+        return q;
+      };
+      let { count, error } = await say(!teslimKolonuYok);
+      if (error && !teslimKolonuYok && kolonYokHatasi(error)) {
+        teslimKolonuYok = true;
+        ({ count, error } = await say(false));
+      }
       if (error) throw error;
       return count || 0;
     },
@@ -978,6 +1008,60 @@
         degistiren_id: degistirenId,
       });
       if (e3) throw e3;
+    },
+
+    // ---------------- Teslim alındı (teslim_sema.sql) ----------------
+    // Kim / ne zaman sunucuda yazılır (tetikleyici: current_kullanici_id(),
+    // now()); yetki, "yalnız Tamamlandı" ve durum kaydı (istem_log) da orada.
+    // "teslim_at is null" koşulu: aynı anda basan ikinci kişi 0 satır bulur —
+    // kayıt önce basanın adına kalır.
+    async teslimAl(kalemId) {
+      const { data, error } = await client
+        .from("istem_kalemleri")
+        .update({ teslim_at: new Date().toISOString() })
+        .eq("id", kalemId)
+        .eq("durum", "tamamlandi")
+        .is("teslim_at", null)
+        .select("id");
+      if (error) throw error;
+      if (!data || !data.length) {
+        const e = new Error("Kalem zaten teslim alınmış ya da Tamamlandı değil");
+        e.uygunDegil = true;
+        throw e;
+      }
+    },
+
+    // Yetki (işaretleyen kişi / yönetici) tetikleyicide; teslim_alan_id de orada temizlenir.
+    async teslimGeriAl(kalemId) {
+      const { data, error } = await client
+        .from("istem_kalemleri")
+        .update({ teslim_at: null })
+        .eq("id", kalemId)
+        .not("teslim_at", "is", null)
+        .select("id");
+      if (error) throw error;
+      if (!data || !data.length) {
+        const e = new Error("Kalemin teslimi zaten geri alınmış");
+        e.uygunDegil = true;
+        throw e;
+      }
+    },
+
+    // ---------------- Sistem ayarları (okuma herkes, yazma yönetici) ----------------
+    // Dönen: { anahtar: deger }. Tablo yoksa (SQL çalışmadıysa) boş nesne.
+    async getAyarlar() {
+      const { data, error } = await client.from("sistem_ayarlari").select("anahtar,deger");
+      if (error) return {};
+      return Object.fromEntries((data || []).map((r) => [r.anahtar, r.deger]));
+    },
+    async setAyar(anahtar, deger) {
+      const { data, error } = await client
+        .from("sistem_ayarlari")
+        .update({ deger })
+        .eq("anahtar", anahtar)
+        .select("anahtar");
+      if (error) throw error;
+      if (!data || !data.length) throw forbiddenError();
     },
 
     // items: [{test_id}|{ozel_test}], bloklar: ["1","2",...]

@@ -3,8 +3,9 @@
 --
 -- yaziyor_sema.sql'den SONRA, YENİ KOD DEPLOY EDİLMEDEN ÖNCE çalıştırın
 -- (yeni kod istem_kuyruk_v.duzeltmeler / eski_patoloji_nolar kolonlarını
--- okur). İDEMPOTENT'tir. istem_kuyruk_v'nin SON HALİ bu dosyadadır;
--- daha eski dosyalar yeniden çalıştırılırsa görünümü geri almaz.
+-- okur). İDEMPOTENT'tir. istem_kuyruk_v'nin son hali teslim_sema.sql'dedir
+-- (bu dosya yeniden çalıştırılırsa onu geri almaz); daha eski dosyalar da
+-- görünümü geri almaz.
 -- istem_duzelt'in son hali (test alanı) test_duzeltme_sema.sql'dedir.
 -- ============================================================
 
@@ -203,6 +204,15 @@ begin;
 --                  düzeltmeleri + istemin istem düzeyindeki düzeltmeleri
 --   eski_patoloji_nolar: istemin önceki tüm patoloji no'ları (arama için)
 -- ------------------------------------------------------------
+-- teslim_sema.sql çalıştıysa görünümün son hali (teslim kolonlarıyla)
+-- oradadır — o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'teslim_at'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -285,7 +295,10 @@ left join kullanicilar isteyen on isteyen.id = i.istem_yapan_id
 left join kullanicilar uzman   on uzman.id   = i.uzman_id
 left join kullanicilar kesen   on kesen.id   = ik.kesen_id
 left join kullanicilar cikaran on cikaran.id = ik.blok_cikaran_id
-left join cihazlar c        on c.id = ik.cihaz_id;
+left join cihazlar c        on c.id = ik.cihaz_id
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

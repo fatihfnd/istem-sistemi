@@ -14,6 +14,8 @@ type Satir = Record<string, any>;
 
 // Veritabanında "cihazda" — görünen ad "İşlemde" (uygulamadaki PILL ile aynı).
 export const DURUM: Record<string, string> = { bekleyen: "Bekleyen", cihazda: "İşlemde", tamamlandi: "Tamamlandı", iptal: "İptal" };
+// Durum geçmişindeki teslim olayları (teslim_sema.sql) — durum değil, işaret.
+const LOG_OLAY: Record<string, string> = { ...DURUM, teslim_alindi: "Teslim alındı", teslim_geri_alindi: "Teslim geri alındı" };
 export const ONCELIK: Record<string, string> = { rutin: "Rutin", acil: "Acil", stat: "STAT" };
 
 // Edge Function UTC'de çalışır — tarihler Türkiye saatiyle yazılır
@@ -46,11 +48,13 @@ export interface Ozet {
   log: number;
   not: number | null;
   durum: Record<string, number>;
+  teslimBekleyen: number | null; // null: teslim kolonları yok (teslim_sema.sql çalışmadı)
 }
 
 const SUTUN_ISTEM = ["Patoloji No", "İsteyen", "Uzman Adına", "Öncelik", "Not", "Tarih", "Kalem Sayısı", "Tekrar", "Fatura Durumu", "Fatura Giren", "Fatura Zamanı"];
-// İlk 13 sütun = KUYRUK_EXPORT_COLS (app.js) ile aynı sıra/etiket.
-const SUTUN_KALEM = ["Patoloji No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
+// Sütun adları KUYRUK_EXPORT_COLS (app.js) ile aynı etiketler ("Teslim Alan",
+// "Teslim Zamanı" Durum'dan hemen sonra).
+const SUTUN_KALEM = ["Patoloji No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Teslim Alan", "Teslim Zamanı", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
 const SUTUN_DUZ = ["Zaman", "Patoloji No (güncel)", "Alan", "Eski", "Yeni", "Kalem", "Düzelten"];
 
 // "Düzeltildi" sütunu — uygulamadaki duzeltmeOzeti ile aynı biçim:
@@ -128,6 +132,8 @@ export function okunabilirSayfalar(v: YedekVerisi) {
     "Tarih": tarihSaat(r.created_at),
     "Öncelik": ONCELIK[r.oncelik] ?? r.oncelik ?? "",
     "Durum": DURUM[r.durum] ?? r.durum ?? "",
+    "Teslim Alan": r.teslim_at ? r.teslim_alan_adi ?? "(silinmiş kullanıcı)" : "",
+    "Teslim Zamanı": tarihSaat(r.teslim_at),
     "Tekrar": r.tekrar_kaynagi_id ? "Evet" : "",
     "Not": notMetni(r.istem_id, r.not_metni),
     "Kalite Notu": r.kalite_notu ?? "",
@@ -144,8 +150,8 @@ export function okunabilirSayfalar(v: YedekVerisi) {
       "Patoloji No": k?.patoloji_no ?? "(silinmiş kalem)",
       "Blok": k?.blok_no ?? "",
       "Test": k?.test_adi ?? "",
-      "Eski Durum": l.eski_durum ? DURUM[l.eski_durum] ?? l.eski_durum : "—",
-      "Yeni Durum": DURUM[l.yeni_durum] ?? l.yeni_durum ?? "",
+      "Eski Durum": l.eski_durum ? LOG_OLAY[l.eski_durum] ?? l.eski_durum : "—",
+      "Yeni Durum": LOG_OLAY[l.yeni_durum] ?? l.yeni_durum ?? "",
       "Değiştiren": ad(l.degistiren_id),
     };
   });
@@ -185,7 +191,9 @@ export function hamLogBaglamli(v: YedekVerisi): Satir[] {
 export function ozetCikar(v: YedekVerisi): Ozet {
   const durum: Record<string, number> = {};
   v.kalemler.forEach((k) => { durum[k.durum] = (durum[k.durum] ?? 0) + 1; });
-  return { istem: v.istemler.length, kalem: v.kalemler.length, log: v.log.length, not: v.notlar ? v.notlar.length : null, durum };
+  const teslimVar = v.kuyruk.some((k) => "teslim_bekliyor" in k);
+  const teslimBekleyen = teslimVar ? v.kuyruk.filter((k) => k.teslim_bekliyor).length : null;
+  return { istem: v.istemler.length, kalem: v.kalemler.length, log: v.log.length, not: v.notlar ? v.notlar.length : null, durum, teslimBekleyen };
 }
 
 // Sütun genişlikleri içeriğe göre (üst sınırlı) — dosya açılınca okunur olsun.
@@ -222,6 +230,7 @@ export function epostaMetni(ozet: Ozet, dosya: string, depolama: string): string
     "",
     `Toplam istem: ${ozet.istem}`,
     `Toplam kalem: ${ozet.kalem} (Bekleyen ${d.bekleyen ?? 0} · İşlemde ${d.cihazda ?? 0} · Tamamlandı ${d.tamamlandi ?? 0})`,
+    ...(ozet.teslimBekleyen === null ? [] : [`Teslim bekleyen (Tamamlandı, teslim alınmamış): ${ozet.teslimBekleyen}`]),
     `Durum geçmişi kaydı: ${ozet.log}`,
     ozet.not === null ? "Notlar: istem_notlari okunamadı (ek_ozellikler_sema.sql çalıştırıldı mı?) — eski tekil notlar yazıldı." : `Not: ${ozet.not}`,
     "",

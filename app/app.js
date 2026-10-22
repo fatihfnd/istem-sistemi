@@ -26,6 +26,8 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Tarih", value: (r) => formatDateFull(r.created_at) },
   { label: "Öncelik", value: (r) => PRIO[r.oncelik][1] },
   { label: "Durum", value: (r) => PILL[r.durum][1] },
+  { label: "Teslim Alan", value: (r) => r.teslim_alan_adi || "" },
+  { label: "Teslim Zamanı", value: (r) => (r.teslim_at ? formatDateFull(r.teslim_at) : "") },
   { label: "Tekrar", value: (r) => (r.tekrar_kaynagi_id ? "Evet" : "") },
   { label: "Not", value: (r) => notlarOf(r).map((n) => n.yazan ? `${n.metin} (${n.yazan}, ${formatDateFull(n.zaman)})` : n.metin).join(" | ") },
   { label: "Kalite Notu", value: (r) => r.kalite_notu || "" },
@@ -298,6 +300,8 @@ let yaziyorKanal = null;      // "Yazıyor…" Presence kanalı (Api.yaziyorKana
 let yazanlar = [];            // şu an istem yazan BAŞKA kullanıcılar
 let yaziyorSon = null, yaziyorTimer = null, yaziyorBosTimer = null, yaziyorSonGonderim = 0;
 let duzeltmeAcik = false;     // detay panelinde düzeltme formu açık (yenileme bekler)
+let AYARLAR = {};             // sistem_ayarlari (teslim_sema.sql): teslim_gecikme_saat, teslim_takip_baslangic
+let teslimSekmesi = false;    // "Teslim bekleyen" sekmesi (Benim İsteklerim; durum filtresi = Tamamlandı)
 const KESILDI_GUN = 7;        // "Kesildi" sekmesi: son kaç günün kesimleri
 let sortCol = null, sortDir = "asc";
 let caseView = null; // aktifken bir patoloji_no string'i (vaka görünümü)
@@ -330,12 +334,21 @@ const canCreateIstem = () => !isTeknisyen();
 // kalemini "İptal Et" (silme kuralı) ile geri çeker. RLS: ekip_sema.sql
 // (istem_kalemleri_geri_alma_kontrol).
 const canAdvance = () => isAdmin() || Boolean(session && session.rol === "teknisyen");
-const canRevert = () => canAdvance();
+// Teslim alınmış kalemin durumu geri alınamaz — önce teslim geri alınır
+// (teslim_sema.sql tetikleyicisi de reddeder).
+const canRevert = (r) => canAdvance() && !(r && r.teslim_at);
 // Kesildi işaretleme: yönetici + teknisyen (her ekip) — blok_kesildi().
 const canKesildi = () => canAdvance();
 // Admin her kalemi (Tamamlandı dahil); diğerleri kendi istemindeki,
 // Tamamlandı olmayan kalemleri.
 const canDeleteKalem = (r) => isAdmin() || (r.istem_yapan_id === session.id && r.durum !== "tamamlandi");
+// Teslim al (teslim_sema.sql — RLS/tetikleyici aynı kural): Tamamlandı,
+// takip başlangıcından sonra tamamlanmış, henüz alınmamış kalem; yönetici
+// ya da (teknisyen değilse) istemi giren / adına istenen uzman. Geri alma:
+// işaretleyen kişi ya da yönetici.
+const canTeslimAl = (r) => Boolean(session && r && r.durum === "tamamlandi" && r.teslim_takipte && !r.teslim_at
+  && (isAdmin() || (!isTeknisyen() && (r.istem_yapan_id === session.id || r.uzman_id === session.id))));
+const canTeslimGeriAl = (r) => Boolean(session && r && r.teslim_at && (isAdmin() || r.teslim_alan_id === session.id));
 // İstek Setleri: teknisyen dışında herkes ekler/düzenler/siler (RLS de öyle).
 const canManageSets = () => !isTeknisyen();
 const canEditSablon = (s) => isAdmin() || (!isTeknisyen() && s.sahip_id === session.id);
@@ -354,11 +367,18 @@ function applyRoleUI() {
   });
 }
 
+// "Teslim bekleyen" sekmesi yalnız Benim İsteklerim'de (vaka görünümü dışında):
+// durum filtresi Tamamlandı + teslim_bekliyor. Kapsam değişince Tamamlandı'ya döner.
+const teslimSekmesiVar = () => kapsam === "benim" && caseView === null && teslimAktif();
+const teslimSekmesiAcik = () => teslimSekmesi && teslimSekmesiVar();
 function isTabActive(f) {
+  if (teslimSekmesiAcik()) return f === "teslim";
+  if (f === "teslim") return false;
   return f === "all" ? colFilters.durum.size === 0 : colFilters.durum.size === 1 && colFilters.durum.has(f);
 }
 function setDurumTab(f) {
-  colFilters.durum = f === "all" ? new Set() : new Set([f]);
+  teslimSekmesi = f === "teslim";
+  colFilters.durum = f === "all" ? new Set() : new Set([teslimSekmesi ? "tamamlandi" : f]);
 }
 // Durum sekmeleri artık gezinme (filtre çipi değil) — tek durum seçimi
 // "aktif filtre" sayılmaz; başlıktan birden fazla durum işaretlenirse sayılır.
@@ -559,9 +579,10 @@ async function initApp(user) {
   const avatarP = refreshAvatarlar(); // paralel — gelince sol alttaki baş harf fotoğrafa döner
   const results = await Promise.allSettled([
     Api.getTestKatalog(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getAllTestGruplari(),
-    Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id),
+    Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id), Api.getAyarlar(),
   ]);
-  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR] = results;
+  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR, ayarR] = results;
+  AYARLAR = ayarR.status === "fulfilled" ? ayarR.value : {};
   if (catR.status === "fulfilled") CAT = catR.value; else toast("Test kataloğu yüklenemedi", true);
   if (setlerR.status === "fulfilled") { ISTEK_SETLERI = setlerR.value; SETS_INST = activeSetsInst(ISTEK_SETLERI); }
   else toast("İstek Setleri yüklenemedi — setler_sema.sql çalıştırıldı mı?", true);
@@ -611,6 +632,7 @@ let profilSonOkuma = 0;
 async function profilTazele() {
   if (!session || Date.now() - profilSonOkuma < 60000) return;
   profilSonOkuma = Date.now();
+  ayarlariTazele(); // yönetici teslim eşiğini değiştirdiyse
   let yeni;
   try { yeni = await Api.getCurrentAuthSession(); } catch (e) { return; }
   if (!yeni || !session || yeni.id !== session.id) return;
@@ -627,6 +649,22 @@ async function profilTazele() {
   if (currentPage === "kuyruk") renderTable();
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") profilTazele(); });
+
+// Sistem ayarları (teslim gecikme eşiği / takip başlangıcı) — değiştiyse tablo yeniden çizilir.
+async function ayarlariTazele() {
+  const yeni = await Api.getAyarlar();
+  if (!session || JSON.stringify(yeni) === JSON.stringify(AYARLAR)) return;
+  AYARLAR = yeni;
+  if (currentPage === "kuyruk") renderTable();
+}
+// Gecikme zamanla oluşur (veri değişmeden): dakikada bir, gecikmiş kümesi
+// değiştiyse tablo yeniden çizilir ("24+ sa" rozeti ve sayaç).
+let gecImza = "";
+const gecikmisImzasi = () => rows.filter(teslimGecikti).map((r) => r.kalem_id).join(",");
+setInterval(() => {
+  if (!session || currentPage !== "kuyruk" || gecikmisImzasi() === gecImza) return;
+  renderTable();
+}, 60000);
 
 function scheduleReload() {
   clearTimeout(reloadTimer);
@@ -725,6 +763,7 @@ function renderQueuePage() {
       <button class="act act-kesildi hidden" id="bulkCikarildiBtn">Çıkarıldı</button>
       <button class="act act-cihaza" id="bulkCihazaBtn">İşleme Al</button>
       <button class="act act-tamamla" id="bulkTamamlaBtn">Tamamla</button>
+      <button class="act act-teslim hidden" id="bulkTeslimBtn" title="Seçili Tamamlandı kalemleri teslim al (uygun olmayanlar atlanır)">Teslim al</button>
       <button class="btn-ghost btn-sm" id="bulkYazdirBtn" title="Seçili kalemlerin çalışma listesini yazdır">${YAZDIR_IKON} Yazdır</button>
       <button class="btn-ghost btn-sm" id="bulkTekrarBtn">↻ Tekrar İste</button>
       <button class="btn-ghost btn-sm" id="bulkGeriBtn">↺ Geri Al</button>
@@ -753,6 +792,7 @@ function renderQueuePage() {
   $("#kapsamlar").addEventListener("click", (e) => {
     const b = e.target.closest("[data-kapsam]"); if (!b) return;
     kapsam = b.dataset.kapsam;
+    if (kapsam !== "benim") teslimSekmesi = false; // Tamamlandı sekmesinde kalır
     clearBulkSelection();
     renderTable();
   });
@@ -791,6 +831,7 @@ function renderQueuePage() {
   bindExportMenu("#qExport", kuyruguDisaAktar);
   $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen"));
   $("#bulkTamamlaBtn").addEventListener("click", () => bulkAdvance("tamamlandi", "cihazda"));
+  $("#bulkTeslimBtn").addEventListener("click", bulkTeslim);
   $("#bulkYazdirBtn").addEventListener("click", () => yazdirSecim("secili"));
   $("#bulkTekrarBtn").addEventListener("click", bulkTekrar);
   $("#zilBtn").addEventListener("click", () => sesAyarla(!sesAcik()));
@@ -854,6 +895,8 @@ function renderQueuePage() {
       if (!r) return;
       if (btn.dataset.aks === "geri") revertDurum(r);
       else if (btn.dataset.aks === "iptal") kalemIptal(r);
+      else if (btn.dataset.aks === "teslim") teslimAl(r);
+      else if (btn.dataset.aks === "teslim-geri") teslimGeriAl(r);
       else advance(r.kalem_id, btn.dataset.aks);
       return;
     }
@@ -964,6 +1007,7 @@ function renderQueuePage() {
     if (!chk) return;
     const key = chk.dataset.thcheck, val = chk.value;
     if (key === "durum") {
+      teslimSekmesi = false;
       if (chk.checked) colFilters.durum.add(val); else colFilters.durum.delete(val);
       $$("#tabs button").forEach((b) => b.classList.toggle("on", isTabActive(b.dataset.f)));
     } else {
@@ -1007,9 +1051,11 @@ function mergeRows(base, extra) {
   const ids = new Set(base.map((r) => r.kalem_id));
   return base.concat(extra.filter((r) => !ids.has(r.kalem_id)));
 }
-// 30 günden eski Tamamlandı mı (son yüklemedeki sınıra göre)?
+// 30 günden eski Tamamlandı mı (son yüklemedeki sınıra göre)? Teslim
+// bekleyenler eski sayılmaz — teslim edilmeyen lam gözden kaybolmasın
+// (sunucu da onları her zaman gönderir, bkz. Api.listQueue).
 function eskiMi(r) {
-  return eskiSinirMs !== null && r.durum === "tamamlandi" && new Date(r.created_at).getTime() < eskiSinirMs;
+  return eskiSinirMs !== null && r.durum === "tamamlandi" && !teslimBekliyor(r) && new Date(r.created_at).getTime() < eskiSinirMs;
 }
 // Gizleme YALNIZ İş Kuyruğu ekranı içindir (toggle kapalıyken). İstatistikler
 // (sunucuda, istatistik()), Excel'e Aktar (kuyruguDisaAktar — sunucudan tam
@@ -1150,6 +1196,7 @@ function passesFilter(r, eskiDahil = false) {
   if (colFilters.isteyenTam && r.isteyen_adi !== colFilters.isteyenTam) return false;
   if (colFilters.uzmanTam && r.uzman_adi !== colFilters.uzmanTam) return false;
   if (colFilters.durum.size && !colFilters.durum.has(r.durum)) return false;
+  if (teslimSekmesiAcik() && !teslimBekliyor(r)) return false;
   if (colFilters.tip.size && !colFilters.tip.has(r.grup)) return false;
   if (colFilters.oncelik.size && !colFilters.oncelik.has(r.oncelik)) return false;
   if (colFilters.tekrar.size && !colFilters.tekrar.has(r.tekrar_kaynagi_id ? "tekrar" : "normal")) return false;
@@ -1227,6 +1274,7 @@ function renderTable() {
     const showCaseSel = grouped ? groupStart : !seenPat.has(r.patoloji_no);
     seenPat.add(r.patoloji_no);
     tr.classList.add(`row-${r.durum}`);
+    if (teslimGecikti(r)) tr.classList.add("row-teslim-gec");
     if (grouped && groupStart && !ilkSatir) tr.classList.add("case-start");
     if (r.kalem_id === selId) tr.classList.add("sel");
     if (yeniKalemler.has(r.kalem_id)) tr.classList.add("row-yeni");
@@ -1258,21 +1306,123 @@ function renderTable() {
 // boşluk kalır ki birincil butonlar alt alta hizalı dursun.
 function durumAksiyon(r, onEk = "") {
   const pill = `${onEk}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>`;
+  const yer = `<span class="ab-geri-yer" aria-hidden="true"></span>`;
+  const gec = teslimGecikmeRozeti(r);
   if (!canAdvance()) {
-    // Uzman/asistan: yalnız rozet; kendi Bekleyen kalemine "İptal Et".
+    // Uzman/asistan: yalnız rozet; kendi Bekleyen kalemine "İptal Et";
+    // Tamamlandı'da birincil aksiyon "Teslim al" (alınmışsa teslim bilgisi).
+    if (r.durum === "tamamlandi") return `<div class="dacts">${pill}${teslimGeriDugmesi(r) || yer}${teslimBirincil(r)}${gec}</div>`;
     const iptal = r.durum === "bekleyen" && canDeleteKalem(r)
-      ? `<span class="ab-geri-yer" aria-hidden="true"></span><button class="ab ab-iptal" data-aks="iptal" data-id="${r.kalem_id}">İptal Et</button>`
+      ? `${yer}<button class="ab ab-iptal" data-aks="iptal" data-id="${r.kalem_id}">İptal Et</button>`
       : "";
     return `<div class="dacts">${pill}${iptal}</div>`;
   }
   const geriHedef = REVERT_TO[r.durum];
-  const geri = geriHedef && canRevert(r)
-    ? `<button class="ab-geri" data-aks="geri" data-id="${r.kalem_id}" data-tip="Geri Al" aria-label="Geri Al: ${PILL[r.durum][1]} → ${PILL[geriHedef][1]}">${GERI_IKON}</button>`
-    : `<span class="ab-geri-yer" aria-hidden="true"></span>`;
+  // Teslim alınmışsa ↺ teslimi geri alır (yalnız işaretleyen / yönetici);
+  // durum geri alma o zaman kapalı.
+  const geri = teslimGeriDugmesi(r)
+    || (geriHedef && canRevert(r)
+      ? `<button class="ab-geri" data-aks="geri" data-id="${r.kalem_id}" data-tip="Geri Al" aria-label="Geri Al: ${PILL[r.durum][1]} → ${PILL[geriHedef][1]}">${GERI_IKON}</button>`
+      : yer);
   const sonraki = r.durum === "bekleyen" ? ["cihazda", "ab-cihaza", "İşleme Al"]
     : r.durum === "cihazda" ? ["tamamlandi", "ab-tamamla", "Tamamla"] : null;
-  const birincil = sonraki ? `<button class="ab ${sonraki[1]}" data-aks="${sonraki[0]}" data-id="${r.kalem_id}">${sonraki[2]}</button>` : "";
-  return `<div class="dacts">${pill}${geri}${birincil}</div>`;
+  // Tamamlandı: yönetici "Teslim al" / teslim bilgisi; teknisyen küçük "✓ teslim" işareti.
+  const birincil = sonraki ? `<button class="ab ${sonraki[1]}" data-aks="${sonraki[0]}" data-id="${r.kalem_id}">${sonraki[2]}</button>`
+    : r.durum === "tamamlandi" ? (isAdmin() ? teslimBirincil(r) : teslimIsareti(r)) : "";
+  return `<div class="dacts">${pill}${geri}${birincil}${gec}</div>`;
+}
+
+// ---------------- Teslim alındı (teslim_sema.sql) ----------------
+// Teslim yeni bir durum değil: durum Tamamlandı kalır, teslim_alan_id /
+// teslim_at ayrı işarettir. teslim_takipte / teslim_bekliyor / tamamlandi_at
+// görünümden gelir (takip başlangıcından önce tamamlananlar takip dışı).
+// Görünümde bu kolonlar yoksa (SQL henüz çalışmadıysa) hiçbiri görünmez.
+const teslimEsikSaat = () => { const n = Number(AYARLAR.teslim_gecikme_saat); return n >= 1 ? n : 24; };
+const teslimBekliyor = (r) => Boolean(r && r.teslim_bekliyor && r.durum === "tamamlandi" && !r.teslim_at);
+// Gecikme: Tamamlandı olalı eşikten (takvim saati) uzun süre geçmiş.
+const teslimGecikti = (r) => teslimBekliyor(r) && Boolean(r.tamamlandi_at)
+  && Date.now() - new Date(r.tamamlandi_at).getTime() > teslimEsikSaat() * 3600000;
+// Sekmeler: SQL çalıştıysa (ayar tablosu ya da görünüm kolonu var).
+const teslimAktif = () => "teslim_gecikme_saat" in AYARLAR || rows.some((r) => "teslim_bekliyor" in r);
+const iki = (n) => String(n).padStart(2, "0");
+// "22.10 10:30" (yerel saat)
+function kisaTarih(iso) {
+  const d = new Date(iso);
+  return `${iki(d.getDate())}.${iki(d.getMonth() + 1)} ${iki(d.getHours())}:${iki(d.getMinutes())}`;
+}
+const teslimKim = (r) => r.teslim_alan_kisaltma || (r.teslim_alan_adi ? initials(r.teslim_alan_adi) : "?");
+const teslimIpucu = (r) => `Teslim alındı: ${r.teslim_alan_adi || "?"} · ${formatDateFull(r.teslim_at)}`;
+function teslimGecikmeRozeti(r) {
+  if (!teslimGecikti(r)) return "";
+  const sa = Math.floor((Date.now() - new Date(r.tamamlandi_at).getTime()) / 3600000);
+  return `<span class="badge-gec" data-ipucu title="Teslim bekliyor — Tamamlandı olalı ${sa} saat (${esc(formatDateFull(r.tamamlandi_at))})">${teslimEsikSaat()}+ sa</span>`;
+}
+// Uzman/asistan ve yönetici: "Teslim al" ya da "✓ Teslim · FD · 22.10 10:30".
+function teslimBirincil(r) {
+  if (r.teslim_at) return `<span class="teslim-bilgi" data-ipucu title="${esc(teslimIpucu(r))}">✓ Teslim · ${esc(teslimKim(r))} · ${esc(kisaTarih(r.teslim_at))}</span>`;
+  return canTeslimAl(r) ? `<button class="ab ab-teslim" data-aks="teslim" data-id="${r.kalem_id}">Teslim al</button>` : "";
+}
+// Teknisyen: Tamamlandı rozetinin yanında küçük işaret.
+const teslimIsareti = (r) => (r.teslim_at
+  ? `<span class="teslim-isaret" data-ipucu title="${esc(teslimIpucu(r))}" aria-label="${esc(teslimIpucu(r))}">✓ teslim</span>` : "");
+const teslimGeriDugmesi = (r) => (canTeslimGeriAl(r)
+  ? `<button class="ab-geri" data-aks="teslim-geri" data-id="${r.kalem_id}" data-tip="Teslimi Geri Al" aria-label="Teslimi geri al">${GERI_IKON}</button>` : "");
+
+function teslimHataMesaji(e, varsayilan) {
+  if (e && e.uygunDegil) return e.message;
+  // Tetikleyici mesajları Türkçe ve açıklayıcı (yetki / zaten teslim / Tamamlandı değil).
+  if (e && (e.code === "42501" || e.code === "22023") && e.message) return e.message;
+  return varsayilan;
+}
+async function teslimAl(r) {
+  if (!canTeslimAl(r)) return;
+  try {
+    await Api.teslimAl(r.kalem_id);
+    toast("Teslim alındı");
+    await loadQueue();
+  } catch (e) {
+    toast(teslimHataMesaji(e, "Teslim alınamadı"), true);
+    await loadQueue();
+  }
+}
+async function teslimGeriAl(r) {
+  if (!canTeslimGeriAl(r)) return;
+  if (!confirm(`${r.patoloji_no} · ${r.blok_no || "—"} · ${r.test_adi}\n\nTeslim alındı işareti geri alınsın mı?\n(${teslimIpucu(r)})`)) return;
+  try {
+    await Api.teslimGeriAl(r.kalem_id);
+    toast("Teslim geri alındı");
+    await loadQueue();
+  } catch (e) {
+    toast(teslimHataMesaji(e, "Teslim geri alınamadı"), true);
+    await loadQueue();
+  }
+}
+// Toplu "Teslim al" — yalnız uygun kalemler (Tamamlandı, takipte, alınmamış,
+// yetkili); tek tek gönderilir (biri reddedilse diğerleri sürer), sonunda özet.
+async function bulkTeslim() {
+  const secili = rows.filter((r) => bulkSelected.has(r.kalem_id));
+  const say = { tamamlanmamis: 0, zaten: 0, takipDisi: 0, yetkisiz: 0 };
+  const targets = [];
+  secili.forEach((r) => {
+    if (r.durum !== "tamamlandi") say.tamamlanmamis++;
+    else if (r.teslim_at) say.zaten++;
+    else if (!r.teslim_takipte) say.takipDisi++;
+    else if (!canTeslimAl(r)) say.yetkisiz++;
+    else targets.push(r);
+  });
+  const atlananlar = [
+    say.tamamlanmamis && `${say.tamamlanmamis} tamamlanmamış`,
+    say.zaten && `${say.zaten} zaten teslim alınmış`,
+    say.takipDisi && `${say.takipDisi} takip öncesi`,
+    say.yetkisiz && `${say.yetkisiz} yetkiniz yok`,
+  ].filter(Boolean).join(", ");
+  if (!targets.length) { toast(`Teslim alınacak uygun kalem yok${atlananlar ? ` (${atlananlar})` : ""}`, true); return; }
+  const results = await Promise.allSettled(targets.map((r) => Api.teslimAl(r.kalem_id)));
+  const ok = results.filter((x) => x.status === "fulfilled").length;
+  const fail = results.length - ok;
+  clearBulkSelection();
+  await loadQueue();
+  toast(`${ok} kalem teslim alındı${atlananlar ? ` · atlanan: ${atlananlar}` : ""}${fail ? ` · ${fail} başarısız` : ""}`, ok === 0 && fail > 0);
 }
 
 // İsteyen / Uzman Adına: kısaltma varsa o (tam ad ipucu), yoksa tam ad.
@@ -1305,6 +1455,7 @@ function notHucre(r) {
 }
 
 function updateCounts() {
+  gecImza = gecikmisImzasi();
   const totalEl = $("#totalN"); if (!totalEl) return;
   // Sayaçlar görünen kapsamı yansıtır: gizli eski Tamamlandı'lar sayılmaz.
   // Başlık altı: kapsamdaki istek sayısı; Kesit ekranında kesilecek blok sayısı.
@@ -1533,9 +1684,20 @@ function renderDurumSekmeleri() {
     return;
   }
   const kapsamdakiler = rows.filter((r) => !eskiGizli(r) && kapsamaUyar(r));
-  const say = (f) => (f === "all" ? kapsamdakiler.length : kapsamdakiler.filter((r) => r.durum === f).length);
-  el.innerHTML = [["bekleyen", "Bekleyen"], ["cihazda", "İşlemde"], ["tamamlandi", "Tamamlandı"], ["all", "Hepsi"]]
-    .map(([f, l]) => `<button class="${isTabActive(f) ? "on" : ""}" data-f="${f}">${l} <span class="count">${say(f)}</span></button>`).join("");
+  const say = (f) => (f === "all" ? kapsamdakiler.length
+    : f === "teslim" ? kapsamdakiler.filter(teslimBekliyor).length
+    : kapsamdakiler.filter((r) => r.durum === f).length);
+  // Gecikmiş teslim sayısı: Benim İsteklerim'de "Teslim bekleyen"in, diğer
+  // kapsamlarda (teknisyen / yönetici takibi) Tamamlandı'nın yanında.
+  const teslimSekme = teslimSekmesiVar();
+  const gecN = teslimAktif() ? kapsamdakiler.filter(teslimGecikti).length : 0;
+  const gecEki = (f) => (gecN && (teslimSekme ? f === "teslim" : f === "tamamlandi")
+    ? `<span class="gec-say" title="Tamamlandı olalı ${teslimEsikSaat()} saatten uzun süredir teslim bekleyen">· ${gecN} gecikmiş</span>` : "");
+  const sekmeler = [["bekleyen", "Bekleyen"], ["cihazda", "İşlemde"], ["tamamlandi", "Tamamlandı"]];
+  if (teslimSekme) sekmeler.push(["teslim", "Teslim bekleyen"]);
+  sekmeler.push(["all", "Hepsi"]);
+  el.innerHTML = sekmeler
+    .map(([f, l]) => `<button class="${isTabActive(f) ? "on" : ""}" data-f="${f}">${l} <span class="count">${say(f)}</span>${gecEki(f)}</button>`).join("");
 }
 
 // ---------------- Aktif filtre çipleri ----------------
@@ -1563,7 +1725,7 @@ function renderFiltreCipleri() {
 function filtreKaldir(k) {
   if (k === "hepsi") { clearAllFilters(); return; }
   if (k === "ara") { searchQ = ""; const qs = $("#qSearch"); if (qs) qs.value = ""; }
-  else if (["tip", "oncelik", "tekrar", "durum"].includes(k)) colFilters[k] = new Set();
+  else if (["tip", "oncelik", "tekrar", "durum"].includes(k)) { colFilters[k] = new Set(); if (k === "durum") teslimSekmesi = false; }
   else colFilters[k] = "";
   clearBulkSelection();
   renderTable();
@@ -2376,6 +2538,8 @@ function renderBulkBar() {
   $("#bulkCikarildiBtn").classList.toggle("hidden", !arsiv || !canCikar());
   ["#bulkCihazaBtn", "#bulkTamamlaBtn", "#bulkGeriBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit || !ilerlet));
   ["#bulkTekrarBtn", "#bulkSilBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit));
+  // Teslim al: teknisyen (yönetici değilse) hiçbir zaman.
+  $("#bulkTeslimBtn").classList.toggle("hidden", kesit || isTeknisyen() || !teslimAktif());
   $("#bulkSilBtn").textContent = ilerlet ? "Sil" : "İptal Et";
   if (!n) return;
   const gorunen = secilebilirSatirlar();
@@ -2573,12 +2737,18 @@ async function showDetail(r) {
   if (selId !== r.kalem_id) return; // kullanıcı başka satıra geçti
 
   const steps = [["bekleyen", "İstendi"], ["cihazda", "İşleme alındı"], ["tamamlandi", "Tamamlandı"]];
-  const order = steps.findIndex((s) => s[0] === r.durum);
-  const timeFor = (key) => { const f = logs.find((l) => l.yeni_durum === key); return f ? formatDT(f.created_at) : null; };
+  // 4. adım: teslim alındı (kim, ne zaman) — teslimli ya da teslim bekleyen kalemde.
+  if (r.teslim_at || teslimBekliyor(r)) steps.push(["teslim", r.teslim_at ? "Teslim alındı" : "Teslim bekleniyor"]);
+  const order = r.teslim_at ? 3 : steps.findIndex((s) => s[0] === r.durum);
+  const timeFor = (key) => {
+    if (key === "teslim") return r.teslim_at ? `${esc(r.teslim_alan_adi || "?")} · ${formatDT(r.teslim_at)}` : null;
+    const f = logs.find((l) => l.yeni_durum === key); return f ? formatDT(f.created_at) : null;
+  };
   const tl = steps.map(([key, lbl], i) => {
     const cls = i < order ? "done" : i === order ? "cur" : "";
     const t = timeFor(key);
-    return `<div class="step ${cls}"><div class="node"></div><div><div class="lbl">${lbl}</div>${t ? `<div class="time">${t}</div>` : ""}</div></div>`;
+    const ek = key === "teslim" && !r.teslim_at ? teslimGecikmeRozeti(r) : "";
+    return `<div class="step ${cls}"><div class="node"></div><div><div class="lbl">${lbl}${ek}</div>${t ? `<div class="time">${t}</div>` : ""}</div></div>`;
   }).join("");
 
   // Son log kaydı bir geri alma ise (yeni_durum, eski_durum'dan geriyse)
@@ -2588,6 +2758,12 @@ async function showDetail(r) {
   const isRevert = lastLog && SORT_RANK.durum[lastLog.yeni_durum] < SORT_RANK.durum[lastLog.eski_durum];
   const revertNote = isRevert
     ? `<div class="revert-note">↩ ${esc(lastLog.kullanicilar?.ad_soyad || "Bilinmeyen kullanıcı")} tarafından ${formatDT(lastLog.created_at)} tarihinde "${esc(PILL[lastLog.eski_durum][1])}" durumu geri alındı.</div>`
+    : lastLog && lastLog.yeni_durum === "teslim_geri_alindi" && !r.teslim_at
+      ? `<div class="revert-note">↩ ${esc(lastLog.kullanicilar?.ad_soyad || "Bilinmeyen kullanıcı")} tarafından ${formatDT(lastLog.created_at)} tarihinde teslim alındı işareti geri alındı.</div>`
+      : "";
+  // Teslim alınmış kalemde durum geri alınamaz — teknisyen/yöneticiye neden.
+  const teslimNot = canAdvance() && r.teslim_at
+    ? `<div class="teslim-not">Teslim alındığı için durum geri alınamaz${canTeslimGeriAl(r) ? " — önce teslimi geri alın" : " — teslimi yalnız işaretleyen kişi ya da yönetici geri alabilir"}.</div>`
     : "";
 
   const aktifCihazlar = CIHAZLAR.filter((c) => c.aktif || c.id === r.cihaz_id);
@@ -2644,7 +2820,7 @@ async function showDetail(r) {
     </div>
     <div class="m-label" style="margin-bottom:10px">Durum geçmişi</div>
     <div class="tl">${tl}</div>
-    ${revertNote}
+    ${revertNote}${teslimNot}
     <div class="m-label">Düzeltme geçmişi${duzGecmis.length ? ` (${duzGecmis.length})` : ""}</div>
     <div class="duz-gecmis">${duzGecmisHTML(duzGecmis)}</div>
     <div class="m-label">Notlar${notlar.length ? ` (${notlar.length})` : ""}</div>
@@ -2756,14 +2932,19 @@ async function showDetail(r) {
   const revertTo = canRevert(r) ? REVERT_TO[r.durum] || null : null;
   // Uzman/asistan: yalnız kendi Bekleyen kalemini "İptal Et".
   const canDelete = canDeleteKalem(r) && (canAdvance() || r.durum === "bekleyen");
-  if (canDelete || advLabel || revertTo) {
+  const teslimAlinir = canTeslimAl(r), teslimGeriAlinir = canTeslimGeriAl(r);
+  if (canDelete || advLabel || revertTo || teslimAlinir || teslimGeriAlinir) {
     rail.insertAdjacentHTML("beforeend", `<div class="rail-foot">
       ${canDelete ? `<button class="btn-ghost" id="delIstemBtn">${canAdvance() ? "Sil" : "İptal Et"}</button>` : ""}
       ${revertTo ? `<button class="btn-ghost" id="revertBtn">↩ Geri Al</button>` : ""}
+      ${teslimGeriAlinir ? `<button class="btn-ghost" id="teslimGeriBtn">↩ Teslimi geri al</button>` : ""}
       ${advLabel ? `<button class="btn-primary" id="advBtn">${advLabel}</button>` : ""}
+      ${teslimAlinir ? `<button class="btn-primary" id="teslimAlBtn">Teslim al</button>` : ""}
     </div>`);
     if (toDurum) $("#advBtn").onclick = () => advance(r.kalem_id, toDurum);
     if (revertTo) $("#revertBtn").onclick = () => revertDurum(r);
+    if (teslimAlinir) $("#teslimAlBtn").onclick = () => teslimAl(r);
+    if (teslimGeriAlinir) $("#teslimGeriBtn").onclick = () => teslimGeriAl(r);
     if (canDelete) {
       const label = `${r.patoloji_no} — ${r.test_adi}${r.durum === "tamamlandi" ? " (Tamamlandı — yönetici yetkisiyle)" : ""}`;
       $("#delIstemBtn").onclick = () => confirmAndDelete(label, () => Api.deleteIstemKalem(r.kalem_id), async () => {
@@ -4685,7 +4866,53 @@ function renderPrefs() {
     <div class="m-sec"><p class="m-label">Mod</p><div class="segs">${segs("mod-sec", MOD_LABEL, p.mod)}</div></div>
     <div class="m-sec"><p class="m-label">Tablo yoğunluğu</p><div class="segs">${segs("yog-sec", YOG_LABEL, p.yogunluk)}</div></div>
     ${session ? `<div class="m-sec"><p class="m-label">Yeni istem sesi</p><div class="segs">${segs("ses-sec", [["acik", "Açık"], ["kapali", "Kapalı"]], sesAcik() ? "acik" : "kapali")}</div></div>` : ""}
-    ${bildirimBolumuHTML()}`;
+    ${bildirimBolumuHTML()}
+    ${sistemAyarlariHTML()}`;
+}
+
+// ---------------- Sistem ayarları (yalnız yönetici; sistem_ayarlari, teslim_sema.sql) ----------------
+// Okuma herkese açık; yazma RLS'te yalnız yönetici. Tablo yoksa bölüm çıkmaz.
+function yerelTarihSaat(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${iki(d.getMonth() + 1)}-${iki(d.getDate())}T${iki(d.getHours())}:${iki(d.getMinutes())}`;
+}
+function sistemAyarlariHTML() {
+  if (!session || !isAdmin() || !("teslim_gecikme_saat" in AYARLAR)) return "";
+  const bas = AYARLAR.teslim_takip_baslangic ? yerelTarihSaat(AYARLAR.teslim_takip_baslangic) : "";
+  return `<div class="m-sec"><p class="m-label">Sistem ayarları (yönetici)</p>
+    <form class="ayarform" id="ayarForm" novalidate>
+      <label class="ayar-satir" for="ayarEsik">Teslim gecikme eşiği
+        <span class="ayar-giris"><input class="finput" id="ayarEsik" type="number" inputmode="numeric" min="1" max="720" step="1" value="${teslimEsikSaat()}"> saat</span></label>
+      <div class="ayar-not">Tamamlandı olalı bu kadar saat (takvim saati) geçen, teslim alınmamış kalemlere turuncu "${teslimEsikSaat()}+ sa" rozeti.</div>
+      <label class="ayar-satir" for="ayarBaslangic">Teslim takibi başlangıcı</label>
+      <input class="finput" id="ayarBaslangic" type="datetime-local" value="${bas}">
+      <div class="ayar-not">Bundan önce tamamlanan kalemler takip dışıdır (Teslim al çıkmaz, sayılmaz). Geriye çekerek yakın tarihli kalemleri dahil edebilirsiniz.</div>
+      <div class="err" id="ayarErr" role="alert"></div>
+      <div class="btnrow"><button type="submit" class="btn-primary btn-sm" id="ayarKaydet">Kaydet</button></div>
+    </form></div>`;
+}
+async function handleAyarSubmit() {
+  const hata = (m) => { $("#ayarErr").textContent = m; };
+  const esik = Number($("#ayarEsik").value);
+  if (!Number.isInteger(esik) || esik < 1 || esik > 720) return hata("Eşik 1–720 arası tam saat olmalı");
+  const basStr = $("#ayarBaslangic").value;
+  const bas = basStr ? new Date(basStr) : null;
+  if (!bas || Number.isNaN(bas.getTime())) return hata("Takip başlangıcını girin");
+  if (bas.getTime() > Date.now()) return hata("Takip başlangıcı ileri bir tarih olamaz");
+  const eskiBas = AYARLAR.teslim_takip_baslangic ? yerelTarihSaat(AYARLAR.teslim_takip_baslangic) : "";
+  $("#ayarKaydet").disabled = true;
+  try {
+    if (esik !== teslimEsikSaat()) await Api.setAyar("teslim_gecikme_saat", esik);
+    if (basStr !== eskiBas) await Api.setAyar("teslim_takip_baslangic", bas.toISOString());
+    AYARLAR = await Api.getAyarlar();
+    toast("Sistem ayarları kaydedildi");
+    renderPrefs();
+    if (currentPage === "kuyruk") await loadQueue(); // takip başlangıcı görünümü değiştirir
+  } catch (e) {
+    $("#ayarKaydet").disabled = false;
+    hata(e && e.isForbidden ? "Bu ayarı yalnız yönetici değiştirebilir" : (e && e.message) || "Kaydedilemedi");
+  }
 }
 
 // ---------------- Kendi profilim: PIN + fotoğraf (herkes, sadece kendi hesabı) ----------------
@@ -4807,6 +5034,7 @@ function wireStaticUI() {
   $("#prefsPanel").addEventListener("submit", (e) => {
     e.preventDefault();
     if (e.target.id === "pinForm") handlePinSubmit();
+    else if (e.target.id === "ayarForm") handleAyarSubmit();
   });
   document.addEventListener("click", () => togglePrefs(false));
   document.addEventListener("keydown", (e) => {
@@ -5109,6 +5337,8 @@ function istatistikHTML(s) {
     </div>`;
   const tipAd = (t) => TIP[t.kod] || t.ad || t.kod;
   const sifir = `<span class="sifir">0</span>`;
+  // "tamamlanma → teslim" (teslim_sema.sql); sunucu eski sürümse gösterilmez.
+  const teslimVar = "teslim" in o;
 
   return `
     <div class="ist-aralik">${esc(fmtGun(bas))} – ${esc(fmtGun(bit))}</div>
@@ -5118,6 +5348,8 @@ function istatistikHTML(s) {
       ${kart("Tamamlanan", n(o.tamamlanan), "aralıkta tamamlanan kalem")}
       ${kart("Ort. tamamlanma", fmtSure(o.ort_saat), o.medyan_saat != null ? `medyan ${fmtSure(o.medyan_saat)}` : "")}
       ${kart("Şu an açık", n(o.acik), "Bekleyen + İşlemde")}
+      ${teslimVar ? kart("Tamamlanma → teslim", fmtSure(o.teslim_ort_saat),
+        `${o.teslim_medyan_saat != null ? `medyan ${fmtSure(o.teslim_medyan_saat)} · ` : ""}${n(o.teslim)} teslim · şu an ${n(o.teslim_bekleyen)} bekleyen`) : ""}
     </div>
     <div class="ist-blok">
       <div class="m-label">${per === "month" ? "Aylık" : "Haftalık"} döküm</div>
@@ -5126,6 +5358,7 @@ function istatistikHTML(s) {
           <th>Dönem</th><th class="sayi">İstem</th><th class="sayi">Kalem</th>
           ${tipler.map((t) => `<th class="sayi">${esc(tipAd(t))}</th>`).join("")}
           <th class="sayi">Tekrar</th><th class="sayi">Tamamlanan</th><th class="sayi">Ort. süre</th><th class="sayi">Medyan</th>
+          ${teslimVar ? `<th class="sayi">Teslim</th><th class="sayi">Teslime ort.</th><th class="sayi">Teslime medyan</th>` : ""}
         </tr></thead>
         <tbody>${donemler.map((d) => `<tr>
           <td>${esc(donemEtiketi(d.d, per, bas, bit))}</td>
@@ -5136,6 +5369,9 @@ function istatistikHTML(s) {
           <td class="sayi">${d.tamamlanan ? n(d.tamamlanan) : sifir}</td>
           <td class="sayi">${fmtSure(d.ort_saat)}</td>
           <td class="sayi">${fmtSure(d.medyan_saat)}</td>
+          ${teslimVar ? `<td class="sayi">${d.teslim ? n(d.teslim) : sifir}</td>
+          <td class="sayi">${fmtSure(d.teslim_ort_saat)}</td>
+          <td class="sayi">${fmtSure(d.teslim_medyan_saat)}</td>` : ""}
         </tr>`).join("")}</tbody>
       </table></div>
     </div>
@@ -5151,7 +5387,7 @@ function istatistikHTML(s) {
       ${kisiKarti("Kullanıcı bazında istem (isteyen)", s.kullanicilar || [])}
       ${kisiKarti("Uzman adına dağılım (kimin adına istendi)", s.uzmanlar)}
     </div>
-    <div class="ist-not">İstem, kalem, tip, kullanıcı ve uzman sayıları istendiği döneme sayılır; uzman adına dağılımda "Uzman Adına" boş bırakılan istemler "(uzman seçilmedi)" satırındadır. Tamamlanma süresi: kalemin istenmesinden son "Tamamlandı"ya geçişine kadar; tamamlanma tarihi aralıktaki kalemler, tamamlandığı döneme sayılır. Silinmiş kalemler sayılmaz.</div>`;
+    <div class="ist-not">İstem, kalem, tip, kullanıcı ve uzman sayıları istendiği döneme sayılır; uzman adına dağılımda "Uzman Adına" boş bırakılan istemler "(uzman seçilmedi)" satırındadır. Tamamlanma süresi: kalemin istenmesinden son "Tamamlandı"ya geçişine kadar; tamamlanma tarihi aralıktaki kalemler, tamamlandığı döneme sayılır.${teslimVar ? ` Tamamlanma → teslim: son "Tamamlandı"dan "Teslim alındı"ya kadar (takvim saati); teslim tarihi aralıktaki kalemler, teslim alındığı döneme sayılır.` : ""} Silinmiş kalemler sayılmaz.</div>`;
 }
 
 // ================================================================
