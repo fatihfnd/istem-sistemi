@@ -97,6 +97,8 @@ function tipTag(grup) {
 const TEKRAR_BADGE = `<span class="badge-tekrar" title="Boya tekrarı">${PIXEL_SVG.tekrar}Tekrar</span>`;
 
 const GERI_IKON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/></svg>`;
+// Barkod okut (barkod.js) — İstek Ver formu, İş Kuyruğu ve Hizmetler arama kutusu.
+const TARA_IKON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>`;
 const SEARCH_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>`;
 
 function esc(s) {
@@ -260,6 +262,7 @@ const RECENT_CAP = 20;                    // Tek Tek Seç varsayılan görünüm
 const RECENT_SET_CAP = 10;                // Hazır Setler varsayılan görünümünde üst sınır
 let rows = [];
 let selId = null, searchQ = "";
+let aramaTam = false;         // arama barkoddan geldi: patoloji no TAM eşleşme (elle yazılan "içerir")
 let bulkSelected = new Set(); // kalem_id'ler — çoklu seçim (İş Kuyruğu)
 let bulkAnchor = null;        // Shift+tık ile ardışık aralık genişletmede sabit kalan "temel" satır
 let dragStartId = null;       // checkbox sürükleyerek seçim (masaüstü, opsiyonel) — mousedown olan satır
@@ -389,7 +392,7 @@ function clearAllFilters() {
   const durum = colFilters.durum;
   colFilters = freshColFilters();
   colFilters.durum = durum.size > 1 ? new Set() : durum;
-  searchQ = "";
+  searchQ = ""; aramaTam = false;
   const qs = $("#qSearch"); if (qs) qs.value = "";
   $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
   clearBulkSelection();
@@ -548,7 +551,7 @@ async function handleLogout() {
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
-  rows = []; selId = null; searchQ = "";
+  rows = []; selId = null; searchQ = ""; aramaTam = false;
   colFilters = freshColFilters();
   kapsam = "tumu"; kesitSekme = "kesilecek"; arsivSekme = "hepsi"; secimModu = false;
   sortCol = null; sortDir = "asc"; caseView = null;
@@ -749,9 +752,10 @@ function renderQueuePage() {
         <span class="lvl"></span>
         <button type="button" data-zoom="1" aria-label="Tabloyu genişlet">A+</button>
       </div>
-      <div class="msearch">
+      <div class="msearch tarali">
         ${SEARCH_ICON}
         <input id="qSearch" placeholder="Blok, patoloji no…" value="${esc(searchQ)}">
+        <button type="button" class="ara-tara" id="qTara" title="Barkodu okut — o vakayı süz" aria-label="Barkodu okutarak ara">${TARA_IKON}</button>
       </div>
     </div>
     <div class="filtre-cipleri hidden" id="filtreCipleri"></div>
@@ -817,7 +821,13 @@ function renderQueuePage() {
     const ids = gorunenBloklar().flatMap((b) => b.kesilecek.map((r) => r.kalem_id)).filter((id) => bulkSelected.has(id));
     blokKesildiYap(ids);
   });
-  $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; renderTable(); });
+  $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; aramaTam = false; renderTable(); });
+  // Barkod: o vaka (patoloji no TAM eşleşme) süzülür; kapsam ve sekme korunur.
+  $("#qTara").addEventListener("click", () => barkodlaAra("#qSearch", (v) => {
+    searchQ = v; aramaTam = true;
+    clearBulkSelection();
+    renderTable();
+  }));
   $("#zoomCtl").addEventListener("click", (e) => {
     const b = e.target.closest("[data-zoom]");
     if (!b || !window.Tema) return;
@@ -1207,7 +1217,7 @@ function passesFilter(r, eskiDahil = false) {
   if (colFilters.uzman && !`${r.uzman_adi || ""} ${r.uzman_kisaltma || ""}`.toLowerCase().includes(colFilters.uzman)) return false;
   if (searchQ) {
     const q = searchQ.toLowerCase();
-    if (!r.blok_no.toLowerCase().includes(q) && !patEslesir(r, q)) return false;
+    if (aramaTam ? !patTamEslesir(r, searchQ) : !r.blok_no.toLowerCase().includes(q) && !patEslesir(r, q)) return false;
   }
   return true;
 }
@@ -1703,7 +1713,7 @@ function renderDurumSekmeleri() {
 // ---------------- Aktif filtre çipleri ----------------
 function aktifFiltreler() {
   const f = [];
-  if (searchQ) f.push(["ara", `Arama: ${searchQ}`]);
+  if (searchQ) f.push(["ara", aramaTam ? `Barkod: ${searchQ}` : `Arama: ${searchQ}`]);
   [["testTam", "İstek"], ["isteyenTam", "İsteyen"], ["uzmanTam", "Uzman Adına"]]
     .forEach(([k, l]) => { if (colFilters[k]) f.push([k, `${l}: ${colFilters[k]}`]); });
   [["pat", "Patoloji No"], ["blok", "Blok"], ["test", "İstek"], ["isteyen", "İsteyen"], ["uzman", "Uzman Adına"]]
@@ -1724,7 +1734,7 @@ function renderFiltreCipleri() {
 }
 function filtreKaldir(k) {
   if (k === "hepsi") { clearAllFilters(); return; }
-  if (k === "ara") { searchQ = ""; const qs = $("#qSearch"); if (qs) qs.value = ""; }
+  if (k === "ara") { searchQ = ""; aramaTam = false; const qs = $("#qSearch"); if (qs) qs.value = ""; }
   else if (["tip", "oncelik", "tekrar", "durum"].includes(k)) { colFilters[k] = new Set(); if (k === "durum") teslimSekmesi = false; }
   else colFilters[k] = "";
   clearBulkSelection();
@@ -1820,10 +1830,7 @@ function gorunenBloklar() {
 function gorunenKesitBloklari() {
   let list = kesitBloklari().filter((b) =>
     kesitSekme === "kesilecek" ? b.kesilecek.length : kesitSekme === "kesildi" ? !b.kesilecek.length : true);
-  if (searchQ) {
-    const q = searchQ.toLowerCase();
-    list = list.filter((b) => blokPatEslesir(b, q) || b.blok.toLowerCase().includes(q));
-  }
+  if (searchQ) list = list.filter(blokAramayaUyar);
   // Kesilecek: acil üstte, sonra en eski istek önce. Kesildi: en yeni kesim önce.
   return list.sort((a, b) => {
     if (!a.kesilecek.length && !b.kesilecek.length) return (sonKesim(b)[0]?.kesildi_at || "").localeCompare(sonKesim(a)[0]?.kesildi_at || "");
@@ -2015,10 +2022,7 @@ function sonCikarma(b) {
 }
 function gorunenArsivBloklari() {
   let list = arsivBloklari().filter((b) => (arsivSekme === "cikarilacak" ? !b.cikarildi : arsivSekme === "cikarildi" ? b.cikarildi : true));
-  if (searchQ) {
-    const q = searchQ.toLowerCase();
-    list = list.filter((b) => blokPatEslesir(b, q) || b.blok.toLowerCase().includes(q));
-  }
+  if (searchQ) list = list.filter(blokAramayaUyar);
   // Çıkarılacaklar üstte (acil önce, sonra arşiv sırası: patoloji no + blok); çıkarılmışlar altta.
   return list.sort((a, b) => (a.cikarildi - b.cikarildi) || (blokAcilMi(b) - blokAcilMi(a))
     || yazdirSirasi({ patoloji_no: a.pat, blok_no: a.blok }, { patoloji_no: b.pat, blok_no: b.blok }));
@@ -2254,6 +2258,14 @@ const yazdirildiMi = (r, baglam) => Boolean(r.yazdirmalar && r.yazdirmalar[bagla
 // Arama / filtre: güncel ya da eski patoloji no
 const patEslesir = (r, q) => String(r.patoloji_no).toLowerCase().includes(q) || (r.eski_patoloji_nolar || []).some((p) => String(p).toLowerCase().includes(q));
 const blokPatEslesir = (b, q) => b.pat.toLowerCase().includes(q) || blokTumKalemler(b).some((r) => patEslesir(r, q));
+// Barkoddan gelen arama: patoloji no (güncel ya da düzeltilmeden önceki) TAM eşleşme — "18788/26" "118788/26"yı bulmaz.
+const patTamEslesir = (r, q) => [r.patoloji_no, ...(r.eski_patoloji_nolar || [])].some((p) => patNorm(p) === patNorm(q));
+// Kesit / Arşiv blok satırları.
+function blokAramayaUyar(b) {
+  if (aramaTam) return patNorm(b.pat) === patNorm(searchQ) || blokTumKalemler(b).some((r) => patTamEslesir(r, searchQ));
+  const q = searchQ.toLowerCase();
+  return blokPatEslesir(b, q) || b.blok.toLowerCase().includes(q);
+}
 
 function duzGecmisHTML(liste) {
   if (!liste.length) return `<div class="not-bos">Düzeltme yapılmadı.</div>`;
@@ -3279,16 +3291,17 @@ function showForm(prefill) {
     applySetTestler(prefill.testler);
   }
 
+  const seciliUzman = varsayilanUzman();
   const rail = $("#rail");
   rail.innerHTML = `
     <div class="rail-head"><h2>Yeni İstek</h2><button class="rx" id="closeForm">×</button></div>
     <div class="rail-body">
       <div class="m-sec"><p class="m-label">Uzman adına</p>
-        <select class="onbehalf" id="mUzman">${UZMANLAR.map((u) => `<option value="${u.id}">${esc(u.ad_soyad)}</option>`).join("")}</select></div>
+        <select class="onbehalf" id="mUzman"><option value="">— Uzman seçin —</option>${UZMANLAR.map((u) => `<option value="${u.id}"${u.id === seciliUzman ? " selected" : ""}>${esc(u.ad_soyad)}</option>`).join("")}</select></div>
       <div class="m-sec"><p class="m-label">Patoloji No</p>
         <div class="patrow"><input id="mPat" placeholder="ör. 11240/26">
-          <button type="button" class="scan" id="scanBtn" title="Kameradan oku (lam etiketi)" aria-label="Patoloji No'yu kameradan oku"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></button></div>
-        <div class="ocr-not hidden" id="mPatOcr">Kameradan okundu — İstek Ver'den önce kontrol edin.</div></div>
+          <button type="button" class="scan" id="scanBtn" title="Barkodu okut (istem kağıdındaki etiket)" aria-label="Patoloji No'yu barkoddan oku">${TARA_IKON}</button></div>
+        <div class="bk-not hidden" id="mPatBk">Barkoddan okundu — İstek Ver'den önce kontrol edin.</div></div>
       ${pickerSectionsHTML({ withQuickFill: true })}
       <div class="m-sec"><p class="m-label">Blok Seçimi <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— manuel, opsiyonel</span></p>
         <div class="blocks" id="blocks"><input class="bin" id="blockin" placeholder="+ blok"></div></div>
@@ -3299,19 +3312,19 @@ function showForm(prefill) {
     <div class="rail-foot"><button class="btn-ghost" id="cancelForm">İptal</button><button class="btn-primary" id="submitForm">İstek Ver</button></div>`;
 
   $("#closeForm").onclick = showEmpty;
-  // Kameradan OCR (ocr.js): sonuç ancak kullanıcı "Kullan" deyince alana
-  // yazılır; alan düzenlenebilir kalır, form kendiliğinden gönderilmez.
-  // Blok No'ya dokunulmaz.
+  // Barkod (barkod.js): kalıba uyan değer alana yazılır; alan düzenlenebilir
+  // kalır, form kendiliğinden gönderilmez. Blok No'ya dokunulmaz.
   $("#scanBtn").onclick = () => {
-    if (!window.PatolojiOCR) { toast("Tarama bileşeni yüklenemedi — Patoloji No'yu elle girin", true); return; }
-    PatolojiOCR.ac({
+    if (!window.BarkodOkuyucu) { toast("Barkod okuyucu yüklenemedi — Patoloji No'yu elle girin", true); return; }
+    BarkodOkuyucu.ac({
+      baslik: "Patoloji No — barkodu okut",
       onSonuc: (deger) => {
         const inp = $("#mPat");
         if (!inp) return; // form bu arada kapatıldı
         inp.value = deger;
         yaziyorEtkilesim();
-        inp.classList.add("ocr-dolu");
-        $("#mPatOcr").classList.remove("hidden");
+        inp.classList.add("bk-dolu");
+        $("#mPatBk").classList.remove("hidden");
         inp.focus();
       },
       // "Elle Gir": kamera kapanır, doğrudan Patoloji No alanında yazmaya devam edilir.
@@ -3324,8 +3337,8 @@ function showForm(prefill) {
     });
   };
   $("#mPat").addEventListener("input", () => {
-    $("#mPat").classList.remove("ocr-dolu");
-    $("#mPatOcr").classList.add("hidden");
+    $("#mPat").classList.remove("bk-dolu");
+    $("#mPatBk").classList.add("hidden");
   });
   $("#cancelForm").onclick = showEmpty;
   $$("#groups button").forEach((b) => b.classList.toggle("on", b.dataset.g === grp));
@@ -3343,6 +3356,37 @@ function showForm(prefill) {
     prio = b.dataset.p;
   });
   $("#submitForm").onclick = submitForm;
+}
+
+// "Uzman adına": son kullanılan uzman kullanıcı başına hatırlanır (ortak
+// bilgisayar) — İstek Ver başarılı olunca yazılır. Hatırlanan uzman artık
+// aktif uzman listesinde değilse alan boş gelir; hiç kayıt yoksa giriş yapan
+// uzman kendi adıyla başlar. Boş alanla İstek Ver yapılamaz.
+const sonUzmanKey = () => "istem_son_uzman:" + (session ? session.id : "");
+function sonUzmanKaydet(id) {
+  try { localStorage.setItem(sonUzmanKey(), id); } catch (e) { /* hatırlanmaz */ }
+}
+function varsayilanUzman() {
+  let kayitli = null;
+  try { kayitli = localStorage.getItem(sonUzmanKey()); } catch (e) { kayitli = null; }
+  if (kayitli) return UZMANLAR.some((u) => u.id === kayitli) ? kayitli : null;
+  return session && UZMANLAR.some((u) => u.id === session.id) ? session.id : null;
+}
+
+// İş Kuyruğu / Hizmetler arama kutusu: barkod okutulunca değer kutuya yazılır,
+// uygula(v) süzmeyi yapar (TAM eşleşme). "Elle Gir" kutuya odaklar.
+function barkodlaAra(inputSel, uygula) {
+  if (!window.BarkodOkuyucu) { toast("Barkod okuyucu yüklenemedi — numarayı elle yazın", true); return; }
+  BarkodOkuyucu.ac({
+    baslik: "Barkodu okut — vakayı ara",
+    onSonuc: (v) => {
+      const inp = $(inputSel);
+      if (inp) inp.value = v;
+      uygula(v);
+      toast(`Barkod okundu: ${v}`);
+    },
+    onElle: () => { const inp = $(inputSel); if (inp) { inp.focus(); inp.select(); } },
+  });
 }
 
 function addBlockChip(v) {
@@ -3371,11 +3415,13 @@ async function submitForm() {
 
   const uzmanEl = $("#mUzman");
   const uzman_id = uzmanEl && uzmanEl.value ? uzmanEl.value : null;
+  if (!uzman_id) { toast("Uzman adına seçin", true); uzmanEl?.focus(); return; }
   const not_metni = $("#mNot").value.trim() || null;
 
   $("#submitForm").disabled = true;
   try {
     await Api.createIstem({ patoloji_no: patNo, istem_yapan_id: session.id, uzman_id, oncelik: prio, not_metni, bloklar, testler });
+    sonUzmanKaydet(uzman_id);
     yaziyorBirak();
     setDurumTab("all");
     $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
@@ -3748,6 +3794,7 @@ function showCihazForm(existing) {
 // ================================================================
 let hizmetlerList = [];
 let hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
+let hizArama = "", hizAramaTam = false; // üstteki patoloji no araması; barkoddan geldiyse TAM eşleşme
 let hizSortCol = null, hizSortDir = "asc";
 const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzman_adi", tarih: "created_at" };
 // Üç bölüm: Bekleyen = faturası girilmemiş (tekrar olmayan) istemler;
@@ -3772,13 +3819,32 @@ function hizOzetTxt(h) {
   return h.tekrar ? `${hizOzetSayilar(h)} (tekrar)` : hizOzetSayilar(h);
 }
 function hizHasActiveFilters() {
-  return Boolean(hizColFilters.pat || hizColFilters.isteyen || hizColFilters.uzman || hizColFilters.ozet);
+  return Boolean(hizArama || hizColFilters.pat || hizColFilters.isteyen || hizColFilters.uzman || hizColFilters.ozet);
 }
 function hizClearFilters() {
   hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
+  hizArama = ""; hizAramaTam = false;
+  const a = $("#hizAra"); if (a) a.value = "";
   renderHizTable();
 }
+// Üstteki arama: güncel ya da düzeltilmeden önceki patoloji no'lar.
+function hizAramayaUyar(h) {
+  const nolar = [h.patoloji_no, ...(h.eski_patoloji_nolar || [])];
+  if (hizAramaTam) return nolar.some((x) => patNorm(x) === patNorm(hizArama));
+  const q = hizArama.trim().toLowerCase();
+  return nolar.some((x) => String(x).toLowerCase().includes(q));
+}
+// Barkodla aranan vaka bu sekmede yoksa, bulunduğu sekmeye geçilir.
+function hizSekmeyeGec() {
+  const uyan = hizmetlerList.filter((h) => hizPassesFilter(h));
+  if (!uyan.length || uyan.some((h) => hizSekmesi(h) === hizSekme)) return;
+  const hedef = HIZ_SEKMELER.find(([k]) => uyan.some((h) => hizSekmesi(h) === k));
+  if (!hedef) return;
+  hizSekme = hedef[0];
+  $$("#hizTabs button").forEach((x) => x.classList.toggle("on", x.dataset.hs === hizSekme));
+}
 function hizPassesFilter(h) {
+  if (hizArama && !hizAramayaUyar(h)) return false;
   if (hizColFilters.pat && ![h.patoloji_no, ...(h.eski_patoloji_nolar || [])].some((x) => String(x).toLowerCase().includes(hizColFilters.pat))) return false;
   if (hizColFilters.isteyen && !`${h.isteyen_adi || ""} ${h.isteyen_kisaltma || ""}`.toLowerCase().includes(hizColFilters.isteyen)) return false;
   if (hizColFilters.uzman && !`${h.uzman_adi || ""} ${h.uzman_kisaltma || ""}`.toLowerCase().includes(hizColFilters.uzman)) return false;
@@ -3827,6 +3893,12 @@ function renderHizmetlerPage() {
       <div class="tabs" id="hizTabs">
         ${HIZ_SEKMELER.map(([k, l]) => `<button class="${hizSekme === k ? "on" : ""}" data-hs="${k}">${l} <span class="count" data-hc="${k}">0</span></button>`).join("")}
       </div>
+      <div class="grow"></div>
+      <div class="msearch tarali">
+        ${SEARCH_ICON}
+        <input id="hizAra" placeholder="Patoloji no…" value="${esc(hizArama)}" aria-label="Patoloji no ara">
+        <button type="button" class="ara-tara" id="hizTara" title="Barkodu okut — o vakayı bul" aria-label="Barkodu okutarak ara">${TARA_IKON}</button>
+      </div>
     </div>
     <div class="tablewrap">
       <table>
@@ -3846,6 +3918,12 @@ function renderHizmetlerPage() {
     renderHizTable();
   });
   $("#hizClearFiltersBtn").addEventListener("click", hizClearFilters);
+  $("#hizAra").addEventListener("input", (e) => { hizArama = e.target.value; hizAramaTam = false; renderHizTable(); });
+  $("#hizTara").addEventListener("click", () => barkodlaAra("#hizAra", (v) => {
+    hizArama = v; hizAramaTam = true;
+    hizSekmeyeGec();
+    renderHizTable();
+  }));
   $("#hizGruplaTgl").addEventListener("change", (e) => {
     try { localStorage.setItem(HIZ_GRUPLA_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
     renderHizTable();
@@ -3863,11 +3941,14 @@ function renderHizmetlerPage() {
     if (ipucu) { toast(ipucu.title); return; }
     const geri = e.target.closest("[data-hiz-geri]");
     if (geri) { const h = hizmetlerList.find((x) => x.istem_id === geri.dataset.hizGeri); if (h) faturaGeriAl(h); return; }
-    const patCell = e.target.closest("[data-pat]");
-    if (patCell) {
-      const patNo = patCell.dataset.pat;
+    // Metne tıklamak hiçbir şey yapmaz (sekreter seçip kopyalayabilsin);
+    // kopyalama ve vakaya gitme ayrı küçük ikonlarla.
+    const kopya = e.target.closest("[data-kopyala]");
+    if (kopya) { panoyaKopyala(kopya.dataset.kopyala, "Kopyalandı"); return; }
+    const git = e.target.closest("[data-git]");
+    if (git) {
       navigate("kuyruk");
-      openCaseView(patNo);
+      openCaseView(git.dataset.git);
       return;
     }
     const btn = e.target.closest("[data-hiz]");
@@ -3983,6 +4064,10 @@ function hizUzmanGruplari(list) {
   return [...m].sort((a, b) => (a[0] === HIZ_SECILMEDI) - (b[0] === HIZ_SECILMEDI) || a[0].localeCompare(b[0], "tr"));
 }
 const canFaturaGeriAl = (h) => isAdmin() || (session && h.fatura_giren_id === session.id);
+const KOPYA_IKON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`;
+const GIT_IKON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+const kopyalaDugmesi = (deger, etiket) =>
+  `<button type="button" class="hiz-ikon" data-kopyala="${esc(deger)}" title="${esc(etiket)}" aria-label="${esc(etiket)}">${KOPYA_IKON}</button>`;
 
 function hizSatiriEkle(tb, h) {
     const tr = document.createElement("tr");
@@ -3992,10 +4077,11 @@ function hizSatiriEkle(tb, h) {
       : `<button class="act" data-hiz="${h.istem_id}">Gir</button>`;
     const patDuz = h.pat_duzeltme
       ? `<span class="duz-rozet" title="Düzeltildi: ${esc(h.pat_duzeltme.kim)} · ${esc(formatDateFull(h.pat_duzeltme.zaman))}">düzeltildi</span><div class="duz-eski">${esc(h.pat_duzeltme.eski)}</div>` : "";
-    tr.innerHTML = `<td class="c-pat" data-pat="${esc(h.patoloji_no)}" style="cursor:pointer">${esc(h.patoloji_no)}${h.yazdirma ? yazdirIkonuHTML(h.yazdirma) : ""}${patDuz}${ciktiEskiHTML(h.cikti_eski)}</td>
+    const ozet = hizOzetSayilar(h);
+    tr.innerHTML = `<td class="c-pat hiz-pat"><span class="hiz-metin">${esc(h.patoloji_no)}</span>${kopyalaDugmesi(h.patoloji_no, "Patoloji no'yu kopyala")}<button type="button" class="hiz-ikon" data-git="${esc(h.patoloji_no)}" title="Vakaya git" aria-label="Vakaya git">${GIT_IKON}</button>${h.yazdirma ? yazdirIkonuHTML(h.yazdirma) : ""}${patDuz}${ciktiEskiHTML(h.cikti_eski)}</td>
       ${kisiTd(h.isteyen_adi, h.isteyen_kisaltma)}
       ${kisiTd(h.uzman_adi === "—" ? null : h.uzman_adi, h.uzman_kisaltma)}
-      <td>${esc(hizOzetSayilar(h))}${h.tekrar ? TEKRAR_BADGE : ""}</td>
+      <td class="hiz-ozet"><span class="hiz-metin">${esc(ozet)}</span>${h.ozet.length ? kopyalaDugmesi(ozet, "Özeti kopyala") : ""}${h.tekrar ? TEKRAR_BADGE : ""}</td>
       <td style="color:var(--ink-3);font-size:12px">${formatDT(h.created_at)}</td>
       <td><div class="dacts">${act}</div></td>`;
     tb.appendChild(tr);

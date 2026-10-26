@@ -551,53 +551,43 @@ td.c-durum{width:1%}
 .pinform .err{color:var(--danger);font-size:12px;min-height:1em}
 .pinform .btnrow{display:flex;gap:6px;justify-content:flex-end}
 
-/* ---------------- Patoloji No OCR (ocr.js) ---------------- */
-/* Kameradan doldurulan alan: kullanıcı görsün/kontrol etsin diye vurgulu;
-   alana yazınca vurgu kalkar. */
-.patrow input.ocr-dolu{border-color:var(--amber-i);background:var(--amber-b)}
-.ocr-not{font-size:12px;color:var(--amber-i);font-weight:600;margin-top:6px}
+/* ---------------- Barkod okuma (barkod.js) ---------------- */
+/* Barkoddan doldurulan alan: kullanıcı görsün diye vurgulu; alana yazınca kalkar. */
+.patrow input.bk-dolu{border-color:var(--amber-i);background:var(--amber-b)}
+.bk-not{font-size:12px;color:var(--amber-i);font-weight:600;margin-top:6px}
 /* Kamera ekranı — temadan bağımsız koyu (kamera görüntüsü üstünde okunur) */
-.ocr-ov{position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;background:#000}
-.ocr-stage{position:relative;flex:1;min-height:0;overflow:hidden}
-.ocr-stage video{width:100%;height:100%;object-fit:cover;display:block;transform-origin:center;transition:transform .2s ease}
-/* Sabit kırpma çerçevesi: geniş dikdörtgen; dışı karartılır */
-/* Etiket boyutunda (4:5) — 2.5× yakınlaştırmayla 15–20 cm'de etiket çerçeveyi ~%70-90 doldurur */
-.ocr-frame{position:absolute;left:50%;top:50%;width:min(44%, 200px);aspect-ratio:4/5;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:8px;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);pointer-events:none}
-.ocr-ov.donuk .ocr-frame{border-color:#f7c35c}
-.ocr-panel{background:var(--card);color:var(--ink);padding:14px 16px max(14px, env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
-.ocr-ipucu{font-size:13px;color:var(--ink-2)}
-.ocr-onizleme{max-width:100%;max-height:70px;align-self:flex-start;border:1px solid var(--line);border-radius:6px;background:#fff}
-.ocr-sonuc{display:flex;flex-direction:column;gap:6px}
-.ocr-sonuc label{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--amber-i)}
-.ocr-sonuc input{font-family:var(--mono);font-size:20px;font-weight:700;border-color:var(--amber-i)}
-.ocr-durum{font-size:13px;color:var(--ink-2);min-height:1em}
-.ocr-durum.hata{color:var(--danger);font-weight:600}
-.ocr-btns{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
-.ocr-btns .btn-primary{flex:none;min-width:120px}
+.bk-ov{position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;background:#000}
+.bk-stage{position:relative;flex:1;min-height:0;overflow:hidden}
+.bk-stage video{width:100%;height:100%;object-fit:cover;display:block}
+/* Kare hedef çerçevesi (DataMatrix kare); dışı karartılır, okununca yeşil */
+.bk-frame{position:absolute;left:50%;top:50%;width:min(58%, 260px);aspect-ratio:1;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:10px;box-shadow:0 0 0 100vmax rgba(0,0,0,.5);pointer-events:none;transition:border-color .15s ease}
+.bk-ov.okundu .bk-frame{border-color:#3ddc84;border-width:4px}
+.bk-panel{background:var(--card);color:var(--ink);padding:14px 16px max(14px, env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+.bk-ipucu{font-size:13px;color:var(--ink-2)}
+.bk-durum{font-size:13px;color:var(--ink-2);min-height:1em}
+.bk-durum.hata{color:var(--danger);font-weight:600}
+.bk-alt{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bk-motor{margin-right:auto;font-size:11px;color:var(--ink-3)}
+.bk-btns{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 @media (min-width:901px){
-  .ocr-ov{background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:24px}
-  .ocr-stage{flex:none;width:min(760px, 100%);aspect-ratio:16/9;border-radius:12px 12px 0 0}
-  .ocr-panel{width:min(760px, 100%);border-radius:0 0 12px 12px}
+  .bk-ov{background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:24px}
+  .bk-stage{flex:none;width:min(760px, 100%);aspect-ratio:16/9;border-radius:12px 12px 0 0}
+  .bk-panel{width:min(760px, 100%);border-radius:0 0 12px 12px}
 }
 @media (max-width:900px){
   /* kısa ekranlarda kamera alanı ezilmesin; panel kendi içinde kaysın */
-  .ocr-stage{min-height:42vh}
-  .ocr-panel{max-height:58vh;overflow-y:auto}
+  .bk-stage{min-height:42vh}
+  .bk-panel{max-height:58vh;overflow-y:auto}
 }
-/* Fener (torch) — kamera görüntüsünün sağ üstünde; sadece destekleyen cihazda görünür */
-.ocr-fener{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.5);background:rgba(0,0,0,.45);color:#fff;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer}
-.ocr-fener.on{background:#f7c35c;border-color:#f7c35c;color:#2a1d00}
-.ocr-fener[hidden]{display:none}
-/* OCR Tanı paneli (teşhis — ham Tesseract çıktıları; ekran görüntüsü alınıp paylaşılabilsin) */
-.ocr-tani-btn{margin-right:auto;border:1px dashed var(--line-strong);background:transparent;color:var(--ink-3);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans)}
-.ocr-tani-btn.on{border-style:solid;border-color:var(--amber-i);color:var(--amber-i);background:var(--amber-b)}
-.ocr-tani{font-size:11.5px;line-height:1.45;color:var(--ink-2);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:8px 10px;max-height:38vh;overflow-y:auto;font-family:var(--mono);word-break:break-word}
-.ocr-tani .ocr-tani-b{font-family:var(--sans);font-weight:700;color:var(--ink);margin-top:8px}
-.ocr-tani .ocr-tani-b:first-child{margin-top:0}
-.ocr-tani img{display:block;max-width:100%;margin-top:4px;border:1px solid var(--line);background:#fff}
-.ocr-tani code{background:var(--card);padding:0 3px;border-radius:3px}
-/* display:flex [hidden]'ı ezmesin — kamera açıkken boş sonuç kutusu görünmesin */
-.ocr-sonuc[hidden], .ocr-onizleme[hidden], .ocr-tani[hidden]{display:none}
+/* Fener (torch) — kamera görüntüsünün sağ üstünde; yalnız destekleyen cihazda görünür */
+.bk-fener{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.5);background:rgba(0,0,0,.45);color:#fff;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer}
+.bk-fener.on{background:#f7c35c;border-color:#f7c35c;color:#2a1d00}
+.bk-fener[hidden]{display:none}
+/* Arama kutusundaki tarama düğmesi (İş Kuyruğu, Hizmetler) */
+.msearch.tarali input{padding-right:34px}
+.ara-tara{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:7px;background:transparent;color:var(--ink-3);cursor:pointer}
+.ara-tara:hover{background:var(--line-2);color:var(--accent)}
+.ara-tara svg{position:static;transform:none;opacity:1}
 
 /* ---------------- Kısaltma (İsteyen / Uzman Adına) ---------------- */
 .c-kisi.kisa{font-weight:600;letter-spacing:.02em}
@@ -1023,3 +1013,13 @@ tbody tr.row-teslim-gec > td.c-durum{box-shadow:inset 3px 0 0 var(--gec-i)}
 /* "Teslim bekleyen · N gecikmiş" ile sekmeler telefonda sığmayabilir — sarmalamak yerine yatay kaydır */
 #tabs button{white-space:nowrap}
 @media (max-width:900px){ #tabs{max-width:100%;overflow-x:auto;scrollbar-width:none} #tabs button{flex:none} }
+
+/* ---------------- Hizmetler: seçilebilir metin + kopyala / vakaya git ---------------- */
+/* Satır tıklanınca hiçbir yere gidilmez; numara ve özet fareyle seçilip kopyalanabilir. */
+#hizRows tr{cursor:default}
+.hiz-metin{user-select:text;-webkit-user-select:text;cursor:text}
+.hiz-ikon{display:inline-grid;place-items:center;width:24px;height:24px;margin-left:4px;padding:0;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink-3);cursor:pointer;vertical-align:middle}
+.hiz-ikon:hover, .hiz-ikon:focus-visible{border-color:var(--line);background:var(--line-2);color:var(--accent);outline:0}
+.hiz-pat .hiz-ikon + .hiz-ikon{margin-left:0}
+.hiz-ozet{white-space:nowrap}
+@media (pointer:coarse){ .hiz-ikon{width:32px;height:32px} }
