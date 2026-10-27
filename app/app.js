@@ -2177,6 +2177,7 @@ async function yazdirmaKaydet(kalemIdler, baglam) {
     kayitIdler = await Api.yazdirmaKaydet([...new Set(kalemIdler)], baglam, session.id);
   } catch (e) {
     toast("Yazdırma kaydı tutulamadı (liste yine de basıldı)", true);
+    await yenile(); // iyimser güncelleme yapıldıysa geri alınsın
     return;
   }
   geriAlBandi(`Yazdırma kaydedildi (${kayitIdler.length} kalem)`, "Yazdırılmadı — geri al", async () => {
@@ -3797,19 +3798,33 @@ let hizColFilters = { pat: "", isteyen: "", uzman: "", ozet: "" };
 let hizArama = "", hizAramaTam = false; // üstteki patoloji no araması; barkoddan geldiyse TAM eşleşme
 let hizSortCol = null, hizSortDir = "asc";
 const HIZ_SORT_FIELD = { pat: "patoloji_no", isteyen: "isteyen_adi", uzman: "uzman_adi", tarih: "created_at" };
-// Üç bölüm: Bekleyen = faturası girilmemiş (tekrar olmayan) istemler;
-// Tekrarlar = tüm tekrar istemleri (fatura durumundan bağımsız);
-// Girilmiş = faturası girilmiş (tekrar olmayan) istemler.
-const HIZ_SEKMELER = [["bekleyen", "Bekleyen"], ["tekrar", "Tekrarlar"], ["girilmis", "Girilmiş"]];
-let hizSekme = "bekleyen";
+// Yazdırma akışına göre üç sekme (istem bazında, sırayla):
+//  Girilmiş      = fatura_girildi
+//  Yazdırılmamış = girilmemiş VE (bir kalemi "hizmetler" bağlamında hiç
+//                  yazdırılmamış YA DA son baskıdan sonra düzeltilmiş YA DA
+//                  kalemi yok) — Api.getHizmetler → yazdirilmamis
+//  Yazdırılmış   = girilmemiş ve yukarıdakilerin hiçbiri değil
+// Tekrar istemleri ayrı sekme değil: rozetle + üstteki tekrar seçimiyle.
+const HIZ_SEKMELER = [["yazdirilmamis", "Yazdırılmamış"], ["yazdirilmis", "Yazdırılmış"], ["girilmis", "Girilmiş"]];
+let hizSekme = "yazdirilmamis";
+const HIZ_TEKRAR = [["hepsi", "Tümü"], ["sadece", "Sadece tekrarlar"], ["haric", "Tekrarlar hariç"]];
+let hizTekrar = "hepsi";
+// Kullanıcının son Hizmetler yazdırması (sunucu saati, ISO) — "Yeni" etiketi
+// bundan SONRA oluşturulan istemlere; hiç yazdırması yoksa (null) son 24 saat.
+let hizSonYazdirma = null;
+const HIZ_YENI_YEDEK_SAAT = 24;
+let hizSecili = new Set(); // seçili istem_id'ler (sekme değişince temizlenir)
 const HIZ_GRUPLA_KEY = "istem_hiz_grupla";
 const hizKapali = new Set(); // kapatılmış uzman grupları (oturum boyunca)
 function hizGrupla() {
   try { return localStorage.getItem(HIZ_GRUPLA_KEY) !== "0"; } catch (e) { return true; }
 }
 function hizSekmesi(h) {
-  return h.tekrar ? "tekrar" : h.fatura_girildi ? "girilmis" : "bekleyen";
+  return h.fatura_girildi ? "girilmis" : h.yazdirilmamis ? "yazdirilmamis" : "yazdirilmis";
 }
+const hizTekrarUyar = (h) => (hizTekrar === "sadece" ? h.tekrar : hizTekrar === "haric" ? !h.tekrar : true);
+const hizYeniEsik = () => hizSonYazdirma || new Date(Date.now() - HIZ_YENI_YEDEK_SAAT * 3600000).toISOString();
+const hizYeniMi = (h) => hizSekmesi(h) === "yazdirilmamis" && new Date(h.created_at) > new Date(hizYeniEsik());
 
 function hizOzetSayilar(h) {
   return h.ozet.length ? h.ozet.map((o) => `${o.count} ${TIP[o.grup] || "Diğer"}`).join(", ") : "—";
@@ -3836,11 +3851,14 @@ function hizAramayaUyar(h) {
 }
 // Barkodla aranan vaka bu sekmede yoksa, bulunduğu sekmeye geçilir.
 function hizSekmeyeGec() {
-  const uyan = hizmetlerList.filter((h) => hizPassesFilter(h));
+  const uyan = hizmetlerList.filter((h) => hizTekrarUyar(h) && hizPassesFilter(h));
   if (!uyan.length || uyan.some((h) => hizSekmesi(h) === hizSekme)) return;
   const hedef = HIZ_SEKMELER.find(([k]) => uyan.some((h) => hizSekmesi(h) === k));
-  if (!hedef) return;
-  hizSekme = hedef[0];
+  if (hedef) hizSekmeSec(hedef[0]);
+}
+function hizSekmeSec(k) {
+  hizSekme = k;
+  hizSecili = new Set();
   $$("#hizTabs button").forEach((x) => x.classList.toggle("on", x.dataset.hs === hizSekme));
 }
 function hizPassesFilter(h) {
@@ -3855,16 +3873,27 @@ function hizCompareForSort(a, b, col) {
   const field = HIZ_SORT_FIELD[col];
   return String(a[field] ?? "").localeCompare(String(b[field] ?? ""), "tr", { numeric: true });
 }
-// Excel export'unun "Görünenler" seçeneği ve renderHizTable bunu kullanır.
+// Bu sekmede tekrar seçimi + filtre/arama uygulanmış istemler (kapalı uzman
+// grupları dahil). Excel'in "Görünenler"i, yazdırma ve renderHizTable kullanır.
 function getVisibleHizmetler() {
-  let list = hizmetlerList.filter((h) => hizSekmesi(h) === hizSekme && hizPassesFilter(h));
+  let list = hizmetlerList.filter((h) => hizSekmesi(h) === hizSekme && hizTekrarUyar(h) && hizPassesFilter(h));
   if (hizSortCol) {
     const dir = hizSortDir === "asc" ? 1 : -1;
     list = [...list].sort((a, b) => hizCompareForSort(a, b, hizSortCol) * dir);
   }
   return list;
 }
+// Ekranda gerçekten görünen satırlar (kapalı uzman gruplarınınkiler hariç) —
+// başlıktaki "tümünü seç" bunları seçer.
+function hizEkrandakiler() {
+  const list = getVisibleHizmetler();
+  return hizGrupla() ? list.filter((h) => !hizKapali.has(hizUzmanAdi(h))) : list;
+}
+// İşlemlere giren seçim: seçili VE bu sekmede filtreye uyan.
+const hizSeciliGorunen = () => getVisibleHizmetler().filter((h) => hizSecili.has(h.istem_id));
 
+const hizYazdirmaTxt = (h) => (h.yazdirma ? `Yazdırıldı · ${h.yazdirma.kim || "—"} · ${formatDT(h.yazdirma.zaman)}`
+  : h.duzeltme_sonrasi ? "Yazdırıldıktan sonra düzeltildi" : "Yazdırılmadı");
 const HIZMETLER_EXPORT_COLS = [
   { label: "Patoloji No", value: (h) => h.patoloji_no },
   { label: "İsteyen", value: (h) => h.isteyen_adi || "" },
@@ -3873,25 +3902,40 @@ const HIZMETLER_EXPORT_COLS = [
   { label: "Tekrar", value: (h) => (h.tekrar ? "Evet" : "") },
   { label: "Düzeltildi", value: (h) => (h.pat_duzeltme ? `Patoloji no: ${h.pat_duzeltme.eski} → ${h.patoloji_no}` : "") },
   { label: "Tarih", value: (h) => formatDT(h.created_at) },
+  { label: "Yazdırma", value: hizYazdirmaTxt },
   { label: "Fatura Durumu", value: (h) => (h.fatura_girildi ? "Girildi" : "Girilmedi") },
   { label: "Fatura Giren", value: (h) => h.fatura_giren_adi || "" },
   { label: "Fatura Zamanı", value: (h) => (h.fatura_zamani ? formatDT(h.fatura_zamani) : "") },
 ];
 
 function renderHizmetlerPage() {
+  hizSekme = "yazdirilmamis"; // her açılışta ilk sekme
+  hizSecili = new Set();
   $("#mainView").innerHTML = `
-    <div class="page-head">
+    <div class="page-head hiz-head">
       <h1>Hizmetler</h1>
       <div class="sub">Faturalama özeti — her satır bir "İstek Ver" işlemini (istemler kaydını) temsil eder.</div>
       <div class="spacer"></div>
       <button class="btn-ghost btn-sm hidden" id="hizClearFiltersBtn">Filtreleri Temizle</button>
       <label class="ilsk-anahtar" title="Her uzmanın istemleri kendi başlığı altında; başlığa tıklayınca kapanır/açılır"><input type="checkbox" id="hizGruplaTgl" ${hizGrupla() ? "checked" : ""}> Uzmana göre grupla</label>
-      <div id="hizYazdir">${yazdirMenuHTML(false)}</div>
+      <div class="hiz-yz">
+        <button class="btn-ghost btn-sm" type="button" id="hizYazdirBtn">${YAZDIR_IKON} Yazdır</button>
+        <div class="exportbox yzbox" id="hizSiraMenu">
+          <button class="btn-ghost btn-sm yzbtn" type="button" title="Çıktı sıralaması" aria-label="Çıktı sıralaması">▾</button>
+          <div class="thfilter" style="right:0;left:auto">
+            <div class="yz-baslik">Sıralama</div>
+            ${YZ_SIRALAR.map(([k, l]) => `<button class="thopt yz-sira" type="button" data-yz-sira="${k}" aria-pressed="false"><span class="yz-nokta" aria-hidden="true"></span>${l}</button>`).join("")}
+          </div>
+        </div>
+      </div>
       <div id="hizExport">${EXPORT_MENU_HTML}</div>
     </div>
     <div class="barrow">
       <div class="tabs" id="hizTabs">
-        ${HIZ_SEKMELER.map(([k, l]) => `<button class="${hizSekme === k ? "on" : ""}" data-hs="${k}">${l} <span class="count" data-hc="${k}">0</span></button>`).join("")}
+        ${HIZ_SEKMELER.map(([k, l]) => `<button class="${hizSekme === k ? "on" : ""}" data-hs="${k}">${l} <span class="count" data-hc="${k}">0</span><span class="hiz-yeni-say" data-hy="${k}"></span></button>`).join("")}
+      </div>
+      <div class="tabs hiz-tekrar" id="hizTekrar" role="group" aria-label="Tekrar istemleri">
+        ${HIZ_TEKRAR.map(([k, l]) => `<button class="${hizTekrar === k ? "on" : ""}" data-ht="${k}" aria-pressed="${hizTekrar === k}">${l}</button>`).join("")}
       </div>
       <div class="grow"></div>
       <div class="msearch tarali">
@@ -3899,6 +3943,14 @@ function renderHizmetlerPage() {
         <input id="hizAra" placeholder="Patoloji no…" value="${esc(hizArama)}" aria-label="Patoloji no ara">
         <button type="button" class="ara-tara" id="hizTara" title="Barkodu okut — o vakayı bul" aria-label="Barkodu okutarak ara">${TARA_IKON}</button>
       </div>
+    </div>
+    <div class="bulkbar hidden" id="hizBulkBar">
+      <span id="hizBulkCount"></span>
+      <div class="grow"></div>
+      <button class="act act-tamamla hidden" id="hizBulkGirBtn">Seçilenleri Girildi işaretle</button>
+      <button class="btn-ghost btn-sm" id="hizBulkYazdirBtn">${YAZDIR_IKON} Seçilenleri yazdır</button>
+      <button class="btn-ghost btn-sm hidden" id="hizBulkGeriBtn">↺ Seçilenlerin girişini geri al</button>
+      <button class="ub-x" id="hizBulkClearBtn" title="Seçimi temizle">×</button>
     </div>
     <div class="tablewrap">
       <table>
@@ -3911,10 +3963,21 @@ function renderHizmetlerPage() {
     const list = which === "tum" ? hizmetlerList : getVisibleHizmetler();
     exportToExcel(list, HIZMETLER_EXPORT_COLS, which === "tum" ? "istem_hizmetler" : `istem_hizmetler_${hizSekme}`);
   });
+  bindYazdirMenu("#hizSiraMenu", () => {}); // yalnız Sıralama tercihi
+  $("#hizYazdirBtn").addEventListener("click", () => hizmetlerYazdir());
+  $("#hizBulkYazdirBtn").addEventListener("click", () => hizmetlerYazdir());
+  $("#hizBulkGirBtn").addEventListener("click", hizTopluGir);
+  $("#hizBulkGeriBtn").addEventListener("click", hizTopluGeriAl);
+  $("#hizBulkClearBtn").addEventListener("click", () => { hizSecili = new Set(); hizSecimiYansit(); });
   $("#hizTabs").addEventListener("click", (e) => {
     const b = e.target.closest("[data-hs]"); if (!b) return;
-    hizSekme = b.dataset.hs;
-    $$("#hizTabs button").forEach((x) => x.classList.toggle("on", x.dataset.hs === hizSekme));
+    hizSekmeSec(b.dataset.hs);
+    renderHizTable();
+  });
+  $("#hizTekrar").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-ht]"); if (!b) return;
+    hizTekrar = b.dataset.ht;
+    $$("#hizTekrar button").forEach((x) => { x.classList.toggle("on", x.dataset.ht === hizTekrar); x.setAttribute("aria-pressed", String(x.dataset.ht === hizTekrar)); });
     renderHizTable();
   });
   $("#hizClearFiltersBtn").addEventListener("click", hizClearFilters);
@@ -3928,13 +3991,30 @@ function renderHizmetlerPage() {
     try { localStorage.setItem(HIZ_GRUPLA_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
     renderHizTable();
   });
-  bindYazdirMenu("#hizYazdir", hizmetlerYazdir);
   $("#hizRows").addEventListener("click", (e) => {
+    // "Bu hocanın tümünü seç" — grubu açıp kapatmaz.
+    const grupSec = e.target.closest("[data-hiz-grup-sec]");
+    if (grupSec) {
+      e.stopPropagation();
+      const ad = grupSec.dataset.hizGrupSec;
+      const idler = getVisibleHizmetler().filter((h) => hizUzmanAdi(h) === ad).map((h) => h.istem_id);
+      const hepsi = idler.length > 0 && idler.every((id) => hizSecili.has(id));
+      idler.forEach((id) => (hepsi ? hizSecili.delete(id) : hizSecili.add(id)));
+      hizSecimiYansit();
+      return;
+    }
     const grup = e.target.closest("[data-hiz-grup]");
     if (grup) {
       const ad = grup.dataset.hizGrup;
       if (hizKapali.has(ad)) hizKapali.delete(ad); else hizKapali.add(ad);
       renderHizTable();
+      return;
+    }
+    const sec = e.target.closest("[data-hiz-sec]");
+    if (sec) {
+      const id = sec.dataset.hizSec;
+      if (hizSecili.has(id)) hizSecili.delete(id); else hizSecili.add(id);
+      hizSecimiYansit();
       return;
     }
     const ipucu = e.target.closest("[data-ipucu]");
@@ -3953,6 +4033,13 @@ function renderHizmetlerPage() {
     }
     const btn = e.target.closest("[data-hiz]");
     if (btn) markFatura(btn.dataset.hiz);
+  });
+  $("#hizhead").addEventListener("change", (e) => {
+    if (!e.target.closest("[data-hiz-hepsi]")) return;
+    const idler = hizEkrandakiler().map((h) => h.istem_id);
+    const hepsi = idler.length > 0 && idler.every((id) => hizSecili.has(id));
+    idler.forEach((id) => (hepsi ? hizSecili.delete(id) : hizSecili.add(id)));
+    hizSecimiYansit();
   });
   $("#hizhead").addEventListener("click", (e) => {
     const caret = e.target.closest("[data-thopen]");
@@ -3986,12 +4073,14 @@ function renderHizmetlerPage() {
 }
 
 async function loadHizmetler() {
+  let son = hizSonYazdirma;
   try {
-    hizmetlerList = await Api.getHizmetler();
+    [hizmetlerList, son] = await Promise.all([Api.getHizmetler(), Api.sonHizmetlerYazdirmam(session.id)]);
   } catch (e) {
     toast("Hizmetler yüklenemedi — hizmetler_sema.sql çalıştırıldı mı?", true);
     hizmetlerList = [];
   }
+  hizSonYazdirma = son;
   if (currentPage !== "hizmetler") return;
   renderHizTable();
 }
@@ -4010,6 +4099,7 @@ function renderHizHead() {
 
   const sortOf = (key) => ({ active: hizSortCol === key, dir: hizSortDir });
   head.innerHTML = `<tr>
+    <th class="bulkcell"><input type="checkbox" data-hiz-hepsi aria-label="Görünenlerin tümünü seç" title="Görünenlerin tümünü seç"></th>
     ${thTextFilter("pat", "Patoloji No", hizColFilters.pat, sortOf("pat"))}
     ${thTextFilter("isteyen", "İsteyen", hizColFilters.isteyen, sortOf("isteyen"))}
     ${thTextFilter("uzman", "Uzman Adına", hizColFilters.uzman, sortOf("uzman"))}
@@ -4025,20 +4115,32 @@ function renderHizHead() {
   }
 }
 
+const HIZ_SUTUN = 7;
 function renderHizTable() {
   renderHizHead();
   const tb = $("#hizRows");
   if (!tb) return;
   tb.innerHTML = "";
+  // Sayaçlar: sekmenin tamamı (tekrar seçimine göre; arama/sütun filtresine bakılmaz).
+  const kapsam = hizmetlerList.filter(hizTekrarUyar);
   HIZ_SEKMELER.forEach(([k]) => {
     const el = document.querySelector(`[data-hc="${k}"]`);
-    if (el) el.textContent = hizmetlerList.filter((h) => hizSekmesi(h) === k).length;
+    if (el) el.textContent = kapsam.filter((h) => hizSekmesi(h) === k).length;
+    const y = document.querySelector(`[data-hy="${k}"]`);
+    if (y) {
+      const n = k === "yazdirilmamis" ? kapsam.filter(hizYeniMi).length : 0;
+      y.textContent = n ? `· ${n} yeni` : "";
+      y.title = n ? `Son Hizmetler yazdırmanızdan sonra gelen${hizSonYazdirma ? ` (${formatDT(hizSonYazdirma)})` : ` — hiç yazdırmanız yok, son ${HIZ_YENI_YEDEK_SAAT} saat`}` : "";
+    }
   });
+  // Görünmez olan seçimler düşer (silinen, başka sekmeye geçen, filtre dışı).
   const list = getVisibleHizmetler();
+  const gorunurIdler = new Set(list.map((h) => h.istem_id));
+  hizSecili = new Set([...hizSecili].filter((id) => gorunurIdler.has(id)));
   if (!list.length) {
-    tb.innerHTML = `<tr class="bos-satir"><td colspan="6">${hizHasActiveFilters() ? "Filtreye uyan kayıt yok." : "Bu bölümde kayıt yok."}</td></tr>`;
+    tb.innerHTML = `<tr class="bos-satir"><td colspan="${HIZ_SUTUN}">${hizHasActiveFilters() || hizTekrar !== "hepsi" ? "Filtreye uyan kayıt yok." : "Bu sekmede kayıt yok."}</td></tr>`;
   }
-  // Uzmana göre gruplama: başlık satırı (ad + sayaç), tıklayınca kapanır/açılır.
+  // Uzmana göre gruplama: başlık satırı (seçim kutusu + ad + sayaç), tıklayınca kapanır/açılır.
   const gruplu = hizGrupla();
   const gruplar = gruplu ? hizUzmanGruplari(list) : [[null, list]];
   gruplar.forEach(([uzman, liste]) => {
@@ -4047,13 +4149,56 @@ function renderHizTable() {
       const bas = document.createElement("tr");
       bas.className = `hiz-grup${kapali ? " kapali" : ""}`;
       bas.dataset.hizGrup = uzman;
-      bas.innerHTML = `<td colspan="6"><span class="hg-ok" aria-hidden="true">${kapali ? "▸" : "▾"}</span>${esc(uzman)} <span class="count">${liste.length}</span></td>`;
+      bas.innerHTML = `<td class="bulkcell"><input type="checkbox" data-hiz-grup-sec="${esc(uzman)}" aria-label="${esc(uzman)}: tümünü seç" title="Bu hocanın tümünü seç"></td><td colspan="${HIZ_SUTUN - 1}"><span class="hg-ok" aria-hidden="true">${kapali ? "▸" : "▾"}</span>${esc(uzman)} <span class="count">${liste.length}</span></td>`;
       tb.appendChild(bas);
       if (kapali) return;
     }
     liste.forEach((h) => hizSatiriEkle(tb, h));
   });
   $("#hizClearFiltersBtn")?.classList.toggle("hidden", !hizHasActiveFilters());
+  hizSecimiYansit();
+}
+
+// Seçimle ilgili her şey (kutular, araç çubuğu, yazdır düğmesi) tabloyu
+// yeniden kurmadan güncellenir.
+function hizSecimiYansit() {
+  const list = getVisibleHizmetler();
+  $$("#hizRows tr[data-istem]").forEach((tr) => {
+    const on = hizSecili.has(tr.dataset.istem);
+    tr.classList.toggle("bulk-checked", on);
+    const cb = tr.querySelector("[data-hiz-sec]");
+    if (cb) cb.checked = on;
+  });
+  $$("#hizRows [data-hiz-grup-sec]").forEach((cb) => {
+    const idler = list.filter((h) => hizUzmanAdi(h) === cb.dataset.hizGrupSec).map((h) => h.istem_id);
+    const n = idler.filter((id) => hizSecili.has(id)).length;
+    cb.checked = idler.length > 0 && n === idler.length;
+    cb.indeterminate = n > 0 && n < idler.length;
+  });
+  const hepsi = $("[data-hiz-hepsi]");
+  if (hepsi) {
+    const ekran = hizEkrandakiler();
+    const n = ekran.filter((h) => hizSecili.has(h.istem_id)).length;
+    hepsi.checked = ekran.length > 0 && n === ekran.length;
+    hepsi.indeterminate = n > 0 && n < ekran.length;
+  }
+  const secili = hizSeciliGorunen();
+  const n = secili.length;
+  const bar = $("#hizBulkBar");
+  if (bar) {
+    bar.classList.toggle("hidden", n === 0);
+    $("#hizBulkCount").textContent = `${n} seçili`;
+    $("#hizBulkGirBtn").classList.toggle("hidden", hizSekme !== "yazdirilmis");
+    $("#hizBulkGeriBtn").classList.toggle("hidden", hizSekme !== "girilmis");
+    $("#hizBulkYazdirBtn").innerHTML = `${YAZDIR_IKON} ${hizSekme === "yazdirilmis" ? "Seçilenleri tekrar yazdır" : "Seçilenleri yazdır"}`;
+  }
+  const yb = $("#hizYazdirBtn");
+  if (yb) {
+    const tekrar = hizSekme === "yazdirilmis";
+    const adet = n || list.length;
+    yb.innerHTML = `${YAZDIR_IKON} ${n ? (tekrar ? "Seçilenleri tekrar yazdır" : "Seçilenleri yazdır") : tekrar ? "Tekrar yazdır" : "Yazdır"} (${adet})`;
+    yb.disabled = adet === 0;
+  }
 }
 
 const HIZ_SECILMEDI = "(uzman seçilmedi)";
@@ -4068,17 +4213,29 @@ const KOPYA_IKON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" 
 const GIT_IKON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
 const kopyalaDugmesi = (deger, etiket) =>
   `<button type="button" class="hiz-ikon" data-kopyala="${esc(deger)}" title="${esc(etiket)}" aria-label="${esc(etiket)}">${KOPYA_IKON}</button>`;
+// Yazdırıldıktan sonra düzeltildi → Yazdırılmamış'a döner, bu rozetle.
+function hizDuzeltildiRozeti(h) {
+  const d = h.duzeltme_sonrasi;
+  if (!d) return "";
+  const alanlar = d.alanlar.map((a) => DUZ_ALAN[a] || a).join(", ");
+  return `<span class="duz-rozet" data-ipucu title="Yazdırıldıktan sonra düzeltildi (${esc(alanlar)}): ${esc(d.kim)} · ${esc(formatDateFull(d.zaman))} — yeniden yazdırın">düzeltildi</span>`;
+}
 
 function hizSatiriEkle(tb, h) {
     const tr = document.createElement("tr");
+    tr.dataset.istem = h.istem_id;
     const geriBilgi = h.son_geri_alma ? ` · Daha önce geri alındı: ${h.son_geri_alma.kim || "—"}, ${formatDT(h.son_geri_alma.zaman)}` : "";
     const act = h.fatura_girildi
       ? `<span class="hiz-girildi" title="Girdi: ${esc(h.fatura_giren_adi || "—")} · ${esc(formatDateFull(h.fatura_zamani))}${esc(geriBilgi)}">✓ ${esc(h.fatura_giren_adi || "—")} · ${formatDT(h.fatura_zamani)}</span>${canFaturaGeriAl(h) ? `<button class="ab-geri" data-hiz-geri="${h.istem_id}" data-tip="Geri Al" aria-label="Fatura girişini geri al">${GERI_IKON}</button>` : ""}`
       : `<button class="act" data-hiz="${h.istem_id}">Gir</button>`;
-    const patDuz = h.pat_duzeltme
-      ? `<span class="duz-rozet" title="Düzeltildi: ${esc(h.pat_duzeltme.kim)} · ${esc(formatDateFull(h.pat_duzeltme.zaman))}">düzeltildi</span><div class="duz-eski">${esc(h.pat_duzeltme.eski)}</div>` : "";
+    // Baskıdan sonra düzeltildiyse o rozet; değilse (yalnız) patoloji no düzeltmesi rozeti.
+    const patDuz = (h.duzeltme_sonrasi ? hizDuzeltildiRozeti(h)
+      : h.pat_duzeltme ? `<span class="duz-rozet" title="Düzeltildi: ${esc(h.pat_duzeltme.kim)} · ${esc(formatDateFull(h.pat_duzeltme.zaman))}">düzeltildi</span>` : "")
+      + (h.pat_duzeltme ? `<div class="duz-eski">${esc(h.pat_duzeltme.eski)}</div>` : "");
+    const yeni = hizYeniMi(h) ? `<span class="badge-yeni">Yeni</span>` : "";
     const ozet = hizOzetSayilar(h);
-    tr.innerHTML = `<td class="c-pat hiz-pat"><span class="hiz-metin">${esc(h.patoloji_no)}</span>${kopyalaDugmesi(h.patoloji_no, "Patoloji no'yu kopyala")}<button type="button" class="hiz-ikon" data-git="${esc(h.patoloji_no)}" title="Vakaya git" aria-label="Vakaya git">${GIT_IKON}</button>${h.yazdirma ? yazdirIkonuHTML(h.yazdirma) : ""}${patDuz}${ciktiEskiHTML(h.cikti_eski)}</td>
+    tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-hiz-sec="${h.istem_id}" aria-label="Seç"></td>
+      <td class="c-pat hiz-pat"><span class="hiz-metin">${esc(h.patoloji_no)}</span>${kopyalaDugmesi(h.patoloji_no, "Patoloji no'yu kopyala")}<button type="button" class="hiz-ikon" data-git="${esc(h.patoloji_no)}" title="Vakaya git" aria-label="Vakaya git">${GIT_IKON}</button>${yeni}${h.yazdirma ? yazdirIkonuHTML(h.yazdirma) : ""}${patDuz}</td>
       ${kisiTd(h.isteyen_adi, h.isteyen_kisaltma)}
       ${kisiTd(h.uzman_adi === "—" ? null : h.uzman_adi, h.uzman_kisaltma)}
       <td class="hiz-ozet"><span class="hiz-metin">${esc(ozet)}</span>${h.ozet.length ? kopyalaDugmesi(ozet, "Özeti kopyala") : ""}${h.tekrar ? TEKRAR_BADGE : ""}</td>
@@ -4098,12 +4255,59 @@ async function faturaGeriAl(h) {
   }
 }
 
+// Toplu Gir (Yazdırılmış sekmesi) — onay penceresinde patoloji no listesi;
+// tek güncellemeyle fatura_girildi / fatura_giren_id / fatura_zamani.
+async function hizTopluGir() {
+  const list = hizSeciliGorunen().filter((h) => !h.fatura_girildi);
+  if (!list.length) { toast("Girilecek istem yok", true); return; }
+  const onay = await onayPenceresi({
+    baslik: `${list.length} istem Girildi olarak işaretlenecek`,
+    liste: list.map((h) => h.patoloji_no),
+    onayMetni: "Girildi işaretle",
+  });
+  if (!onay) return;
+  let tamam = [], hata = null;
+  try { tamam = await Api.faturaGirildiToplu(list.map((h) => h.istem_id), session.id); } catch (e) { hata = e; tamam = (e && e.tamamlanan) || []; }
+  hizSecili = new Set();
+  await loadHizmetler();
+  const atlanan = hata ? 0 : list.length - tamam.length;
+  if (hata) toast(`${tamam.length} istem girildi — kalan ${list.length - tamam.length} işaretlenemedi`, true);
+  else toast(`${tamam.length} istem girildi${atlanan ? ` · ${atlanan} zaten girilmişti` : ""}`);
+}
+
+// Toplu geri alma (Girilmiş sekmesi) — tekli ↺ ile aynı yetki: işaretleyen
+// kişi ya da yönetici (veritabanında da tetikleyici). Yetkisizler baştan ayıklanır.
+async function hizTopluGeriAl() {
+  const secili = hizSeciliGorunen().filter((h) => h.fatura_girildi);
+  const list = secili.filter(canFaturaGeriAl);
+  const yetkisiz = secili.length - list.length;
+  if (!list.length) { toast(yetkisiz ? "Seçilenlerin girişini geri alma yetkiniz yok (yalnız işaretleyen kişi ya da yönetici)" : "Geri alınacak istem yok", true); return; }
+  const onay = await onayPenceresi({
+    baslik: `${list.length} istemin fatura girişi geri alınacak`,
+    aciklama: `Girilmemiş olarak işaretlenir; her geri alma kim/ne zaman olarak kaydedilir.${yetkisiz ? ` ${yetkisiz} istem atlanacak (yalnız işaretleyen kişi ya da yönetici geri alabilir).` : ""}`,
+    liste: list.map((h) => h.patoloji_no),
+    onayMetni: "Geri al",
+  });
+  if (!onay) return;
+  let tamam = [], hata = null;
+  try { tamam = await Api.faturaGeriAlToplu(list.map((h) => h.istem_id)); } catch (e) { hata = e; tamam = (e && e.tamamlanan) || []; }
+  hizSecili = new Set();
+  await loadHizmetler();
+  if (hata) {
+    toast(hata.code === "42501" ? "Geri alınamadı — yetkiniz olmayan bir giriş var (yalnız işaretleyen kişi ya da yönetici)" : `${tamam.length} istemin girişi geri alındı — kalanlar geri alınamadı`, true);
+    return;
+  }
+  toast(`${tamam.length} istemin girişi geri alındı${yetkisiz ? ` · ${yetkisiz} yetkiniz yok` : ""}`);
+}
+
 // Hizmetler yazdırma (bağlam "hizmetler"): uzmana göre gruplu, sekreterin
-// HBYS'ye gireceği sade liste. Basılan istemlerin TÜM kalemleri kaydedilir.
-function hizmetlerYazdir(mod = "gorunen") {
-  const gorunen = getVisibleHizmetler();
-  const list = mod === "yazdirilmamis" ? gorunen.filter((h) => h.yazdirilmamis) : gorunen;
-  if (!list.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
+// HBYS'ye gireceği sade liste. Basılan: seçim varsa seçilenler, yoksa bu
+// sekmede görünenlerin TÜMÜ (kapalı gruplar dahil). Basılan istemlerin TÜM
+// kalemleri kaydedilir; ekranda hemen Yazdırılmış'a geçerler (kayıt sonra
+// sunucudan doğrulanır). Yazdırılmış sekmesinde "Tekrar yazdır": yerinde kalır.
+function hizmetlerYazdir() {
+  const list = hizSecili.size ? hizSeciliGorunen() : getVisibleHizmetler();
+  if (!list.length) { toast(YAZDIR_BOS.gorunen, true); return; }
   const ozet = (h) => h.ozet.map((o) => `${o.count} ${grupKisa(o.grup)}`).join(", ") || "—";
   const gruplar = hizUzmanGruplari(list.slice().sort(yazdirSiraTercih() === "pat" ? yazdirSirasi
     : (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || yazdirSirasi(a, b)));
@@ -4121,7 +4325,61 @@ function hizmetlerYazdir(mod = "gorunen") {
           <td>${esc(formatDT(h.created_at))}</td>
         </tr>`).join("")).join("")}</tbody>
     </table>`;
-  yazdirmayiBaslat({ baglam: "hizmetler", kalemIdler: list.flatMap((h) => h.kalem_idler || []), patlar: list.map((h) => h.patoloji_no) });
+  yazdirmayiBaslat({
+    baglam: "hizmetler",
+    kalemIdler: list.flatMap((h) => h.kalem_idler || []),
+    patlar: list.map((h) => h.patoloji_no),
+    oncesi: () => hizYazdirildiIsaretle(list),
+  });
+}
+// İyimser güncelleme: basılanlar hemen Yazdırılmış'a geçer, "Yeni" sınırı şimdi olur.
+function hizYazdirildiIsaretle(list) {
+  const simdi = new Date().toISOString();
+  list.forEach((h) => {
+    h.yazdirilmamis = false;
+    h.cikti_eski = null;
+    h.duzeltme_sonrasi = null;
+    h.yazdirma = { zaman: simdi, kim: session.ad_soyad, kisaltma: session.kisaltma || null };
+  });
+  hizSonYazdirma = simdi;
+  hizSecili = new Set();
+  if (currentPage === "hizmetler") renderHizTable();
+}
+
+// Onay penceresi (başlık, açıklama, kaydırılabilir liste) — Promise<boolean>.
+// Esc / dışına tık = vazgeç; Enter = onayla.
+function onayPenceresi({ baslik, aciklama = "", liste = [], onayMetni = "Onayla", iptalMetni = "Vazgeç" }) {
+  return new Promise((coz) => {
+    const ov = document.createElement("div");
+    ov.className = "onay-ov";
+    ov.innerHTML = `<div class="onay-kutu" role="dialog" aria-modal="true" aria-labelledby="onayBaslik">
+        <h3 id="onayBaslik">${esc(baslik)}</h3>
+        ${aciklama ? `<p class="onay-aciklama">${esc(aciklama)}</p>` : ""}
+        ${liste.length ? `<ul class="onay-liste">${liste.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+        <div class="onay-btns"><button type="button" class="btn-ghost" data-onay="0">${esc(iptalMetni)}</button><button type="button" class="btn-primary" data-onay="1">${esc(onayMetni)}</button></div>
+      </div>`;
+    const bitir = (sonuc) => {
+      document.removeEventListener("keydown", tus, true);
+      ov.remove();
+      coz(sonuc);
+    };
+    const tus = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); bitir(false); }
+      else if (e.key === "Enter") {
+        e.preventDefault(); e.stopPropagation();
+        const odak = document.activeElement && document.activeElement.closest && document.activeElement.closest("[data-onay]");
+        bitir(odak ? odak.dataset.onay === "1" : true);
+      }
+    };
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) { bitir(false); return; }
+      const b = e.target.closest("[data-onay]");
+      if (b) bitir(b.dataset.onay === "1");
+    });
+    document.addEventListener("keydown", tus, true);
+    document.body.appendChild(ov);
+    ov.querySelector('[data-onay="1"]').focus();
+  });
 }
 
 async function markFatura(istemId) {
@@ -5551,6 +5809,7 @@ function yazdirmayiBaslat(kayit) {
   if (kayit && !yaziyorYazdirOnayi(kayit.patlar)) { $("#yazdirAlani").innerHTML = ""; return; }
   document.body.classList.add("yazdiriliyor");
   window.print();
+  if (kayit && kayit.oncesi) kayit.oncesi(); // ör. Hizmetler: basılanlar hemen "Yazdırılmış"a
   if (kayit && kayit.kalemIdler.length) yazdirmaKaydet(kayit.kalemIdler, kayit.baglam);
   // Ekran düzenine dönüş bir sonraki tık/dokunuşta — bazı mobil tarayıcılarda
   // print() hemen döner ve "afterprint"e güvenmek önizlemeyi boşaltabilir.

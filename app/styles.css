@@ -1023,3 +1023,32 @@ tbody tr.row-teslim-gec > td.c-durum{box-shadow:inset 3px 0 0 var(--gec-i)}
 .hiz-pat .hiz-ikon + .hiz-ikon{margin-left:0}
 .hiz-ozet{white-space:nowrap}
 @media (pointer:coarse){ .hiz-ikon{width:32px;height:32px} }
+
+/* ---------------- Hizmetler: yazdırma akışı sekmeleri, seçim, onay penceresi ---------------- */
+.hiz-yz{display:inline-flex;align-items:stretch}
+.hiz-yz > .btn-ghost{border-top-right-radius:0;border-bottom-right-radius:0}
+.hiz-yz .yzbtn{border-top-left-radius:0;border-bottom-left-radius:0;margin-left:-1px;padding-left:8px;padding-right:8px}
+#hizYazdirBtn:disabled{opacity:.5;cursor:not-allowed}
+.tabs .hiz-yeni-say{font-size:11px;font-weight:700;color:var(--accent);white-space:nowrap}
+.tabs .hiz-yeni-say:empty{display:none}
+.hiz-tekrar button{font-size:12px;padding:5px 10px}
+#hizTabs button, .hiz-tekrar button{white-space:nowrap}
+@media (max-width:900px){ #hizTabs, .hiz-tekrar{max-width:100%;overflow-x:auto;scrollbar-width:none} #hizTabs button, .hiz-tekrar button{flex:none} }
+tbody tr.hiz-grup > td.bulkcell{padding-right:0}
+#hizRows tr.bulk-checked{background:var(--accent-soft)}
+/* Onay penceresi (toplu Gir / toplu geri alma) */
+.onay-ov{position:fixed;inset:0;z-index:130;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
+.onay-kutu{background:var(--card);color:var(--ink);border-radius:12px;box-shadow:var(--shadow);width:min(440px, 100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column;padding:18px 18px 14px;gap:10px}
+.onay-kutu h3{margin:0;font-size:16px;font-weight:700}
+.onay-aciklama{margin:0;font-size:13px;color:var(--ink-2);line-height:1.45}
+.onay-liste{margin:0;padding:8px 10px;list-style:none;border:1px solid var(--line);border-radius:8px;background:var(--paper);max-height:40vh;overflow-y:auto;font-family:var(--mono);font-size:13.5px;font-weight:600;columns:2;column-gap:18px}
+.onay-liste li{padding:2px 0;break-inside:avoid}
+.onay-btns{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+@media (max-width:420px){ .onay-liste{columns:1} }
+/* Telefonda başlıktaki düğmeler (Yazdır, Excel) ekran dışına taşmasın — alt satıra geçer */
+@media (max-width:900px){
+  .hiz-head{flex-wrap:wrap;align-items:center;row-gap:8px;padding:16px 16px 10px}
+  .hiz-head .sub{flex-basis:100%;order:1;margin-top:0}
+  .hiz-head .spacer{display:none}
+  .hiz-head > :not(h1):not(.sub){order:2}
+}

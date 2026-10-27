@@ -142,6 +142,16 @@
     }
   }
 
+  async function parcaParcaGuncelle(idler, guncelle) {
+    const tamamlanan = [];
+    for (let i = 0; i < idler.length; i += 150) {
+      const { data, error } = await guncelle(client.from("istemler")).in("id", idler.slice(i, i + 150)).select("id");
+      if (error) throw Object.assign(error, { tamamlanan });
+      tamamlanan.push(...(data || []).map((r) => r.id));
+    }
+    return tamamlanan;
+  }
+
   const Api = {
     // ---------------- Auth (ad seç + PIN) ----------------
     // kullanicilar_login_v — authenticated-only kilitlemeden SONRA bile
@@ -780,12 +790,13 @@
         return error ? [] : data;
       };
       const [istemler, kullaniciMap, geriler, duzList] = await Promise.all([oku(), this.getKullaniciMap(), geriAlmalar(), duzeltmeler()]);
-      // istem_id -> { alanSon: {alan: son zaman}, eskiPat: [..], pat: {eski (ilk), kim, zaman} }
+      // istem_id -> { alanSon: {alan: son zaman}, alanKim: {alan: son düzelten}, eskiPat: [..], pat: {eski (ilk), kim, zaman} }
       const duzIstem = new Map();
       duzList.forEach((x) => {
-        if (!duzIstem.has(x.istem_id)) duzIstem.set(x.istem_id, { alanSon: {}, eskiPat: [], pat: null });
+        if (!duzIstem.has(x.istem_id)) duzIstem.set(x.istem_id, { alanSon: {}, alanKim: {}, eskiPat: [], pat: null });
         const d = duzIstem.get(x.istem_id);
         d.alanSon[x.alan] = x.created_at;
+        d.alanKim[x.alan] = x.duzelten_id;
         if (x.alan === "patoloji_no") {
           d.eskiPat.push(x.eski_deger);
           d.pat = { eski: d.pat ? d.pat.eski : x.eski_deger, kim: kullaniciMap[x.duzelten_id]?.ad || "—", zaman: x.created_at };
@@ -815,11 +826,16 @@
           ? sonKayitlar.reduce((m, y) => (!m || y.created_at < m ? y.created_at : m), null) : null;
         const sonraki = duz && enEskiBaski ? Object.keys(duz.alanSon).filter((a) => new Date(duz.alanSon[a]) > new Date(enEskiBaski)) : [];
         const cikti_eski = sonraki.length ? (sonraki.some((a) => a === "patoloji_no" || a === "blok_no") ? "numara" : "bilgi") : null;
+        // Hizmetler'de "düzeltildi" rozeti: baskıdan sonra düzeltilen alanlar + son düzeltme (kim, ne zaman).
+        const sonAlan = sonraki.reduce((m, a) => (!m || duz.alanSon[a] > duz.alanSon[m] ? a : m), null);
+        const duzeltme_sonrasi = sonAlan
+          ? { alanlar: sonraki, zaman: duz.alanSon[sonAlan], kim: kullaniciMap[duz.alanKim[sonAlan]]?.ad || "—" } : null;
         const yazdirilmamis = !kalemler.length || sonKayitlar.some((y) => !y) || Boolean(cikti_eski);
         return {
           kalem_idler: kalemler.map((k) => k.id).filter(Boolean),
           yazdirilmamis,
           cikti_eski,
+          duzeltme_sonrasi,
           eski_patoloji_nolar: duz ? duz.eskiPat : [],
           pat_duzeltme: duz && duz.pat ? duz.pat : null,
           yazdirma: !yazdirilmamis && enSon ? { zaman: enSon.created_at, kim: ad(enSon.yazdiran_id), kisaltma: kullaniciMap[enSon.yazdiran_id]?.kisaltma || null } : null,
@@ -883,6 +899,37 @@
         const { error } = await client.from("yazdirma_kayitlari").delete().in("id", kayitIdleri.slice(i, i + 200));
         if (error) throw error;
       }
+    },
+
+    // Kullanıcının son Hizmetler yazdırması (sunucu saati) — "Yeni" etiketi
+    // bunun sonrasında oluşturulan istemlere konur. Kayıt yoksa / okunamazsa null.
+    async sonHizmetlerYazdirmam(kullaniciId) {
+      const { data, error } = await client.from("yazdirma_kayitlari")
+        .select("created_at")
+        .eq("baglam", "hizmetler")
+        .eq("yazdiran_id", kullaniciId)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (error || !data || !data.length) return null;
+      return data[0].created_at;
+    },
+
+    // Toplu Gir / toplu geri alma — tek güncelleme (çok büyük seçimde 150'şerlik
+    // parçalar). Dönen: gerçekten değişen istem id'leri (bu arada başkası
+    // işaretlediyse / geri aldıysa o satır atlanır). Geri almada yetki
+    // (işaretleyen / yönetici) ve fatura_gecmisi kaydı veritabanında
+    // tetikleyiciyle (arsiv_yazdirma_sema.sql). Bir parça hata verirse önceki
+    // parçalar işlenmiş kalır: hata nesnesinde .tamamlanan.
+    async faturaGirildiToplu(istemIdler, kullaniciId) {
+      const zaman = new Date().toISOString();
+      return parcaParcaGuncelle(istemIdler, (q) => q
+        .update({ fatura_girildi: true, fatura_giren_id: kullaniciId, fatura_zamani: zaman })
+        .eq("fatura_girildi", false));
+    },
+    async faturaGeriAlToplu(istemIdler) {
+      return parcaParcaGuncelle(istemIdler, (q) => q
+        .update({ fatura_girildi: false, fatura_giren_id: null, fatura_zamani: null })
+        .eq("fatura_girildi", true));
     },
 
     async markFaturaGirildi(istemId, kullaniciId) {
