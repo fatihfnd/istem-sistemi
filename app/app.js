@@ -3303,9 +3303,9 @@ function showForm(prefill) {
         <div class="patrow"><input id="mPat" placeholder="ör. 11240/26">
           <button type="button" class="scan" id="scanBtn" title="Barkodu okut (istem kağıdındaki etiket)" aria-label="Patoloji No'yu barkoddan oku">${TARA_IKON}</button></div>
         <div class="bk-not hidden" id="mPatBk">Barkoddan okundu — İstek Ver'den önce kontrol edin.</div></div>
-      ${pickerSectionsHTML({ withQuickFill: true })}
       <div class="m-sec"><p class="m-label">Blok Seçimi <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— manuel, opsiyonel</span></p>
         <div class="blocks" id="blocks"><input class="bin" id="blockin" placeholder="+ blok"></div></div>
+      ${pickerSectionsHTML({ withQuickFill: true })}
       <div class="m-sec"><p class="m-label">Öncelik</p>
         <div class="prios" id="prios"><button class="on" data-p="rutin">Rutin</button><button data-p="acil">Acil</button><button data-p="stat">STAT</button></div></div>
       <div class="m-sec" style="margin-bottom:2px"><p class="m-label">Not</p><textarea id="mNot" placeholder="Teknisyene not…"></textarea></div>
@@ -3314,7 +3314,8 @@ function showForm(prefill) {
 
   $("#closeForm").onclick = showEmpty;
   // Barkod (barkod.js): kalıba uyan değer alana yazılır; alan düzenlenebilir
-  // kalır, form kendiliğinden gönderilmez. Blok No'ya dokunulmaz.
+  // kalır, form kendiliğinden gönderilmez. Odak blok alanına geçer (sıradaki
+  // giriş); bloğa bir şey yazılmaz.
   $("#scanBtn").onclick = () => {
     if (!window.BarkodOkuyucu) { toast("Barkod okuyucu yüklenemedi — Patoloji No'yu elle girin", true); return; }
     BarkodOkuyucu.ac({
@@ -3326,7 +3327,7 @@ function showForm(prefill) {
         yaziyorEtkilesim();
         inp.classList.add("bk-dolu");
         $("#mPatBk").classList.remove("hidden");
-        inp.focus();
+        ($("#blockin") || inp).focus();
       },
       // "Elle Gir": kamera kapanır, doğrudan Patoloji No alanında yazmaya devam edilir.
       onElle: () => {
