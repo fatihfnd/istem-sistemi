@@ -541,6 +541,13 @@ async function handleAuthSubmit() {
 }
 
 async function handleLogout() {
+  const sepetN = sepetOku().length;
+  if (sepetN && !(await onayPenceresi({
+    baslik: `Sepette gönderilmemiş ${sepetN} vaka var`,
+    aciklama: "Yine de çıkış yapılsın mı? Sepet bu tarayıcıda saklı kalır; aynı kullanıcıyla tekrar girince yerinde olur.",
+    liste: sepetOku().map((v) => v.patoloji_no),
+    onayMetni: "Çıkış yap",
+  }))) return;
   togglePrefs(false);
   if (window.Tema) Tema.cikis();
   // Ortak bilgisayarda sonraki kişiye öncekinin bildirimleri gelmesin — bu
@@ -575,6 +582,9 @@ async function initApp(user) {
   $("#meName").textContent = user.ad_soyad;
   $("#meRole").textContent = (ROL_LABEL[user.rol] || user.rol) + (user.is_admin ? " · Yönetici" : "");
   applyRoleUI();
+  sepetDuzenlenen = null; sepetAcik = false;
+  renderSepet(); // "Yeni İstek" rozeti (sepet bu tarayıcıda, kullanıcı başına)
+  if (sepetOku().length) yaziyorYayinla(true); // "FD · 4 vaka hazırlıyor…"
 
   // allSettled: setler_sema.sql henüz çalıştırılmadıysa (istek_setleri/cihazlar
   // tabloları yoksa) o sorgular başarısız olur ama temel katalog/uzman listesi
@@ -1263,6 +1273,10 @@ function renderTable() {
   const grouped = caseView !== null || sortCol === null || sortCol === "pat";
   const seenPat = new Set();
   let oncekiAna = null;
+  // Toplu gönderim etiketi: varsayılan sırada (gönderim bir arada) her toplu
+  // gönderimin ilk satırının üstünde ince ayraç.
+  const topluEtiketli = caseView === null && sortCol === null;
+  let oncekiToplu = null;
 
   iliskiliEkle(list).forEach(({ r, ilsk }) => {
     const tr = document.createElement("tr");
@@ -1278,6 +1292,14 @@ function renderTable() {
       tb.appendChild(tr);
       return;
     }
+    if (topluEtiketli && r.toplu_id && r.toplu_id !== oncekiToplu) {
+      const ay = document.createElement("tr");
+      ay.className = "toplu-ayrac";
+      const sutun = tb.closest("table")?.querySelector("thead tr")?.children.length || 11;
+      ay.innerHTML = `<td colspan="${sutun}"><span class="toplu-etiket" title="${esc(topluIpucu(r))}">${esc(topluEtiketi(r))}</span></td>`;
+      tb.appendChild(ay);
+    }
+    oncekiToplu = r.toplu_id || null;
     const groupStart = !oncekiAna || oncekiAna.patoloji_no !== r.patoloji_no;
     const ilkSatir = !oncekiAna;
     oncekiAna = r;
@@ -1309,6 +1331,16 @@ function renderTable() {
   syncBulkUI();
   yaziyorGoster();
 }
+
+// "FD · toplu · 4 vaka · 13:22" — vaka sayısı gönderimin tamamı (yüklü satırlardan).
+const topluVakaSayisi = (topluId) => new Set(rows.filter((x) => x.toplu_id === topluId).map((x) => x.istem_id)).size;
+function topluZaman(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), bugun = new Date();
+  return d.toDateString() === bugun.toDateString() ? `${iki(d.getHours())}:${iki(d.getMinutes())}` : kisaTarih(iso);
+}
+const topluEtiketi = (r) => `${r.isteyen_kisaltma || initials(r.isteyen_adi || "")} · toplu · ${topluVakaSayisi(r.toplu_id)} vaka · ${topluZaman(r.istem_created_at)}`;
+const topluIpucu = (r) => `Toplu gönderim: ${r.isteyen_adi || "—"} · ${topluVakaSayisi(r.toplu_id)} vaka · ${formatDateFull(r.istem_created_at || r.created_at)}`;
 
 // Durum hücresi: rozet (gerçek durum, HER ZAMAN) + bitişiğinde küçük ↺
 // (geri al; yalnız yetkisi olana — canRevert) + tek birincil buton (yalnız
@@ -2374,12 +2406,14 @@ function duzeltmeFormu(r) {
 // "YAZIYOR…" — Supabase Realtime Presence, private kanal "istem-yaziyor"
 // (yaziyor_sema.sql: yalnız oturum açmış kullanıcılar). Tablo yok.
 //   anahtar: sekme kimliği · yük: { kullanici_id, kisaltma, ad_soyad,
-//   patoloji_no, gruplar, zaman }
+//   patoloji_no, gruplar, sepet, sepet_patlar, zaman }
 // İstek Ver formunda patoloji no doluyken yayınlanır ve her etkileşimde
 // (en fazla 15 sn'de bir) tazelenir; kanal yeniden bağlanınca ve sekme tekrar
-// görünür olunca yeniden yayınlanır. YALNIZ istem gönderilince, form
-// kapanınca ya da 2 dk hiç etkileşim olmayınca (ve çıkışta) kalkar.
-// Herkes dinler; kişinin kendisi listelenmez.
+// görünür olunca yeniden yayınlanır. Patoloji no YALNIZ istem gönderilince,
+// form kapanınca ya da 2 dk hiç etkileşim olmayınca (ve çıkışta) düşer.
+// Sepette vaka varken yayın sürer ("FD · 4 vaka hazırlıyor…"); sepet
+// boşalınca (toplu gönderim / boşaltma) ya da çıkışta kalkar.
+// Herkes dinler; kişinin kendisi listelenmez. Kişi başına tek kayıt.
 // ================================================================
 const YAZIYOR_SURE = 2 * 60 * 1000;   // SON etkileşimden sonra yayın kalkar
 const YAZIYOR_TAZELE = 15 * 1000;     // değişmese de en fazla bu aralıkla yeniden yayın
@@ -2389,6 +2423,7 @@ const YAZIYOR_DEBUG = true;
 const ylog = (...a) => { if (YAZIYOR_DEBUG) console.info("[yazıyor]", new Date().toLocaleTimeString("tr-TR"), ...a); };
 const SEKME_KEY = window.crypto && crypto.randomUUID ? crypto.randomUUID() : `s${Date.now()}${Math.random().toString(36).slice(2)}`;
 const yaziyorFormAcik = () => Boolean($("#mPat"));
+let yaziyorSonEtkilesim = 0; // formdaki son etkileşim (patoloji no bundan 2 dk sonra düşer)
 function yaziyorBaslat() {
   if (yaziyorKanal || !Api.yaziyorKanali) return;
   try {
@@ -2402,15 +2437,20 @@ function yaziyorKapat() {
   yazanlar = [];
   yaziyorGoster();
 }
+// Kişi başına tek kayıt (iki sekme = tek satır): formlarda yazılan patoloji
+// no'lar birleşir; sepet bilgisi en son yayından (sekmeler aynı sepeti paylaşır).
 function yaziyorSync(durum) {
-  const tekil = new Map(); // kişi + vaka başına bir kayıt (iki sekme = tek satır)
+  const kisiler = new Map();
   Object.values(durum || {}).forEach((liste) => (liste || []).forEach((m) => {
-    if (!m || !m.patoloji_no || (session && m.kullanici_id === session.id)) return;
-    const k = m.kullanici_id + "\u0000" + patNorm(m.patoloji_no);
-    const v = tekil.get(k);
-    if (!v || (m.zaman || 0) > (v.zaman || 0)) tekil.set(k, m);
+    if (!m || !(m.patoloji_no || m.sepet > 0) || (session && m.kullanici_id === session.id)) return;
+    let v = kisiler.get(m.kullanici_id);
+    if (!v) { v = { kullanici_id: m.kullanici_id, patlar: [], gruplar: [], sepet: 0, sepet_patlar: [], zaman: 0, sepetZaman: -1 }; kisiler.set(m.kullanici_id, v); }
+    if ((m.zaman || 0) >= v.zaman) { v.zaman = m.zaman || 0; v.kisaltma = m.kisaltma; v.ad_soyad = m.ad_soyad; }
+    if (m.patoloji_no && !v.patlar.some((p) => patNorm(p) === patNorm(m.patoloji_no))) v.patlar.push(m.patoloji_no);
+    (m.gruplar || []).forEach((g) => { if (!v.gruplar.includes(g)) v.gruplar.push(g); });
+    if ((m.zaman || 0) > v.sepetZaman) { v.sepetZaman = m.zaman || 0; v.sepet = m.sepet || 0; v.sepet_patlar = m.sepet_patlar || []; }
   }));
-  yazanlar = [...tekil.values()].sort((a, b) => (a.zaman || 0) - (b.zaman || 0));
+  yazanlar = [...kisiler.values()].filter((v) => v.patlar.length || v.sepet > 0).sort((a, b) => a.zaman - b.zaman);
   yaziyorGoster();
 }
 // Kanal (yeniden) bağlandı: sunucu kopan bağlantının kaydını siler; Api son
@@ -2423,23 +2463,32 @@ function yaziyorKanalDurumu(status) {
 // değişiklik varsa 400 ms sonra, değişmese de en fazla 15 sn'de bir tazelenir.
 function yaziyorEtkilesim() {
   if (!yaziyorFormAcik()) return;
+  yaziyorSonEtkilesim = Date.now();
   clearTimeout(yaziyorBosTimer);
-  yaziyorBosTimer = setTimeout(() => { ylog("2 dk etkileşim yok → yayın kalkıyor"); yaziyorBirak(); }, YAZIYOR_SURE);
+  // 2 dk sonra patoloji no düşer; sepet doluysa "N vaka hazırlıyor…" sürer.
+  yaziyorBosTimer = setTimeout(() => { ylog("2 dk etkileşim yok → patoloji no yayından kalkıyor"); yaziyorYayinla(true); }, YAZIYOR_SURE);
   if (yaziyorSon !== null && Date.now() - yaziyorSonGonderim >= YAZIYOR_TAZELE) { yaziyorYayinla(false); return; }
   clearTimeout(yaziyorTimer);
   yaziyorTimer = setTimeout(() => yaziyorYayinla(false), 400);
 }
 function yaziyorYayinla(zorla) {
   const inp = $("#mPat");
-  const pat = inp ? inp.value.trim() : "";
-  if (!pat || !session || !yaziyorKanal) { yaziyorBirak(); return; }
-  const gruplar = [...new Set(collectPickedTestler().map((t) => t.grup))];
-  const imza = JSON.stringify([pat, gruplar]);
   const simdi = Date.now();
+  const pat = inp && simdi - yaziyorSonEtkilesim < YAZIYOR_SURE ? inp.value.trim() : "";
+  const sepet = sepetOku();
+  if ((!pat && !sepet.length) || !session || !yaziyorKanal) { yaziyorBirak(); return; }
+  const gruplar = [...new Set([...(pat ? collectPickedTestler() : []), ...sepet.flatMap((v) => v.testler || [])].map((t) => t.grup))];
+  const sepetPatlar = sepet.map((v) => v.patoloji_no);
+  const imza = JSON.stringify([pat, gruplar, sepetPatlar]);
   if (!zorla && imza === yaziyorSon && simdi - yaziyorSonGonderim < YAZIYOR_TAZELE) return;
+  if (pat) {
+    // Patoloji no yayındayken 2 dk sayacı çalışır (form dışından gelen yayın da).
+    clearTimeout(yaziyorBosTimer);
+    yaziyorBosTimer = setTimeout(() => { ylog("2 dk etkileşim yok → patoloji no yayından kalkıyor"); yaziyorYayinla(true); }, Math.max(0, YAZIYOR_SURE - (simdi - yaziyorSonEtkilesim)) + 50);
+  }
   yaziyorSon = imza;
   yaziyorSonGonderim = simdi;
-  yaziyorKanal.yayinla({ kullanici_id: session.id, kisaltma: session.kisaltma || initials(session.ad_soyad), ad_soyad: session.ad_soyad, patoloji_no: pat, gruplar, zaman: simdi });
+  yaziyorKanal.yayinla({ kullanici_id: session.id, kisaltma: session.kisaltma || initials(session.ad_soyad), ad_soyad: session.ad_soyad, patoloji_no: pat || null, gruplar, sepet: sepet.length, sepet_patlar: sepetPatlar, zaman: simdi });
 }
 function yaziyorBirak() {
   clearTimeout(yaziyorTimer);
@@ -2449,26 +2498,37 @@ function yaziyorBirak() {
   yaziyorSonGonderim = 0;
 }
 window.addEventListener("pagehide", () => yaziyorBirak());
-// Sekme yeniden görünür: form açık ve patoloji no doluysa yayın hemen yenilenir
-// (dönmek de etkileşim sayılır — 2 dk sayacı baştan).
+// Sekme yeniden görünür: form açık ve patoloji no doluysa (dönmek de etkileşim
+// sayılır — 2 dk sayacı baştan) ya da sepet doluysa yayın hemen yenilenir.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" || !yaziyorFormAcik() || !$("#mPat").value.trim()) return;
+  if (document.visibilityState !== "visible" || !session) return;
+  const formda = yaziyorFormAcik() && $("#mPat").value.trim();
+  if (!formda && !sepetOku().length) return;
   ylog("sekme göründü → yeniden yayın");
-  yaziyorEtkilesim();
+  if (formda) yaziyorEtkilesim();
   yaziyorYayinla(true);
 });
 
 const yaziyorKimler = (l) => l.map((y) => y.ad_soyad || y.kisaltma || "?").join(", ");
 // Şerit (İş Kuyruğu üstü) + aynı vakanın satırlarında "✎ yazılıyor" işareti.
 // Tablo yeniden çizilmez; yalnız işaretler eklenir/kalkar.
+// Kişinin yazdığı / sepetinde biriktirdiği bütün vakalar.
+const yaziyorPatlari = (y) => [...y.patlar, ...(y.sepet_patlar || [])];
 function yaziyorGoster() {
   const el = $("#yaziyorSerit");
   if (el) {
     el.classList.toggle("hidden", !yazanlar.length);
-    el.innerHTML = yazanlar.map((y) => `<span class="ys-kayit" title="${esc(y.ad_soyad || "")}"><b>${esc(y.kisaltma || "?")}</b> · ${esc(y.patoloji_no)} için istem yazıyor…${y.gruplar && y.gruplar.length ? ` <span class="ys-grup">(${esc(y.gruplar.map(grupKisa).join(", "))})</span>` : ""}</span>`).join("");
+    el.innerHTML = yazanlar.map((y) => {
+      const grup = y.gruplar && y.gruplar.length ? esc(y.gruplar.map(grupKisa).join(", ")) : "";
+      const metin = y.sepet > 0
+        ? `${y.sepet} vaka hazırlıyor…${grup || y.patlar.length ? ` <span class="ys-grup">(${[grup, y.patlar.length ? `şu an ${esc(y.patlar.join(", "))}` : ""].filter(Boolean).join(" · ")})</span>` : ""}`
+        : `${esc(y.patlar.join(", "))} için istem yazıyor…${grup ? ` <span class="ys-grup">(${grup})</span>` : ""}`;
+      const ipucu = y.sepet > 0 ? `${y.ad_soyad || ""} — sepette: ${(y.sepet_patlar || []).join(", ")}` : (y.ad_soyad || "");
+      return `<span class="ys-kayit" title="${esc(ipucu)}"><b>${esc(y.kisaltma || "?")}</b> · ${metin}</span>`;
+    }).join("");
   }
   const harita = new Map();
-  yazanlar.forEach((y) => { const k = patNorm(y.patoloji_no); if (!harita.has(k)) harita.set(k, []); harita.get(k).push(y); });
+  yazanlar.forEach((y) => new Set(yaziyorPatlari(y).map(patNorm)).forEach((k) => { if (!harita.has(k)) harita.set(k, []); harita.get(k).push(y); }));
   $$("#rows .c-pat").forEach((td) => {
     const l = harita.get(patNorm(td.querySelector(".pat-no")?.textContent));
     let isaret = td.querySelector(".yaziyor-isaret");
@@ -2484,7 +2544,7 @@ function yaziyorGoster() {
 function yaziyorYazdirOnayi(patlar) {
   if (!yazanlar.length || !patlar || !patlar.length) return true;
   const liste = new Set(patlar.map(patNorm));
-  const yazilan = [...new Set(yazanlar.filter((y) => liste.has(patNorm(y.patoloji_no))).map((y) => y.patoloji_no))];
+  const yazilan = [...new Set(yazanlar.flatMap(yaziyorPatlari).filter((p) => liste.has(patNorm(p))))];
   if (!yazilan.length) return true;
   return confirm(`${yazilan.join(", ")} için hâlâ istem yazılıyor, yine de yazdırılsın mı?`);
 }
@@ -2502,13 +2562,18 @@ function yazdirSiraTercih() {
   try { return localStorage.getItem(YZ_SIRA_KEY) === "pat" ? "pat" : "giris"; } catch (e) { return "giris"; }
 }
 // created_at ISO metin olarak karşılaştırılır (mikrosaniye korunur).
+// İstemin zamanı: istemler.created_at (görünümde istem_created_at — toplu
+// gönderimin tüm istemlerinde aynı); yoksa istemin en eski kaleminin zamanı.
+// Eşitlikte toplu_sira (sepetteki sıra) → toplu gönderim bölünmez.
 function girisKarsilastirici(liste) {
   const istemZamani = new Map();
   rows.concat(liste || []).forEach((r) => {
     const z = istemZamani.get(r.istem_id);
-    if (!z || String(r.created_at) < z) istemZamani.set(r.istem_id, String(r.created_at));
+    const t = String(r.istem_created_at || r.created_at);
+    if (!z || t < z) istemZamani.set(r.istem_id, t);
   });
   return (a, b) => String(istemZamani.get(a.istem_id) || "").localeCompare(String(istemZamani.get(b.istem_id) || ""))
+    || (a.toplu_sira || 0) - (b.toplu_sira || 0)
     || String(a.istem_id).localeCompare(String(b.istem_id))
     || String(a.created_at).localeCompare(String(b.created_at))
     || String(a.blok_no || "").localeCompare(String(b.blok_no || ""), "tr", { numeric: true })
@@ -2717,7 +2782,8 @@ function showEmpty() {
   if (!rail) return;
   const guncelle = () => {
     rail.classList.toggle("acik", Boolean(rail.querySelector(".rail-head")));
-    if (!rail.querySelector("#mPat")) yaziyorBirak(); // İstek Ver formu kapandı
+    // İstek Ver formu kapandı: patoloji no düşer, sepet doluysa yayın sürer.
+    if (!rail.querySelector("#mPat") && yaziyorSon !== null) yaziyorYayinla(false);
   };
   // "Yazıyor…": formdaki her etkileşim — yakalama aşamasında (alt düğmeler
   // dahil, hiçbir olay kaçmaz); form yoksa yaziyorEtkilesim hiçbir şey yapmaz.
@@ -3297,6 +3363,8 @@ function showForm(prefill) {
   rail.innerHTML = `
     <div class="rail-head"><h2>Yeni İstek</h2><button class="rx" id="closeForm">×</button></div>
     <div class="rail-body">
+      <div class="sepet-bar hidden" id="sepetBar"></div>
+      <div class="sepet-duz hidden" id="sepetDuzSerit"></div>
       <div class="m-sec"><p class="m-label">Uzman adına</p>
         <select class="onbehalf" id="mUzman"><option value="">— Uzman seçin —</option>${UZMANLAR.map((u) => `<option value="${u.id}"${u.id === seciliUzman ? " selected" : ""}>${esc(u.ad_soyad)}</option>`).join("")}</select></div>
       <div class="m-sec"><p class="m-label">Patoloji No</p>
@@ -3305,13 +3373,15 @@ function showForm(prefill) {
         <div class="bk-not hidden" id="mPatBk">Barkoddan okundu — İstek Ver'den önce kontrol edin.</div></div>
       <div class="m-sec"><p class="m-label">Blok Seçimi <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— manuel, opsiyonel</span></p>
         <div class="blocks" id="blocks"><input class="bin" id="blockin" placeholder="+ blok"></div></div>
+      <div class="onceki-sec hidden" id="oncekiSec"></div>
       ${pickerSectionsHTML({ withQuickFill: true })}
       <div class="m-sec"><p class="m-label">Öncelik</p>
         <div class="prios" id="prios"><button class="on" data-p="rutin">Rutin</button><button data-p="acil">Acil</button><button data-p="stat">STAT</button></div></div>
       <div class="m-sec" style="margin-bottom:2px"><p class="m-label">Not</p><textarea id="mNot" placeholder="Teknisyene not…"></textarea></div>
     </div>
-    <div class="rail-foot"><button class="btn-ghost" id="cancelForm">İptal</button><button class="btn-primary" id="submitForm">İstek Ver</button></div>`;
+    <div class="rail-foot"><button class="btn-ghost" id="cancelForm">İptal</button>${topluAktif() ? `<button class="btn-ghost btn-sepet" id="sepeteEkleBtn" title="Göndermeden sepete ekle — patoloji no, blok ve testler temizlenir, uzman ve öncelik kalır">Sepete ekle</button>` : ""}<button class="btn-primary" id="submitForm">İstek Ver</button></div>`;
 
+  sepetDuzenlenen = null;
   $("#closeForm").onclick = showEmpty;
   // Barkod (barkod.js): kalıba uyan değer alana yazılır; alan düzenlenebilir
   // kalır, form kendiliğinden gönderilmez. Odak blok alanına geçer (sıradaki
@@ -3358,6 +3428,10 @@ function showForm(prefill) {
     prio = b.dataset.p;
   });
   $("#submitForm").onclick = submitForm;
+  if ($("#sepeteEkleBtn")) $("#sepeteEkleBtn").onclick = sepeteEkle;
+  sepetFormunuBagla();
+  renderSepet();
+  renderOncekiTestler();
 }
 
 // "Uzman adına": son kullanılan uzman kullanıcı başına hatırlanır (ortak
@@ -3391,6 +3465,323 @@ function barkodlaAra(inputSel, uygula) {
   });
 }
 
+// ================================================================
+// SEPET — toplu istem (toplu_sema.sql). Vakalar göndermeden tarayıcıda,
+// kullanıcı başına (istem_sepet:<id>) birikir; "Toplu gönder" hepsini TEK
+// RPC'yle (tek veritabanı işlemi: ya hepsi ya hiçbiri) kaydeder.
+// Vaka: { id, patoloji_no, bloklar: [..], testler: [{ test_id, ozel_test,
+//         grup, ad, klon }], uzman_id, uzman_adi, oncelik, not_metni, eklendi }
+// "Test" sayısı = oluşacak kalem sayısı (blok × test).
+// ================================================================
+let sepetDuzenlenen = null; // formda düzenlenen sepet vakasının id'si
+let sepetAcik = false;      // sepet listesi açık mı (form içinde)
+const sepetKey = () => "istem_sepet:" + (session ? session.id : "");
+const oncekiTestKey = () => "istem_onceki_testler:" + (session ? session.id : "");
+// Sepet ancak toplu_sema.sql çalıştıysa (görünümde toplu kolonları varsa) açılır.
+const topluAktif = () => (Api.topluDestekli ? Api.topluDestekli() : rows.some((r) => "toplu_id" in r));
+function sepetOku() {
+  if (!session) return [];
+  try { const v = JSON.parse(localStorage.getItem(sepetKey()) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function sepetYaz(liste) {
+  try { if (liste.length) localStorage.setItem(sepetKey(), JSON.stringify(liste)); else localStorage.removeItem(sepetKey()); } catch (e) { toast("Sepet bu tarayıcıda saklanamadı", true); }
+  renderSepet();
+  yaziyorYayinla(true); // "FD · 4 vaka hazırlıyor…"
+}
+const sepetKalemSayisi = (v) => Math.max(1, (v.bloklar || []).length) * (v.testler || []).length;
+const sepetOzet = (liste) => ({ vaka: liste.length, test: liste.reduce((n, v) => n + sepetKalemSayisi(v), 0) });
+const sepetBlokTxt = (v) => (v.bloklar && v.bloklar.length ? v.bloklar.join(", ") : "—");
+const sepetTestTxt = (v) => v.testler.map((t) => t.ad).join(", ");
+
+// Formdaki seçili testler, adlarıyla (sepet ve "önceki vakanın testleri" için).
+function secilenTestler() {
+  const l = [];
+  selectedTests.forEach((v, id) => l.push({ test_id: id, ozel_test: null, grup: v.grup, ad: v.ad, klon: v.klon || "" }));
+  customItems.filter((c) => c.sel).forEach((c) => l.push({ test_id: null, ozel_test: c.ad, grup: c.grup, ad: c.ad, klon: "" }));
+  return l;
+}
+// İstek Ver ile aynı kurallar; Enter'sız yazılan blok da eklenir. Hata → null (bildirim gösterildi).
+function formdanVaka() {
+  const patNo = $("#mPat").value.trim();
+  if (!patNo) { toast("Patoloji no gerekli", true); $("#mPat").focus(); return null; }
+  const blockInput = $("#blockin");
+  const bekleyen = blockInput ? blockInput.value.trim() : "";
+  if (bekleyen) { addBlockChip(bekleyen); blockInput.value = ""; }
+  const bloklar = [...$$("#blocks .bchip")].map((c) => c.textContent.replace("×", "").trim()).filter(Boolean);
+  const testler = secilenTestler();
+  if (!testler.length) { toast("En az bir test seçin", true); return null; }
+  const uzmanEl = $("#mUzman");
+  if (!uzmanEl.value) { toast("Uzman adına seçin", true); uzmanEl.focus(); return null; }
+  return {
+    id: window.crypto && crypto.randomUUID ? crypto.randomUUID() : `v${Date.now()}${Math.random().toString(36).slice(2)}`,
+    patoloji_no: patNo, bloklar, testler,
+    uzman_id: uzmanEl.value, uzman_adi: uzmanEl.selectedOptions[0]?.textContent || "",
+    oncelik: prio, not_metni: $("#mNot").value.trim() || null, eklendi: new Date().toISOString(),
+  };
+}
+
+// "Bu test bu blok için zaten istenmiş": aynı patoloji no + blok + test sepette
+// (düzenlenen vaka hariç) ya da kuyrukta tamamlanmamış olarak. Karşılaştırma
+// ilişkili-kalem eşleştirmesiyle aynı (boşluk / büyük-küçük harf yok sayılır);
+// test adı + grup.
+function mukerrerler(vaka, sepet) {
+  const tAd = (ad) => String(ad || "").trim().toLocaleLowerCase("tr");
+  const anahtar = (pat, blok, ad, grup) => `${patNorm(pat)}\u0000${blokAnahtar(blok)}\u0000${tAd(ad)}\u0000${grup}`;
+  const yeni = new Map();
+  (vaka.bloklar.length ? vaka.bloklar : [""]).forEach((b) => vaka.testler.forEach((t) => yeni.set(anahtar(vaka.patoloji_no, b, t.ad, t.grup), `${vaka.patoloji_no} · ${b || "—"} · ${t.ad}`)));
+  const bulunan = new Map();
+  sepet.forEach((v) => (v.bloklar.length ? v.bloklar : [""]).forEach((b) => v.testler.forEach((t) => {
+    const k = anahtar(v.patoloji_no, b, t.ad, t.grup);
+    if (yeni.has(k) && !bulunan.has(k)) bulunan.set(k, `${yeni.get(k)} (sepette)`);
+  })));
+  rows.forEach((r) => {
+    if (r.durum === "tamamlandi") return;
+    const k = anahtar(r.patoloji_no, r.blok_no, r.test_adi, r.grup);
+    if (yeni.has(k) && !bulunan.has(k)) bulunan.set(k, `${yeni.get(k)} (kuyrukta ${PILL[r.durum][1]})`);
+  });
+  return [...bulunan.values()];
+}
+
+// Patoloji no, blok, testler ve not temizlenir; uzman ve öncelik kalır.
+function formuSepetSonrasiTemizle() {
+  const pat = $("#mPat");
+  pat.value = "";
+  pat.classList.remove("bk-dolu");
+  $("#mPatBk")?.classList.add("hidden");
+  $$("#blocks .bchip").forEach((c) => c.remove());
+  const bi = $("#blockin"); if (bi) bi.value = "";
+  selectedTests = new Map(); customItems = [];
+  const ara = $("#antiSearch"); if (ara) ara.value = "";
+  renderAntis("");
+  const not = $("#mNot"); if (not) not.value = "";
+}
+
+async function sepeteEkle() {
+  const vaka = formdanVaka();
+  if (!vaka) return;
+  const liste = sepetOku();
+  const cakisan = mukerrerler(vaka, liste.filter((v) => v.id !== sepetDuzenlenen));
+  if (cakisan.length && !(await onayPenceresi({
+    baslik: "Bu test bu blok için zaten istenmiş",
+    aciklama: "Yine de sepete eklensin mi?",
+    liste: cakisan,
+    onayMetni: "Yine de ekle",
+    tekSutun: true,
+  }))) return;
+  const duzenlenen = sepetDuzenlenen && liste.findIndex((v) => v.id === sepetDuzenlenen);
+  if (sepetDuzenlenen && duzenlenen >= 0) liste[duzenlenen] = { ...vaka, id: sepetDuzenlenen, eklendi: liste[duzenlenen].eklendi };
+  else liste.push(vaka);
+  const guncellendi = Boolean(sepetDuzenlenen && duzenlenen >= 0);
+  sepetDuzenlenen = null;
+  oncekiTestleriKaydet(vaka.testler);
+  formuSepetSonrasiTemizle(); // önce: yayın eklenen vakanın patoloji no'suyla gitmesin
+  sepetYaz(liste);
+  renderOncekiTestler();
+  const oz = sepetOzet(liste);
+  toast(`${guncellendi ? "Sepette güncellendi" : "Sepete eklendi"}: ${vaka.patoloji_no} · Sepet: ${oz.vaka} vaka · ${oz.test} test`);
+  $("#mPat").focus(); // barkodla art arda okutulabilsin
+}
+
+// Sepetteki vaka forma geri yüklenir; "Sepette güncelle" onu yerinde değiştirir.
+function sepetDuzenle(id) {
+  const v = sepetOku().find((x) => x.id === id);
+  if (!v || !$("#mPat")) return;
+  const dolu = $("#mPat").value.trim() || $$("#blocks .bchip").length || selectedTests.size || customItems.some((c) => c.sel);
+  if (dolu && sepetDuzenlenen !== id && !confirm("Formdaki gönderilmemiş bilgiler silinip sepetteki vaka yüklensin mi?")) return;
+  formuSepetSonrasiTemizle();
+  $("#mPat").value = v.patoloji_no;
+  v.bloklar.forEach((b) => addBlockChip(b));
+  v.testler.forEach((t) => {
+    if (t.test_id) selectedTests.set(t.test_id, { ad: t.ad, klon: t.klon || "", grup: t.grup });
+    else customItems.push({ ad: t.ozel_test || t.ad, sel: true, grup: t.grup });
+  });
+  renderAntis("");
+  const uz = $("#mUzman");
+  uz.value = UZMANLAR.some((u) => u.id === v.uzman_id) ? v.uzman_id : "";
+  if (!uz.value) toast(`${v.uzman_adi || "Seçilen uzman"} artık listede yok — uzman seçin`, true);
+  prio = v.oncelik || "rutin";
+  $$("#prios button").forEach((b) => b.classList.toggle("on", b.dataset.p === prio));
+  $("#mNot").value = v.not_metni || "";
+  sepetDuzenlenen = id;
+  sepetAcik = false;
+  renderSepet();
+  $("#rail .rail-body")?.scrollTo({ top: 0 });
+  $("#mPat").focus();
+}
+function sepetDuzenlemeBitir() {
+  sepetDuzenlenen = null;
+  formuSepetSonrasiTemizle();
+  renderSepet();
+}
+function sepettenSil(id) {
+  const liste = sepetOku();
+  const v = liste.find((x) => x.id === id);
+  if (!v || !confirm(`${v.patoloji_no} sepetten çıkarılsın mı?`)) return;
+  if (sepetDuzenlenen === id) sepetDuzenlemeBitir();
+  sepetYaz(liste.filter((x) => x.id !== id));
+  toast(`Sepetten çıkarıldı: ${v.patoloji_no}`);
+}
+async function sepetiBosalt() {
+  const liste = sepetOku();
+  if (!liste.length) return;
+  if (!(await onayPenceresi({ baslik: `Sepetteki ${liste.length} vaka silinsin mi?`, aciklama: "Gönderilmemiş vakalar kalıcı olarak silinir.", liste: liste.map((v) => v.patoloji_no), onayMetni: "Sepeti boşalt" }))) return;
+  if (sepetDuzenlenen) sepetDuzenlemeBitir();
+  sepetYaz([]);
+  toast("Sepet boşaltıldı");
+}
+
+// Toplu gönder — onay → TEK RPC (tek işlem). Başarıda sepet boşalır; hata
+// olursa sepet aynen kalır.
+async function topluGonder() {
+  const liste = sepetOku();
+  if (!liste.length) return;
+  if (sepetDuzenlenen) { toast("Önce düzenlenen vakayı \"Sepette güncelle\" ile kaydedin ya da düzenlemeden vazgeçin", true); return; }
+  const oz = sepetOzet(liste);
+  if (!(await onayPenceresi({
+    baslik: `${oz.vaka} vaka, ${oz.test} test toplu gönderilecek`,
+    aciklama: "Hepsi tek işlemde kaydedilir: biri bile kaydedilemezse hiçbiri kaydedilmez.",
+    liste: liste.map((v) => `${v.patoloji_no} · ${sepetBlokTxt(v)} · ${sepetTestTxt(v)}`),
+    onayMetni: "Toplu gönder",
+    tekSutun: true,
+  }))) return;
+  const btn = $("#topluGonderBtn"); if (btn) btn.disabled = true;
+  try {
+    const s = await Api.topluIstemOlustur(liste.map((v) => ({
+      patoloji_no: v.patoloji_no, uzman_id: v.uzman_id, oncelik: v.oncelik, not_metni: v.not_metni,
+      bloklar: v.bloklar, testler: v.testler.map((t) => ({ test_id: t.test_id || null, ozel_test: t.ozel_test || null, grup: t.grup })),
+    })));
+    sonUzmanKaydet(liste[liste.length - 1].uzman_id);
+    sepetAcik = false;
+    sepetYaz([]);
+    toast(`${s?.istem ?? oz.vaka} vaka, ${s?.kalem ?? oz.test} test gönderildi`);
+    setDurumTab("all");
+    $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+    showEmpty();
+    await loadQueue();
+    Api.getSonKullanilanTestler(session.id).then((r) => { RECENT_TESTS = buildRecentTests(r); }).catch(() => {});
+  } catch (e) {
+    const b = $("#topluGonderBtn"); if (b) b.disabled = false;
+    toast(`Toplu gönderilemedi — sepet olduğu gibi duruyor. ${topluHataMesaji(e)}`, true);
+  }
+}
+function topluHataMesaji(e) {
+  const m = String((e && e.message) || "");
+  if (e && (e.code === "PGRST202" || e.code === "42883")) return "Toplu gönderim için toplu_sema.sql çalıştırılmalı.";
+  if (e && (e.code === "42501" || /row-level security/i.test(m))) return "Bu istemleri açma yetkiniz yok.";
+  if (e && e.code === "23503") return "Bir vakadaki uzman ya da test artık geçerli değil — düzenleyip tekrar deneyin.";
+  if (e && e.code === "22023") return m;
+  return m || "Bağlantıyı kontrol edip tekrar deneyin.";
+}
+
+// ---------------- "Önceki vakanın testleri" ----------------
+function oncekiTestleriKaydet(testler) {
+  try { localStorage.setItem(oncekiTestKey(), JSON.stringify(testler.map((t) => ({ test_id: t.test_id || null, ozel_test: t.ozel_test || null, grup: t.grup, ad: t.ad, klon: t.klon || "" })))); } catch (e) { /* hatırlanmaz */ }
+}
+function oncekiTestler() {
+  try { const v = JSON.parse(localStorage.getItem(oncekiTestKey()) || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function renderOncekiTestler() {
+  const el = $("#oncekiSec"); if (!el) return;
+  const l = oncekiTestler();
+  el.classList.toggle("hidden", !l.length);
+  el.innerHTML = l.length ? `<button type="button" class="onceki-btn" id="oncekiBtn" title="Bir önceki vakada seçilen testleri tekrar seç">↻ Önceki vakanın testleri</button><span class="onceki-ad">${esc(l.map((t) => t.ad).join(", "))}</span>` : "";
+}
+function oncekiTestleriSec() {
+  const l = oncekiTestler();
+  if (!l.length) return;
+  // Katalog testi hâlâ katalogda (aktif) olmalı; serbest testler aynen.
+  const katalog = new Map(Object.values(CAT).flat().map((t) => [t.id, t]));
+  let atlanan = 0;
+  l.forEach((t) => {
+    if (t.test_id) {
+      const k = katalog.get(t.test_id);
+      if (!k) { atlanan++; return; }
+      selectedTests.set(t.test_id, { ad: k.ad, klon: k.klon || "", grup: k.grup });
+    } else {
+      const c = customItems.find((x) => x.ad === t.ozel_test);
+      if (c) c.sel = true; else customItems.push({ ad: t.ozel_test, sel: true, grup: t.grup });
+    }
+  });
+  renderAntis($("#antiSearch")?.value || "");
+  yaziyorEtkilesim();
+  toast(`${l.length - atlanan} test seçildi${atlanan ? ` · ${atlanan} test artık katalogda yok` : ""}`);
+}
+
+// ---------------- Sepet görünümü (form içinde + "Yeni İstek" rozeti) ----------------
+function renderSepet() {
+  const liste = sepetOku();
+  const oz = sepetOzet(liste);
+  // Sol menüdeki "Yeni İstek" düğmesinde rozet — form kapalıyken de görünür.
+  const nb = $("#newBtn");
+  if (nb) {
+    let r = nb.querySelector(".sepet-rozet");
+    if (!r) { nb.insertAdjacentHTML("beforeend", `<span class="sepet-rozet" hidden></span>`); r = nb.querySelector(".sepet-rozet"); }
+    r.hidden = !liste.length;
+    r.textContent = liste.length;
+    r.title = liste.length ? `Sepet: ${oz.vaka} vaka · ${oz.test} test` : "";
+  }
+  const bar = $("#sepetBar");
+  if (bar) {
+    bar.classList.toggle("hidden", !liste.length);
+    bar.innerHTML = liste.length ? `
+      <div class="sepet-ust">
+        <button type="button" class="sepet-ac" id="sepetAcBtn" aria-expanded="${sepetAcik}">🧺 Sepet: <b>${oz.vaka} vaka · ${oz.test} test</b> <span aria-hidden="true">${sepetAcik ? "▴" : "▾"}</span></button>
+        <button type="button" class="btn-primary btn-sm" id="topluGonderBtn">Toplu gönder</button>
+      </div>
+      ${sepetAcik ? `<ol class="sepet-liste">${liste.map((v) => `
+        <li class="sepet-vaka${v.id === sepetDuzenlenen ? " duzenleniyor" : ""}" data-sv="${esc(v.id)}">
+          <div class="sv-ust"><b class="sv-pat">${esc(v.patoloji_no)}</b><span class="sv-blok">Blok: ${esc(sepetBlokTxt(v))}</span>${v.oncelik !== "rutin" ? `<span class="prio ${PRIO[v.oncelik][0]}">${PRIO[v.oncelik][1]}</span>` : ""}
+            <span class="sv-aks"><button type="button" class="linkbtn" data-sv-duz="${esc(v.id)}">Düzenle</button><button type="button" class="linkbtn sv-sil" data-sv-sil="${esc(v.id)}">Sil</button></span></div>
+          <div class="sv-test">${esc(sepetTestTxt(v))} <span class="sv-say">· ${sepetKalemSayisi(v)} test</span></div>
+          <div class="sv-alt">Uzman: ${esc(v.uzman_adi || "—")}${v.not_metni ? ` · Not: ${esc(v.not_metni)}` : ""}</div>
+        </li>`).join("")}</ol>
+        <div class="sepet-alt"><button type="button" class="linkbtn" id="sepetBosaltBtn">Sepeti boşalt</button></div>` : ""}` : "";
+  }
+  const serit = $("#sepetDuzSerit");
+  const duz = sepetDuzenlenen && liste.find((v) => v.id === sepetDuzenlenen);
+  if (sepetDuzenlenen && !duz) sepetDuzenlenen = null;
+  if (serit) {
+    serit.classList.toggle("hidden", !duz);
+    serit.innerHTML = duz ? `<span>Sepetteki <b>${esc(duz.patoloji_no)}</b> düzenleniyor</span><button type="button" class="linkbtn" id="sepetDuzVazgec">Düzenlemeden vazgeç</button>` : "";
+  }
+  const ekle = $("#sepeteEkleBtn");
+  if (ekle) {
+    ekle.textContent = duz ? "Sepette güncelle" : "Sepete ekle";
+    ekle.classList.toggle("btn-primary", Boolean(duz));
+    ekle.classList.toggle("btn-ghost", !duz);
+  }
+  const gonder = $("#submitForm");
+  if (gonder) gonder.classList.toggle("hidden", Boolean(duz)); // düzenlerken tek gönderim yok
+}
+// Form içi sepet düğmeleri (tek dinleyici; form her açılışta yeniden kurulur).
+function sepetFormunuBagla() {
+  const body = $("#rail .rail-body"); if (!body) return;
+  body.addEventListener("click", (e) => {
+    if (e.target.closest("#sepetAcBtn")) { sepetAcik = !sepetAcik; renderSepet(); return; }
+    if (e.target.closest("#topluGonderBtn")) { topluGonder(); return; }
+    if (e.target.closest("#sepetBosaltBtn")) { sepetiBosalt(); return; }
+    if (e.target.closest("#sepetDuzVazgec")) { sepetDuzenlemeBitir(); return; }
+    if (e.target.closest("#oncekiBtn")) { oncekiTestleriSec(); return; }
+    const d = e.target.closest("[data-sv-duz]"); if (d) { sepetDuzenle(d.dataset.svDuz); return; }
+    const s = e.target.closest("[data-sv-sil]"); if (s) sepettenSil(s.dataset.svSil);
+  });
+}
+// Sepette vaka varken sekme kapatılır / yenilenirse tarayıcı uyarır (tarayıcılar
+// kendi standart metnini gösterir). Sepet yine de bu tarayıcıda saklı kalır.
+// Aynı kullanıcının başka sekmesi sepeti değiştirdi: rozet / liste / yayın güncellenir.
+window.addEventListener("storage", (e) => {
+  if (!session || e.key !== sepetKey()) return;
+  renderSepet();
+  yaziyorYayinla(true);
+});
+window.addEventListener("beforeunload", (e) => {
+  const n = session ? sepetOku().length : 0;
+  if (!n) return;
+  e.preventDefault();
+  e.returnValue = `Sepette gönderilmemiş ${n} vaka var`;
+  return e.returnValue;
+});
+
 function addBlockChip(v) {
   const c = document.createElement("span");
   c.className = "bchip";
@@ -3419,12 +3810,15 @@ async function submitForm() {
   const uzman_id = uzmanEl && uzmanEl.value ? uzmanEl.value : null;
   if (!uzman_id) { toast("Uzman adına seçin", true); uzmanEl?.focus(); return; }
   const not_metni = $("#mNot").value.trim() || null;
+  const secilenler = secilenTestler();
 
   $("#submitForm").disabled = true;
   try {
     await Api.createIstem({ patoloji_no: patNo, istem_yapan_id: session.id, uzman_id, oncelik: prio, not_metni, bloklar, testler });
     sonUzmanKaydet(uzman_id);
-    yaziyorBirak();
+    oncekiTestleriKaydet(secilenler);
+    yaziyorSonEtkilesim = 0; // gönderilen vaka yayından düşer; sepet doluysa yayın sürer
+    yaziyorYayinla(true);
     setDurumTab("all");
     $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
     toast("İstek oluşturuldu");
@@ -4311,7 +4705,7 @@ function hizmetlerYazdir() {
   if (!list.length) { toast(YAZDIR_BOS.gorunen, true); return; }
   const ozet = (h) => h.ozet.map((o) => `${o.count} ${grupKisa(o.grup)}`).join(", ") || "—";
   const gruplar = hizUzmanGruplari(list.slice().sort(yazdirSiraTercih() === "pat" ? yazdirSirasi
-    : (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || yazdirSirasi(a, b)));
+    : (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || (a.toplu_sira || 0) - (b.toplu_sira || 0) || yazdirSirasi(a, b)));
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Hizmetler — HBYS Giriş Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${list.length} istem · ${gruplar.length} uzman · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
@@ -4349,14 +4743,14 @@ function hizYazdirildiIsaretle(list) {
 
 // Onay penceresi (başlık, açıklama, kaydırılabilir liste) — Promise<boolean>.
 // Esc / dışına tık = vazgeç; Enter = onayla.
-function onayPenceresi({ baslik, aciklama = "", liste = [], onayMetni = "Onayla", iptalMetni = "Vazgeç" }) {
+function onayPenceresi({ baslik, aciklama = "", liste = [], onayMetni = "Onayla", iptalMetni = "Vazgeç", tekSutun = false }) {
   return new Promise((coz) => {
     const ov = document.createElement("div");
     ov.className = "onay-ov";
     ov.innerHTML = `<div class="onay-kutu" role="dialog" aria-modal="true" aria-labelledby="onayBaslik">
         <h3 id="onayBaslik">${esc(baslik)}</h3>
         ${aciklama ? `<p class="onay-aciklama">${esc(aciklama)}</p>` : ""}
-        ${liste.length ? `<ul class="onay-liste">${liste.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+        ${liste.length ? `<ul class="onay-liste${tekSutun ? " tek" : ""}">${liste.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
         <div class="onay-btns"><button type="button" class="btn-ghost" data-onay="0">${esc(iptalMetni)}</button><button type="button" class="btn-primary" data-onay="1">${esc(onayMetni)}</button></div>
       </div>`;
     const bitir = (sonuc) => {
@@ -5886,14 +6280,24 @@ function renderYeniBildirim(yeniGeldi = false) {
   document.title = n ? `(${n}) ${SAYFA_BASLIGI}` : SAYFA_BASLIGI;
   if (!el) return;
   if (!n) { el.hidden = true; el.classList.remove("parla"); return; }
-  // Vaka bazında özet: "11240/26 (ER, PR, HER2) · 11198/26 (CD3)" — ilk 3 vaka.
-  const vakalar = new Map();
+  // Toplu gönderim TEK özet: "FD · 4 vaka, 12 test (toplu)". Diğerleri vaka
+  // bazında: "11240/26 (ER, PR, HER2) · 11198/26 (CD3)" — ilk 3 vaka.
+  const vakalar = new Map(), topluler = new Map();
   rows.filter((r) => yeniKalemler.has(r.kalem_id)).forEach((r) => {
+    if (r.toplu_id) {
+      if (!topluler.has(r.toplu_id)) topluler.set(r.toplu_id, { kim: r.isteyen_kisaltma || initials(r.isteyen_adi || ""), istemler: new Set(), kalem: 0 });
+      const t = topluler.get(r.toplu_id);
+      t.istemler.add(r.istem_id); t.kalem++;
+      return;
+    }
     if (!vakalar.has(r.patoloji_no)) vakalar.set(r.patoloji_no, []);
     vakalar.get(r.patoloji_no).push(r.test_adi);
   });
-  const ozet = [...vakalar].slice(0, 3).map(([p, t]) => `${p} (${t.join(", ")})`).join(" · ") + (vakalar.size > 3 ? ` · +${vakalar.size - 3} vaka` : "");
-  $("#yeniBildirimMetin").innerHTML = `<b>${n} yeni istem geldi</b><span class="yb-ozet">${esc(ozet)}</span>`;
+  const topluMetin = [...topluler.values()].map((t) => `${t.kim} · ${t.istemler.size} vaka, ${t.kalem} test (toplu)`);
+  const vakaMetin = [...vakalar].slice(0, 3).map(([p, t]) => `${p} (${t.join(", ")})`).join(" · ") + (vakalar.size > 3 ? ` · +${vakalar.size - 3} vaka` : "");
+  const baslik = topluler.size === 1 && !vakalar.size ? topluMetin[0] : `${n} yeni istem geldi`;
+  const ozet = [...(topluler.size === 1 && !vakalar.size ? [] : topluMetin), vakaMetin].filter(Boolean).join(" · ");
+  $("#yeniBildirimMetin").innerHTML = `<b>${esc(baslik)}</b><span class="yb-ozet">${esc(ozet)}</span>`;
   el.hidden = false;
   if (yeniGeldi) { el.classList.remove("parla"); void el.offsetWidth; el.classList.add("parla"); }
 }

@@ -1052,3 +1052,49 @@ tbody tr.hiz-grup > td.bulkcell{padding-right:0}
   .hiz-head .spacer{display:none}
   .hiz-head > :not(h1):not(.sub){order:2}
 }
+.onay-liste.tek{columns:1;font-family:var(--sans);font-size:13px;font-weight:500}
+.onay-liste.tek li{padding:3px 0;border-bottom:1px solid var(--line-2)}
+.onay-liste.tek li:last-child{border-bottom:0}
+
+/* ---------------- Toplu istem (sepet) ---------------- */
+/* Formun üstünde yapışkan sepet çubuğu; liste açılıp kapanır */
+.sepet-bar{position:sticky;top:-18px;z-index:2;margin:-18px -18px 16px;padding:10px 18px;background:var(--accent-soft);border-bottom:1px solid var(--line);box-shadow:0 1px 0 var(--line-2)}
+.sepet-ust{display:flex;align-items:center;gap:10px}
+.sepet-ac{flex:1;min-width:0;text-align:left;border:0;background:transparent;color:var(--ink);font:inherit;font-size:13.5px;cursor:pointer;padding:4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sepet-ac b{font-weight:700}
+.sepet-ac span{color:var(--ink-3);margin-left:2px}
+.sepet-liste{list-style:none;margin:10px 0 0;padding:0;max-height:min(46vh, 420px);overflow-y:auto;border:1px solid var(--line);border-radius:9px;background:var(--card);counter-reset:sv}
+.sepet-vaka{padding:9px 12px;border-bottom:1px solid var(--line-2);font-size:12.5px;line-height:1.45;counter-increment:sv}
+.sepet-vaka:last-child{border-bottom:0}
+.sepet-vaka.duzenleniyor{background:var(--amber-b)}
+.sv-ust{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px}
+.sv-ust::before{content:counter(sv) ".";color:var(--ink-3);font-size:11.5px;min-width:16px}
+.sv-pat{font-family:var(--mono);font-size:13.5px}
+.sv-blok{color:var(--ink-2);font-family:var(--mono)}
+.sv-aks{margin-left:auto;display:inline-flex;gap:12px}
+.sv-aks .sv-sil{color:var(--amber-i)}
+.sv-test{color:var(--ink);margin-top:2px;padding-left:26px}
+.sv-say{color:var(--ink-3)}
+.sv-alt{color:var(--ink-3);font-size:11.5px;padding-left:26px}
+.sepet-alt{display:flex;justify-content:flex-end;padding:8px 2px 0}
+.sepet-alt .linkbtn{color:var(--amber-i)}
+.sepet-duz{margin:0 0 14px;padding:8px 12px;border-radius:8px;background:var(--amber-b);color:var(--ink);font-size:12.5px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.sepet-duz .linkbtn{margin-left:auto}
+/* "Yeni İstek" düğmesinde sepetteki vaka sayısı */
+.new{position:relative}
+.sepet-rozet{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--on-accent);color:var(--accent);font-size:11.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;line-height:1}
+.sepet-rozet[hidden]{display:none}
+@media (min-width:901px){ html[data-nav-dar] .sepet-rozet{position:absolute;top:-6px;right:-6px;margin:0;border:2px solid var(--side)} }
+/* "↻ Önceki vakanın testleri" */
+.onceki-sec{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;margin:-6px 0 14px}
+.onceki-btn{border:1px dashed var(--accent);background:transparent;color:var(--accent);border-radius:8px;padding:6px 10px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--sans);white-space:nowrap}
+.onceki-btn:hover{background:var(--accent-soft)}
+.onceki-ad{flex:1;min-width:0;font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Form altı: İptal · Sepete ekle · İstek Ver */
+.rail-foot .btn-sepet{flex:none;border-color:var(--accent);color:var(--accent);white-space:nowrap}
+.rail-foot .btn-sepet.btn-primary{flex:1;color:var(--on-accent)}
+@media (max-width:420px){ .rail-foot{gap:8px} .rail-foot .btn-ghost, .rail-foot .btn-sepet{padding-left:12px;padding-right:12px} }
+/* İş Kuyruğu: toplu gönderimin başında ayraç satırı */
+tbody tr.toplu-ayrac td{padding:6px 14px 4px;background:var(--line-2);border-top:2px solid var(--accent);border-bottom:0}
+.toplu-etiket{font-size:11.5px;font-weight:700;color:var(--accent);letter-spacing:.02em;font-variant-numeric:tabular-nums}
+@media print{ .sepet-bar, .sepet-duz, .onceki-sec, .sepet-rozet{display:none!important} }

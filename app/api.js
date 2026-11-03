@@ -120,17 +120,27 @@
     }
   }
 
-  // teslim_sema.sql çalışmadan önce görünümde teslim kolonları yok — bir kez
-  // anlaşılınca sayfa yenilenene kadar eski sorgu kullanılır.
-  let teslimKolonuYok = false;
-  const kolonYokHatasi = (e) => Boolean(e && (e.code === "42703" || /teslim_/.test(String(e.message || ""))));
+  // teslim_sema.sql / toplu_sema.sql çalışmadan önce görünümde ilgili kolonlar
+  // yok — bir kez anlaşılınca sayfa yenilenene kadar eski sorgu kullanılır.
+  let teslimKolonuYok = false, topluKolonuYok = false;
+  const kolonYokHatasi = (e) => Boolean(e && (e.code === "42703" || /teslim_|toplu_|istem_created_at/.test(String(e.message || ""))));
 
-  async function kuyrukOku(eskiSinir, teslimli) {
+  // Sıra (toplu_sema.sql): istemin zamanı ↓ → toplu_id → toplu_sira ↑ →
+  // istem → kalem zamanı ↓. Toplu gönderimin tüm istemleri aynı zamanı
+  // taşıdığından gönderim bölünmez, kendi içinde sepetteki sırayla durur.
+  // Kolonlar yoksa eski sıra: kalem zamanı ↓. kalem_id: eşitlikte sabit sıra.
+  async function kuyrukOku(eskiSinir, teslimli, toplu) {
     const satirlar = [];
     for (;;) {
       let q = client.from("istem_kuyruk_v").select("*");
       if (eskiSinir) {
         q = q.or(`durum.neq.tamamlandi,created_at.gte."${eskiSinir}"${teslimli ? ",teslim_bekliyor.is.true" : ""}`);
+      }
+      if (toplu) {
+        q = q.order("istem_created_at", { ascending: false })
+          .order("toplu_id", { ascending: true, nullsFirst: false })
+          .order("toplu_sira", { ascending: true, nullsFirst: false })
+          .order("istem_id", { ascending: true });
       }
       const { data, error } = await q
         .order("created_at", { ascending: false })
@@ -762,14 +772,18 @@
     async getHizmetler() {
       // Kalemlerin "hizmetler" yazdırma kayıtları da (arsiv_yazdirma_sema.sql);
       // şema henüz yoksa (ilişki bulunamadı) eski sorguya düşülür.
+      // Sıra: created_at ↓ → toplu_sira ↑ (toplu gönderim bir arada, sepetteki
+      // sırayla; toplu_sema.sql) → id. Kolonlar yoksa toplu sırası olmadan.
       const TEMEL = "id,patoloji_no,istem_yapan_id,uzman_id,created_at,fatura_girildi,fatura_giren_id,fatura_zamani";
-      const istemleriOku = async (kalemSecimi) => {
+      const istemleriOku = async (kalemSecimi, toplu) => {
         const satirlar = [];
         for (;;) {
-          const { data, error } = await client
+          let q = client
             .from("istemler")
-            .select(`${TEMEL},istem_kalemleri(${kalemSecimi})`)
-            .order("created_at", { ascending: false })
+            .select(`${TEMEL}${toplu ? ",toplu_id,toplu_sira" : ""},istem_kalemleri(${kalemSecimi})`)
+            .order("created_at", { ascending: false });
+          if (toplu) q = q.order("toplu_sira", { ascending: true, nullsFirst: false });
+          const { data, error } = await q
             .order("id", { ascending: true })
             .range(satirlar.length, satirlar.length + 999);
           must(data, error);
@@ -777,8 +791,14 @@
           satirlar.push(...data);
         }
       };
-      const oku = () => istemleriOku("id,grup,tekrar_kaynagi_id,yazdirma_kayitlari(baglam,created_at,yazdiran_id)")
-        .catch(() => istemleriOku("id,grup,tekrar_kaynagi_id"));
+      const YZ = "id,grup,tekrar_kaynagi_id,yazdirma_kayitlari(baglam,created_at,yazdiran_id)", DUZ = "id,grup,tekrar_kaynagi_id";
+      const oku = () => istemleriOku(YZ, !topluKolonuYok).catch((e) => {
+        if (!topluKolonuYok && kolonYokHatasi(e)) {
+          topluKolonuYok = true;
+          return istemleriOku(YZ, false).catch(() => istemleriOku(DUZ, false));
+        }
+        return istemleriOku(DUZ, !topluKolonuYok);
+      });
       // Fatura girişinin son geri alınması (kim, ne zaman) — tablo yoksa boş.
       const geriAlmalar = async () => {
         const { data, error } = await client.from("fatura_gecmisi").select("istem_id,kullanici_id,created_at").eq("islem", "geri_alindi").order("created_at", { ascending: false });
@@ -845,6 +865,8 @@
           // Hizmetler'de ayrıca işaretlenir.
           tekrar: kalemler.length > 0 && kalemler.every((k) => k.tekrar_kaynagi_id),
           istem_id: i.id,
+          toplu_id: i.toplu_id || null,
+          toplu_sira: i.toplu_sira || null,
           patoloji_no: i.patoloji_no,
           isteyen_adi: ad(i.istem_yapan_id),
           isteyen_kisaltma: kullaniciMap[i.istem_yapan_id]?.kisaltma || null,
@@ -977,12 +999,17 @@
     // teslim edilmeyen lam gözden kaybolmasın. Görünümde kolon yoksa (SQL
     // henüz çalışmadıysa) eski sorguya düşülür.
     async listQueue({ eskiSinir } = {}) {
-      try {
-        return await kuyrukOku(eskiSinir, !teslimKolonuYok);
-      } catch (e) {
-        if (teslimKolonuYok || !kolonYokHatasi(e)) throw e;
-        teslimKolonuYok = true;
-        return kuyrukOku(eskiSinir, false);
+      for (;;) {
+        try {
+          return await kuyrukOku(eskiSinir, !teslimKolonuYok, !topluKolonuYok);
+        } catch (e) {
+          if (!kolonYokHatasi(e)) throw e;
+          const m = String(e.message || "");
+          if (!topluKolonuYok && /toplu_|istem_created_at/.test(m)) topluKolonuYok = true;
+          else if (!teslimKolonuYok) teslimKolonuYok = true;
+          else if (!topluKolonuYok) topluKolonuYok = true;
+          else throw e;
+        }
       }
     },
 
@@ -1158,6 +1185,21 @@
 
       return istem;
     },
+
+    // ---------------- Toplu istem (sepet; toplu_sema.sql) ----------------
+    // TEK RPC = tek veritabanı işlemi: ya bütün vakalar kaydedilir ya hiçbiri.
+    // Yetki (RLS) fonksiyon çağıranın yetkisiyle (security invoker) uygulanır.
+    // vakalar: [{ patoloji_no, uzman_id, oncelik, not_metni, bloklar: [..],
+    //             testler: [{ test_id? , ozel_test?, grup }] }] — sepetteki sırayla.
+    // Dönen: { toplu_id, istem, kalem }.
+    async topluIstemOlustur(vakalar) {
+      const { data, error } = await client.rpc("toplu_istem_olustur", { p_vakalar: vakalar });
+      if (error) throw error;
+      return data;
+    },
+    // Kuyruk görünümünde toplu kolonları var mı (toplu_sema.sql çalışmış mı)?
+    // İlk listQueue'dan sonra kesinleşir.
+    topluDestekli() { return !topluKolonuYok; },
 
     // ---------------- "Yazıyor…" (Realtime Presence; yaziyor_sema.sql) ----------------
     // Private kanal: yalnız oturum açmış kullanıcılar katılır (realtime.messages

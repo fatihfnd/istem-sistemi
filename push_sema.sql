@@ -163,6 +163,15 @@ begin;
 -- Hiç abonelik yoksa çağırmaz. Hata olursa yalnız uyarı yazar; istem
 -- kaydını ASLA engellemez. Servis anahtarı Vault'tan (cron işleriyle aynı).
 -- ------------------------------------------------------------
+-- toplu_sema.sql çalıştıysa son hali (toplu gönderim başına tek bildirim)
+-- oradadır — o durumda burada YENİDEN TANIMLANMAZ.
+do $fn$
+begin
+  if not exists (
+    select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+    where ns.nspname = 'public' and p.proname = 'push_tetikle' and p.prosrc like '%toplu_id%'
+  ) then
+    execute $sql$
 create or replace function public.push_tetikle() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
@@ -189,6 +198,9 @@ exception when others then
   raise warning 'push_tetikle (istem %): %', new.istem_id, sqlerrm;
   return null;
 end $$;
+    $sql$;
+  end if;
+end $fn$;
 
 drop trigger if exists push_tetikle on istem_kalemleri;
 create trigger push_tetikle

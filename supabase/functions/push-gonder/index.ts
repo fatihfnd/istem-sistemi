@@ -5,6 +5,9 @@
 //
 // Gövdeye göre üç iş ("Verify JWT" AÇIK kalmalı — çağıranı ağ geçidi doğrular):
 //  {"istem_id": "..."}    istem_kalemleri trigger'ı (service_role) → ilgili abonelere
+//  {"istem_id": "...", "toplu_id": "..."}
+//                         toplu gönderim (toplu_sema.sql) → gönderim başına TEK bildirim:
+//                         "FD · 4 vaka, 12 test (toplu)" (istem_id = gönderimin ilk istemi)
 //  {"islem": "anahtar"}   kurulum (service_role) → VAPID anahtarı yoksa üretip Vault'a
 //                         yazar (istem_vapid_private / istem_vapid_public); özel anahtar
 //                         HİÇBİR yere dönmez/loglanmaz
@@ -12,7 +15,8 @@
 //
 // Alıcılar: bildirim_tercihleri'nde istemin gruplarından birini seçmiş, aktif ve
 // istemi AÇAN KİŞİ OLMAYAN kullanıcılar. Metin alıcının kendi gruplarına göre:
-// "17730/26 · 3 İHK (Acil)". 404/410 dönen abonelik silinir.
+// "17730/26 · 3 İHK (Acil)"; toplu gönderimde "FD · 4 vaka, 12 test (toplu)"
+// (sayılar alıcının gruplarındaki vaka / kalem). 404/410 dönen abonelik silinir.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -139,6 +143,12 @@ export function bildirimMetni(patNo: string, oncelik: string, sayac: Map<string,
   return `${patNo} · ${parca.join(" · ")}${onc}`;
 }
 
+// Toplu gönderim: "FD · 4 vaka, 12 test (toplu)" — acil/STAT vaka varsa sonda.
+export function topluBildirimMetni(kim: string, vaka: number, test: number, acil: number, stat: number): string {
+  const ek = [stat ? `${stat} STAT` : "", acil ? `${acil} acil` : ""].filter(Boolean).join(", ");
+  return `${kim} · ${vaka} vaka, ${test} test (toplu)${ek ? ` · ${ek}` : ""}`;
+}
+
 // deno-lint-ignore no-explicit-any
 type Db = any;
 
@@ -214,6 +224,55 @@ async function istemBildir(db: Db, istemId: string) {
   return await topluGonder(db, vapid, isler);
 }
 
+// Toplu gönderim (toplu_sema.sql) — gönderim başına TEK bildirim. Alıcı ve
+// sayılar tek istemdeki gibi gruplara göre: alıcının seçtiği gruplarda kaç
+// vaka / kaç kalem var.
+async function topluBildir(db: Db, topluId: string) {
+  const { data: istemler, error: e1 } = await db.from("istemler").select("id,patoloji_no,oncelik,istem_yapan_id").eq("toplu_id", topluId);
+  if (e1) throw new Error(`toplu istemler okunamadı: ${e1.message}`);
+  if (!istemler?.length) return { gonderilen: 0, silinen: 0, hatalar: ["toplu gönderim bulunamadı (silinmiş olabilir)"] };
+  const yapan = istemler[0].istem_yapan_id as string;
+  const onc = new Map<string, string>(istemler.map((i: { id: string; oncelik: string }) => [i.id, i.oncelik]));
+  const { data: kalemler, error: e2 } = await db.from("istem_kalemleri").select("istem_id,grup").in("istem_id", [...onc.keys()]);
+  if (e2) throw new Error(`kalemler okunamadı: ${e2.message}`);
+  const tumGruplar = [...new Set((kalemler ?? []).map((k: { grup: string }) => k.grup))];
+  if (!tumGruplar.length) return { gonderilen: 0, silinen: 0, hatalar: [] };
+
+  const { data: tercihler, error: e3 } = await db.from("bildirim_tercihleri").select("kullanici_id,grup_kod").in("grup_kod", tumGruplar);
+  if (e3) throw new Error(`tercihler okunamadı: ${e3.message}`);
+  const aliciGrup = new Map<string, Set<string>>();
+  (tercihler ?? []).forEach((t: { kullanici_id: string; grup_kod: string }) => {
+    if (t.kullanici_id === yapan) return;
+    if (!aliciGrup.has(t.kullanici_id)) aliciGrup.set(t.kullanici_id, new Set());
+    aliciGrup.get(t.kullanici_id)!.add(t.grup_kod);
+  });
+  if (!aliciGrup.size) return { gonderilen: 0, silinen: 0, hatalar: [] };
+
+  const { data: aktifler } = await db.from("kullanicilar").select("id").in("id", [...aliciGrup.keys()]).eq("aktif", true);
+  const aktif = new Set((aktifler ?? []).map((u: { id: string }) => u.id));
+  const { data: abonelikler, error: e4 } = await db.from("push_abonelikleri").select("id,kullanici_id,endpoint,keys").in("kullanici_id", [...aktif]);
+  if (e4) throw new Error(`abonelikler okunamadı: ${e4.message}`);
+  if (!abonelikler?.length) return { gonderilen: 0, silinen: 0, hatalar: [] };
+
+  const vapid = await anahtarlariOku(db);
+  if (!vapid) throw new Error("VAPID anahtarı yok — kurulum adımı ({\"islem\":\"anahtar\"}) yapılmamış");
+  const { data: kisi } = await db.from("kullanicilar").select("ad_soyad,kisaltma").eq("id", yapan).maybeSingle();
+  const kim = kisi?.kisaltma || kisi?.ad_soyad || "?";
+
+  const isler = abonelikler.map((ab: Abonelik & { kullanici_id: string }) => {
+    const g = aliciGrup.get(ab.kullanici_id) ?? new Set<string>();
+    const benim = (kalemler ?? []).filter((k: { grup: string }) => g.has(k.grup));
+    const vakalar = new Set(benim.map((k: { istem_id: string }) => k.istem_id));
+    const oncs = [...vakalar].map((id) => onc.get(id as string));
+    const acil = oncs.filter((o) => o === "acil").length, stat = oncs.filter((o) => o === "stat").length;
+    return {
+      ab, acil: acil + stat > 0,
+      yuk: { title: "Yeni istek (toplu)", body: topluBildirimMetni(kim, vakalar.size, benim.length, acil, stat), tag: `toplu-${topluId}`, url: "./", toplu_id: topluId },
+    };
+  });
+  return await topluGonder(db, vapid, isler);
+}
+
 // JWT'nin "role" iddiası — imzayı ağ geçidi ("Verify JWT") zaten doğruladı.
 function jwtRol(token: string): string | null {
   try { return JSON.parse(new TextDecoder().decode(b64uDecode(token.split(".")[1]))).role ?? null; } catch { return null; }
@@ -267,11 +326,11 @@ Deno.serve(async (req: Request) => {
     // ---- trigger: yeni istem ----
     if (govde.istem_id) {
       if (!servisMi) return json({ ok: false, hata: "yetkisiz" }, 403);
-      const r = await istemBildir(db, String(govde.istem_id));
+      const r = govde.toplu_id ? await topluBildir(db, String(govde.toplu_id)) : await istemBildir(db, String(govde.istem_id));
       await db.from("push_gonderimleri").update({
         gonderildi_at: new Date().toISOString(), gonderilen: r.gonderilen, silinen: r.silinen, hata: r.hatalar.join("; ").slice(0, 500) || null,
       }).eq("istem_id", govde.istem_id);
-      if (r.hatalar.length) console.error("[push-gonder] istem", govde.istem_id, r.hatalar);
+      if (r.hatalar.length) console.error("[push-gonder] istem", govde.istem_id, govde.toplu_id ? `toplu ${govde.toplu_id}` : "", r.hatalar);
       return json({ ok: true, ...r });
     }
 

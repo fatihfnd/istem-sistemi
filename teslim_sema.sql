@@ -7,7 +7,8 @@
 -- uygulama eski sorguya düşer, teslim arayüzü gizli kalır.
 --
 -- Son halleri BU dosyadadır:
---   istem_kuyruk_v, istatistik(), blok_kesildi_geri_al()
+--   istatistik(), blok_kesildi_geri_al()  (istem_kuyruk_v'nin son hali
+--   toplu_sema.sql'de — bu dosya yeniden çalıştırılırsa onu geri almaz)
 -- duzeltme_sema.sql / ozet_yedek_sema.sql / ekip_sema.sql yeniden
 -- çalıştırılırsa bunları geri almaz (son hali kuruluysa atlar).
 --
@@ -289,6 +290,15 @@ begin;
 --                     (öncekiler teslim takibi dışında: buton çıkmaz, sayılmaz)
 --   teslim_bekliyor : teslim_takipte ve henüz teslim alınmamış
 -- ------------------------------------------------------------
+-- toplu_sema.sql çalıştıysa görünümün son hali (toplu kolonlarıyla)
+-- oradadır — o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'toplu_id'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -391,7 +401,10 @@ cross join (
   select coalesce(
            (select (s.deger #>> '{}')::timestamptz from sistem_ayarlari s where s.anahtar = 'teslim_takip_baslangic'),
            '-infinity'::timestamptz) as baslangic
-) tb;
+) tb
+    $sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 
