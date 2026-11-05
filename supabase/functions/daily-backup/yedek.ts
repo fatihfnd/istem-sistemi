@@ -16,7 +16,12 @@ type Satir = Record<string, any>;
 export const DURUM: Record<string, string> = { bekleyen: "Bekleyen", cihazda: "İşlemde", tamamlandi: "Tamamlandı", iptal: "İptal" };
 // Durum geçmişindeki teslim olayları (teslim_sema.sql) — durum değil, işaret.
 const LOG_OLAY: Record<string, string> = { ...DURUM, teslim_alindi: "Teslim alındı", teslim_geri_alindi: "Teslim geri alındı" };
-export const ONCELIK: Record<string, string> = { rutin: "Rutin", acil: "Acil", stat: "STAT" };
+// Veritabanında 'stat' — görünen ad "Çok Acil" (uygulamadaki PRIO ile aynı).
+export const ONCELIK: Record<string, string> = { rutin: "Rutin", acil: "Acil", stat: "Çok Acil" };
+// Düzeltme notları sunucuda "Öncelik Acil → STAT olarak düzeltildi" diye
+// kayıtlı — okunabilir sayfalarda "Çok Acil" (ham sayfalar olduğu gibi).
+export const oncelikNotMetni = (m: string | null | undefined) => String(m ?? "")
+  .replace(/Öncelik (?:Rutin|Acil|STAT) → (?:Rutin|Acil|STAT) olarak düzeltildi/g, (x) => x.replace(/STAT/g, "Çok Acil"));
 
 // Edge Function UTC'de çalışır — tarihler Türkiye saatiyle yazılır
 // (uygulamadaki formatDateFull ile aynı biçim).
@@ -93,7 +98,7 @@ export function okunabilirSayfalar(v: YedekVerisi) {
   const notMetni = (istemId: string, eski: string | null | undefined) => {
     if (!v.notlar) return eski ?? "";
     return [...(istemNotlari.get(istemId) ?? [])].sort(yeniOnce)
-      .map((n) => `${n.metin} (${ad(n.yazan_id) || "—"}, ${tarihSaat(n.created_at)})`).join(" | ");
+      .map((n) => `${oncelikNotMetni(n.metin)} (${ad(n.yazan_id) || "—"}, ${tarihSaat(n.created_at)})`).join(" | ");
   };
 
   const istemSayac = new Map<string, { n: number; tekrar: number }>();

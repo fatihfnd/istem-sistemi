@@ -13,7 +13,22 @@ let TIP = Object.fromEntries(GROUPS);
 const ROL_LABEL = { uzman: "Uzman Patolog", asistan: "Asistan", teknisyen: "Teknisyen" };
 // Veritabanındaki değer "cihazda" kalır — görünen ad "İşlemde".
 const PILL = { bekleyen: ["st-bekleyen", "Bekleyen"], cihazda: ["st-cihazda", "İşlemde"], tamamlandi: ["st-tamamlandi", "Tamamlandı"] };
-const PRIO = { rutin: ["p-rutin", "Rutin"], acil: ["p-acil", "Acil"], stat: ["p-stat", "STAT"] };
+// Öncelik: veritabanında 'stat' kalır; görünen ad "Çok Acil". Satır içi
+// rozetlerde yer dar — kısa ad "Ç.ACİL", tam ad üzerine gelince (title) ya
+// da dokununca (data-ipucu → bildirim).
+const PRIO = { rutin: ["p-rutin", "Rutin"], acil: ["p-acil", "Acil"], stat: ["p-stat", "Çok Acil"] };
+const PRIO_KISA = { rutin: "Rutin", acil: "Acil", stat: "Ç.ACİL" };
+const prioCip = (o) => (PRIO[o]
+  ? `<span class="prio ${PRIO[o][0]}"${o === "stat" ? ` title="${PRIO[o][1]}" data-ipucu="${PRIO[o][1]}"` : ""}>${PRIO_KISA[o]}</span>`
+  : "");
+// Kesit / arşiv satırı ve çıktılar: büyük harf kısa ad / tam ad.
+const PRIO_BUYUK = { acil: "ACİL", stat: "Ç.ACİL" };
+const prioBuyukCip = (o) => `<span class="prio ${PRIO[o][0]}" title="${PRIO[o][1]}" data-ipucu="${PRIO[o][1]}">${PRIO_BUYUK[o]}</span>`;
+const PRIO_CIKTI = { acil: "(ACİL)", stat: "(ÇOK ACİL)" };
+// Eski / sunucuda üretilen düzeltme notları "Öncelik Acil → STAT olarak
+// düzeltildi" — görünürken "Çok Acil" (kayıtlı metin değişmez).
+const oncelikNotMetni = (m) => String(m == null ? "" : m)
+  .replace(/Öncelik (?:Rutin|Acil|STAT) → (?:Rutin|Acil|STAT) olarak düzeltildi/g, (x) => x.replace(/STAT/g, "Çok Acil"));
 const KUYRUK_EXPORT_COLS = [
   { label: "Patoloji No", value: (r) => r.patoloji_no },
   { label: "Blok", value: (r) => r.blok_no },
@@ -757,6 +772,7 @@ function renderQueuePage() {
     <div class="kapsamlar" id="kapsamlar" role="tablist" aria-label="Kapsam"></div>
     <div class="barrow" id="barrow">
       <div class="tabs" id="tabs"></div>
+      <button type="button" class="acil-cip hidden" id="acilCip" aria-pressed="false"></button>
       <div class="eski-kutu hidden" id="eskiKutu" title="${ESKI_GUN} günden eski Tamamlandı kayıtlar yalnız bu ekranda gizlenir — İstatistikler, Excel'e Aktar ve yedekler her zaman tüm kayıtları kapsar.">
         <button class="btn-ghost btn-sm eski-btn" id="eskiBtn"></button>
         <span class="eski-sayac" id="eskiSayac"></span>
@@ -802,7 +818,9 @@ function renderQueuePage() {
   if (caseView !== null) { $("#barrow").classList.add("dimmed"); $("#kapsamlar").classList.add("dimmed"); }
 
   $("#kapsamlar").addEventListener("change", (e) => {
-    if (e.target.matches("[data-ilsk-toggle]")) {
+    if (e.target.matches("[data-acil-ustte]")) {
+      try { localStorage.setItem(acilUstteKey(), e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
+    } else if (e.target.matches("[data-ilsk-toggle]")) {
       try { localStorage.setItem(ILSK_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
     } else if (e.target.matches("[data-ilsk-dahil]")) {
       try { localStorage.setItem(ILSK_DAHIL_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* hatırlanmaz */ }
@@ -828,6 +846,11 @@ function renderQueuePage() {
   $("#filtreCipleri").addEventListener("click", (e) => {
     const b = e.target.closest("[data-fc]"); if (!b) return;
     filtreKaldir(b.dataset.fc);
+  });
+  $("#acilCip").addEventListener("click", () => {
+    colFilters.oncelik = acilFiltreAcik() ? new Set() : new Set(["acil", "stat"]);
+    clearBulkSelection();
+    renderTable();
   });
   bindYazdirMenu("#qYazdir", yazdirSecim);
   $("#bulkCikarildiBtn").addEventListener("click", () => {
@@ -885,7 +908,16 @@ function renderQueuePage() {
       showBlokDetay(b);
       return;
     }
-    // Yazıcı ikonu — dokunmatikte de okunabilsin.
+    // Not ikonu: son notu gösteren balon (aynı ikona tekrar dokununca kapanır).
+    const notAc = e.target.closest("[data-not-ac]");
+    if (notAc) {
+      e.stopPropagation();
+      const b = $("#notBalon");
+      if (b && !b.hidden && b.dataset.sabit && b.dataset.kalem === notAc.dataset.notAc) notBalonKapat();
+      else notBalonAc(notAc, true);
+      return;
+    }
+    // Yazıcı ikonu, öncelik rozeti — dokunmatikte de okunabilsin.
     const ipucu = e.target.closest("[data-ipucu]");
     if (ipucu) { e.stopPropagation(); toast(ipucu.title); return; }
     // Çapraz uyarı rozeti — dokunmatikte de okunabilsin.
@@ -989,6 +1021,19 @@ function renderQueuePage() {
     dragStartId = cb.dataset.bulkCheck;
     dragActive = false;
     dragValue = !bulkSelected.has(dragStartId);
+  });
+  // Not ikonu: fareyle üzerine gelince balon; ikondan / balondan çıkınca kapanır
+  // (dokunarak açılan "sabit" balon dışarı dokununca kapanır).
+  $("#rows").addEventListener("pointerover", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const ni = e.target.closest("[data-not-ac]");
+    if (ni) { const b = $("#notBalon"); if (!(b && !b.hidden && b.dataset.sabit)) notBalonAc(ni, false); }
+  });
+  $("#rows").addEventListener("pointerout", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const ni = e.target.closest("[data-not-ac]");
+    const b = $("#notBalon");
+    if (ni && b && !b.hidden && !b.dataset.sabit && !ni.contains(e.relatedTarget) && !b.contains(e.relatedTarget)) notBalonKapatGecikmeli();
   });
   $("#rows").addEventListener("mouseover", (e) => {
     if (!dragStartId) return;
@@ -1206,8 +1251,10 @@ function renderQHead() {
     ${thTextFilter("uzman", "Uzman Adına", colFilters.uzman, sortOf("uzman"))}
     ${thSortOnly("tarih", "Tarih", sortOf("tarih"))}
     ${thMultiFilter("oncelik", "Öncelik", ["rutin", "acil", "stat"].map((k) => ({ value: k, label: PRIO[k][1] })), colFilters.oncelik, sortOf("oncelik"))}
-    <th>Not</th>
+    <th class="c-not">Not</th>
   </tr>`;
+  // Dar ekranda (≤ 900 px) Öncelik ve Not sütunları gizlenir — bilgi solda (şerit, rozet, 💬).
+  head.querySelector('[data-thpanel="oncelik"]')?.closest("th")?.classList.add("c-onc");
 
   if (openKey) head.querySelector(`[data-thpanel="${openKey}"]`)?.classList.add("open");
   if (focusKey) {
@@ -1257,7 +1304,49 @@ function filtreleVeSirala(list, { eskiDahil = false } = {}) {
 // ekranında: görünen blokların (seçilebilir) kalemleri.
 function getVisibleRows() {
   if (kesitEkraniMi() || arsivEkraniMi()) return gorunenBloklar().flatMap((b) => blokKalemleri(b));
-  return filtreleVeSirala(rows);
+  const l = filtreleVeSirala(rows);
+  return acilUstteAktif() ? acilOneAl(l) : l;
+}
+
+// ---------------- Acilleri üstte tut + hızlı acil filtresi ----------------
+// Açıkken Çok Acil, sonra Acil kalemler seçili sıralamadan bağımsız olarak
+// başta; kendi içlerinde (ve kalanlar) mevcut sıralamayla. Vaka görünümünde
+// (kronolojik geçmiş) uygulanmaz. Tercih kullanıcı başına (localStorage);
+// varsayılan: teknisyende açık, diğerlerinde kapalı.
+const acilUstteKey = () => "istem_acil_ustte:" + (session ? session.id : "");
+function acilUstteTercih() {
+  try { const v = localStorage.getItem(acilUstteKey()); if (v !== null) return v === "1"; } catch (e) { /* varsayılan */ }
+  return Boolean(session && session.rol === "teknisyen");
+}
+const acilUstteAktif = () => caseView === null && acilUstteTercih();
+function acilOneAl(l) {
+  const stat = [], acil = [], diger = [];
+  l.forEach((r) => (r.oncelik === "stat" ? stat : r.oncelik === "acil" ? acil : diger).push(r));
+  return stat.length || acil.length ? [...stat, ...acil, ...diger] : l;
+}
+// "3 acil · 1 çok acil" — öncelik filtresi dışındaki tüm filtrelerle (sekme,
+// kapsam, arama…) görünen kalemler. Çipe tıklamak yalnız acil + çok acili süzer.
+const acilFiltreAcik = () => colFilters.oncelik.size === 2 && colFilters.oncelik.has("acil") && colFilters.oncelik.has("stat");
+function acilSayilari() {
+  const kayit = colFilters.oncelik;
+  colFilters.oncelik = new Set();
+  try {
+    const l = rows.filter((r) => passesFilter(r));
+    return { acil: l.filter((r) => r.oncelik === "acil").length, stat: l.filter((r) => r.oncelik === "stat").length };
+  } finally { colFilters.oncelik = kayit; }
+}
+function renderAcilCip() {
+  const el = $("#acilCip");
+  if (!el) return;
+  const acik = acilFiltreAcik();
+  if (kesitEkraniMi() || arsivEkraniMi() || caseView !== null) { el.classList.add("hidden"); return; }
+  const { acil, stat } = acilSayilari();
+  el.classList.toggle("hidden", !acil && !stat && !acik);
+  el.classList.toggle("on", acik);
+  el.setAttribute("aria-pressed", String(acik));
+  const parca = [acil || !stat ? `${acil} acil` : "", stat ? `${stat} çok acil` : ""].filter(Boolean);
+  el.innerHTML = `<span class="ac-nokta" aria-hidden="true"></span>${parca.join(" · ")}`;
+  el.title = acik ? "Acil filtresini kaldır — tüm kalemleri göster" : "Yalnız Acil ve Çok Acil kalemleri göster";
 }
 
 function renderTable() {
@@ -1284,6 +1373,11 @@ function renderTable() {
   // gönderimin ilk satırının üstünde ince ayraç.
   const topluEtiketli = caseView === null && sortCol === null;
   let oncekiToplu = null;
+  const topluGosterilen = new Set(); // "acilleri üstte" gönderimi bölerse ayraç bir kez
+  // Patoloji no yanındaki öncelik rozeti: vakanın (görünen) kalemlerinin hepsi
+  // aynı öncelikteyse yalnız vaka grubunun ilk satırında, farklıysa her satırda.
+  const vakaOncelik = new Map();
+  list.forEach((r) => { if (!vakaOncelik.has(r.patoloji_no)) vakaOncelik.set(r.patoloji_no, new Set()); vakaOncelik.get(r.patoloji_no).add(r.oncelik); });
 
   iliskiliEkle(list).forEach(({ r, ilsk }) => {
     const tr = document.createElement("tr");
@@ -1292,6 +1386,7 @@ function renderTable() {
       // İlişkili: girintili, "ilişkili" etiketli. "İlişkilileri dahil et" açıksa
       // seçilebilir ve kendi aksiyonları vardır; kapalıysa yalnız bilgi.
       tr.classList.add("iliskili");
+      if (r.oncelik === "stat" || r.oncelik === "acil") tr.classList.add(`onc-${r.oncelik}`);
       if (r.kalem_id === selId) tr.classList.add("sel");
       const dahil = iliskiliDahil();
       if (dahil) tr.classList.add("dahil", `row-${r.durum}`);
@@ -1299,7 +1394,8 @@ function renderTable() {
       tb.appendChild(tr);
       return;
     }
-    if (topluEtiketli && r.toplu_id && r.toplu_id !== oncekiToplu) {
+    if (topluEtiketli && r.toplu_id && r.toplu_id !== oncekiToplu && !topluGosterilen.has(r.toplu_id)) {
+      topluGosterilen.add(r.toplu_id);
       const ay = document.createElement("tr");
       ay.className = "toplu-ayrac";
       const sutun = tb.closest("table")?.querySelector("thead tr")?.children.length || 11;
@@ -1313,8 +1409,9 @@ function renderTable() {
     const showCaseSel = grouped ? groupStart : !seenPat.has(r.patoloji_no);
     seenPat.add(r.patoloji_no);
     tr.classList.add(`row-${r.durum}`);
-    if (teslimGecikti(r)) tr.classList.add("row-teslim-gec");
+    if (r.oncelik === "stat" || r.oncelik === "acil") tr.classList.add(`onc-${r.oncelik}`); // sol kenar şeridi
     if (grouped && groupStart && !ilkSatir) tr.classList.add("case-start");
+    const patRozet = vakaOncelik.get(r.patoloji_no).size > 1 || showCaseSel ? oncelikRozeti(r.oncelik) : "";
     if (r.kalem_id === selId) tr.classList.add("sel");
     if (yeniKalemler.has(r.kalem_id)) tr.classList.add("row-yeni");
     const caseSel = showCaseSel
@@ -1323,14 +1420,14 @@ function renderTable() {
     const tekrarTag = r.tekrar_kaynagi_id ? TEKRAR_BADGE : "";
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
       <td class="c-durum">${durumAksiyon(r)}</td>
-      <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}${yazdirIkonu([r], "calisma")}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
+      <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${patRozet}${notIkonHTML(r)}${duzRozet(r, "patoloji_no")}${yazdirIkonu([r], "calisma")}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
       <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duyuruSatirIsaretiHTML(r)}${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam", duzRozet(r, "uzman") + duzEski(r, "uzman"))}
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
-      <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span>${duzRozet(r, "oncelik")}${duzEski(r, "oncelik")}</td>
+      <td class="c-onc">${prioCip(r.oncelik)}${duzRozet(r, "oncelik")}${duzEski(r, "oncelik")}</td>
       <td class="c-not">${notHucre(r)}</td>`;
     tb.appendChild(tr);
   });
@@ -1486,8 +1583,74 @@ function kisiTd(ad, kisa, tfKey, ek = "") {
 
 // İstemin notları (istem_notlari, en yeniden eskiye). Görünüm eskiyse
 // (ek_ozellikler_sema.sql henüz çalışmadıysa) tekil not_metni'ne düşer.
+// Patoloji no yanında: "Ç.ACİL" / "ACİL" — yazı olarak (renge dayanmadan
+// okunur); tam ad üzerine gelince ya da dokununca.
+function oncelikRozeti(o) {
+  if (o !== "stat" && o !== "acil") return "";
+  return `<span class="onc-rozet onc-${o}" title="${PRIO[o][1]}" data-ipucu="${PRIO[o][1]}">${PRIO_BUYUK[o]}</span>`;
+}
+// Notu olan kalemde patoloji no yanında 💬 + sayı; dokununca / üzerine
+// gelince son notu gösteren balon (notBalonAc).
+function notIkonHTML(r) {
+  const n = notlarOf(r);
+  if (!n.length) return "";
+  return `<button type="button" class="not-ikon" data-not-ac="${r.kalem_id}" aria-label="${n.length} not — son notu göster" aria-haspopup="dialog"><span aria-hidden="true">💬</span>${n.length}</button>`;
+}
+let notBalonTimer = null;
+function notBalonAc(btn, sabit) {
+  const r = rows.find((x) => x.kalem_id === btn.dataset.notAc);
+  const n = r ? notlarOf(r) : [];
+  if (!n.length) return;
+  clearTimeout(notBalonTimer);
+  let b = $("#notBalon");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "notBalon";
+    b.className = "not-balon";
+    b.setAttribute("role", "dialog");
+    b.setAttribute("aria-label", "Son not");
+    document.body.appendChild(b);
+    b.addEventListener("pointerenter", () => clearTimeout(notBalonTimer));
+    b.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse" && !b.dataset.sabit) notBalonKapatGecikmeli(); });
+    b.addEventListener("click", (e) => {
+      const d = e.target.closest("[data-nb-detay]");
+      if (!d) return;
+      const k = rows.find((x) => x.kalem_id === d.dataset.nbDetay);
+      notBalonKapat();
+      if (k) showDetail(k);
+    });
+  }
+  const son = n[0]; // en yeni
+  const kim = son.kisaltma || (son.yazan ? initials(son.yazan) : "");
+  b.innerHTML = `<div class="nb-metin">${esc(son.metin)}</div>
+    <div class="nb-alt">${kim ? `<b title="${esc(son.yazan || "")}">${esc(kim)}</b>` : ""}${son.zaman ? `<span>${kisaTarih(son.zaman)}</span>` : ""}${n.length > 1 ? `<span class="nb-daha">+${n.length - 1} not daha</span>` : ""}</div>
+    <button type="button" class="linkbtn nb-detay" data-nb-detay="${r.kalem_id}">Detay panelinde aç →</button>`;
+  b.dataset.kalem = r.kalem_id;
+  b.dataset.sabit = sabit ? "1" : "";
+  b.dataset.acilis = String(Date.now());
+  b.hidden = false;
+  const ir = btn.getBoundingClientRect(), bw = b.offsetWidth, bh = b.offsetHeight;
+  b.style.left = `${Math.max(8, Math.min(ir.left, window.innerWidth - bw - 8))}px`;
+  b.style.top = `${ir.bottom + bh + 8 > window.innerHeight ? Math.max(8, ir.top - bh - 6) : ir.bottom + 6}px`;
+}
+function notBalonKapat() { clearTimeout(notBalonTimer); const b = $("#notBalon"); if (b) b.hidden = true; }
+function notBalonKapatGecikmeli() { clearTimeout(notBalonTimer); notBalonTimer = setTimeout(notBalonKapat, 250); }
+// Dışarı tıklama, Esc, kaydırma, pencere boyutu → balon kapanır.
+// Yakalama aşamasında: satır işleyicileri olayı durdursa da dışarı dokunuş balonu kapatır.
+document.addEventListener("pointerdown", (e) => {
+  const b = $("#notBalon");
+  if (b && !b.hidden && !b.contains(e.target) && !(e.target.closest && e.target.closest("[data-not-ac]"))) notBalonKapat();
+}, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") notBalonKapat(); });
+// (Açılıştan hemen sonraki kaydırma — dokunulan ikonun görünür alana alınması — sayılmaz.)
+document.addEventListener("scroll", (e) => {
+  const b = $("#notBalon");
+  if (b && !b.hidden && !b.contains(e.target) && Date.now() - Number(b.dataset.acilis || 0) > 400) notBalonKapat();
+}, true);
+window.addEventListener("resize", () => notBalonKapat());
+
 function notlarOf(r) {
-  if (Array.isArray(r.notlar)) return r.notlar;
+  if (Array.isArray(r.notlar)) return r.notlar.map((n) => (n && /STAT/.test(n.metin || "") ? { ...n, metin: oncelikNotMetni(n.metin) } : n));
   return r.not_metni ? [{ metin: r.not_metni }] : [];
 }
 // Tabloda: en yeni not TAM metin (teknisyene talimat — fareyle üzerine
@@ -1627,6 +1790,9 @@ function renderKapsamlar() {
     + (iliskiliKapsamMi()
       ? `<label class="ilsk-anahtar" title="Aynı patoloji no + bloktaki (blok yoksa aynı vakanın bloksuz) diğer grupların tamamlanmamış kalemleri, ana kalemin altında gösterilir"><input type="checkbox" data-ilsk-toggle ${iliskiliTercih() ? "checked" : ""}> İlişkilileri göster</label>`
         + (iliskiliTercih() ? `<label class="ilsk-anahtar" title="Açıkken ilişkili satırlar da seçilebilir ve kendi İşleme Al / Tamamla düğmeleri olur; tümünü seç ve vaka seçimi onları da kapsar. Sayaçlar yalnız ana grubu sayar."><input type="checkbox" data-ilsk-dahil ${iliskiliDahilTercih() ? "checked" : ""}> İlişkilileri dahil et</label>` : "")
+      : "")
+    + (!kesitEkraniMi() && !arsivEkraniMi() && caseView === null
+      ? `<label class="ilsk-anahtar acil-anahtar" title="Açıkken Çok Acil ve Acil kalemler, seçili sıralamadan bağımsız olarak listenin başında (önce Çok Acil, sonra Acil)"><input type="checkbox" data-acil-ustte ${acilUstteTercih() ? "checked" : ""}> Acilleri üstte tut</label>`
       : "");
 }
 
@@ -1698,14 +1864,14 @@ function iliskiliSatirHTML(r, dahil = false) {
   const etiket = `<span class="ilsk-etiket">ilişkili</span>`;
   return `<td class="bulkcell">${dahil ? `<input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç">` : ""}</td>
       <td class="c-durum">${dahil ? durumAksiyon(r, etiket) : `<div class="dacts">${etiket}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div>`}</td>
-      <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}${dahil ? yazdirIkonu([r], "calisma") : ""}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
+      <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span>${oncelikRozeti(r.oncelik)}${notIkonHTML(r)}${duzRozet(r, "patoloji_no")}${dahil ? yazdirIkonu([r], "calisma") : ""}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${duzEski(r, "blok_no")}</td>
       <td class="c-test">${esc(r.test_adi)}${duzRozet(r, "test")}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, null, duzRozet(r, "uzman") + duzEski(r, "uzman"))}
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
-      <td><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span>${duzRozet(r, "oncelik")}${duzEski(r, "oncelik")}</td>
+      <td class="c-onc">${prioCip(r.oncelik)}${duzRozet(r, "oncelik")}${duzEski(r, "oncelik")}</td>
       <td class="c-not">${notHucre(r)}</td>`;
 }
 // Kesit ekranı: bloktaki, satırın kalemleri dışındaki tamamlanmamış kalemler.
@@ -1718,6 +1884,7 @@ function blokIliskilileri(b, items) {
 const iliskiliOzet = (list) => list.map((x) => `${grupKisa(x.grup)} ${x.test_adi} (${PILL[x.durum][1]})`).join(" · ");
 function renderDurumSekmeleri() {
   const el = $("#tabs"); if (!el) return;
+  if (arsivEkraniMi() || kesitEkraniMi()) renderAcilCip(); // kesit / arşivde gizli
   if (arsivEkraniMi()) {
     const b = arsivBloklari();
     const say = { hepsi: b.length, cikarilacak: b.filter((x) => !x.cikarildi).length, cikarildi: b.filter((x) => x.cikarildi).length };
@@ -1747,6 +1914,7 @@ function renderDurumSekmeleri() {
   sekmeler.push(["all", "Hepsi"]);
   el.innerHTML = sekmeler
     .map(([f, l]) => `<button class="${isTabActive(f) ? "on" : ""}" data-f="${f}">${l} <span class="count">${say(f)}</span>${gecEki(f)}</button>`).join("");
+  renderAcilCip();
 }
 
 // ---------------- Aktif filtre çipleri ----------------
@@ -1919,7 +2087,7 @@ function renderKesitSatirlari(tb) {
       <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span>${duzRozet(blokDuzKalem(items, "patoloji_no"), "patoloji_no")}${yazdirIkonu(items, "calisma")}${duzEski(blokDuzKalem(items, "patoloji_no"), "patoloji_no")}${ciktiEskiHTML(blokCiktiEskimi(items, "calisma"))}</td>
       <td class="c-blok">${esc(b.blok || "—")}${duzRozet(blokDuzKalem(items, "blok_no"), "blok_no")}${cikan ? blokCikarildiRozeti(cikan) : ""}${duzEski(blokDuzKalem(items, "blok_no"), "blok_no")}</td>
       <td class="c-kesit">${esc(kesitOzeti(items))}${ilsk.length ? `<div class="ilsk-satir"><span class="ilsk-etiket">ilişkili</span> ${esc(iliskiliOzet(ilsk))}</div>` : ""}</td>
-      <td>${acil ? `<span class="prio ${stat ? "p-stat" : "p-acil"}">${stat ? "STAT" : "ACİL"}</span>` : ""}</td>
+      <td>${acil ? prioBuyukCip(stat ? "stat" : "acil") : ""}</td>
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(items))}</td>
       <td class="c-not">${blokNotu(items)}</td>
       <td class="c-kesit-aks"><div class="dacts">${aksiyon}</div></td>`;
@@ -2010,7 +2178,7 @@ function kesitListesiYazdir(mod = "gorunen") {
       <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th>Kesilecekler</th><th>Öncelik</th><th>İstendi</th></tr></thead>
       <tbody>${bloklar.map((b, i) => {
         const items = blokKalemleri(b);
-        const onc = items.some((r) => r.oncelik === "stat") ? "(STAT)" : blokAcilMi(b) ? "(ACİL)" : "";
+        const onc = items.some((r) => r.oncelik === "stat") ? PRIO_CIKTI.stat : blokAcilMi(b) ? PRIO_CIKTI.acil : "";
         const cls = [onc ? "acil" : "", i > 0 && bloklar[i - 1].pat !== b.pat ? "vaka-bas" : ""].filter(Boolean).join(" ");
         return `<tr${cls ? ` class="${cls}"` : ""}>
           <td class="yl-kutu"><span class="kutu"></span></td>
@@ -2088,7 +2256,7 @@ function renderArsivSatirlari(tb) {
       <td class="c-blok">${esc(b.blok || "—")}${duzRozet(blokDuzKalem(b.kalemler, "blok_no"), "blok_no")}${duzEski(blokDuzKalem(b.kalemler, "blok_no"), "blok_no")}</td>
       <td class="sayi c-arsiv">${ihk || `<span class="sifir">–</span>`}</td>
       <td class="sayi c-arsiv">${ykhk || `<span class="sifir">–</span>`}</td>
-      <td>${acil ? `<span class="prio ${stat ? "p-stat" : "p-acil"}">${stat ? "STAT" : "ACİL"}</span>` : ""}</td>
+      <td>${acil ? prioBuyukCip(stat ? "stat" : "acil") : ""}</td>
       <td class="c-tarih" style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(b.kalemler))}</td>
       <td class="c-kesit-aks"><div class="dacts">${aksiyon}</div></td>`;
     tb.appendChild(tr);
@@ -2134,7 +2302,7 @@ function arsivListesiYazdir(mod = "gorunen") {
       <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th class="yl-sayi">İHK</th><th class="yl-sayi">YK/HK</th><th>Acil</th></tr></thead>
       <tbody>${bloklar.map((b, i) => {
         const ihk = b.kalemler.filter((r) => ihkMi(r.grup)).length;
-        const onc = b.kalemler.some((r) => r.oncelik === "stat") ? "(STAT)" : blokAcilMi(b) ? "(ACİL)" : "";
+        const onc = b.kalemler.some((r) => r.oncelik === "stat") ? PRIO_CIKTI.stat : blokAcilMi(b) ? PRIO_CIKTI.acil : "";
         const cls = [onc ? "acil" : "", i > 0 && bloklar[i - 1].pat !== b.pat ? "vaka-bas" : ""].filter(Boolean).join(" ");
         return `<tr${cls ? ` class="${cls}"` : ""}>
           <td class="yl-kutu"><span class="kutu"></span></td>
@@ -4059,7 +4227,7 @@ function showForm(prefill) {
       <div class="onceki-sec hidden" id="oncekiSec"></div>
       ${pickerSectionsHTML({ withQuickFill: true })}
       <div class="m-sec"><p class="m-label">Öncelik</p>
-        <div class="prios" id="prios"><button class="on" data-p="rutin">Rutin</button><button data-p="acil">Acil</button><button data-p="stat">STAT</button></div></div>
+        <div class="prios" id="prios"><button class="on" data-p="rutin">Rutin</button><button data-p="acil">Acil</button><button data-p="stat">Çok Acil</button></div></div>
       <div class="m-sec" style="margin-bottom:2px"><p class="m-label">Not</p><textarea id="mNot" placeholder="Teknisyene not…"></textarea></div>
     </div>
     <div class="rail-foot"><button class="btn-ghost" id="cancelForm">İptal</button>${topluAktif() ? `<button class="btn-ghost btn-sepet" id="sepeteEkleBtn" title="Göndermeden sepete ekle — patoloji no, blok ve testler temizlenir, uzman ve öncelik kalır">Sepete ekle</button>` : ""}<button class="btn-primary" id="submitForm">İstek Ver</button></div>`;
@@ -6890,7 +7058,7 @@ function calismaListesiYazdir(mod = "gorunen") {
   if (!list.length) { toast("Yazdırılacak kalem yok", true); return; }
   const vakaSayisi = new Set(list.map((r) => r.patoloji_no)).size;
   const ilskSayisi = list.filter((r) => r.__iliskili).length;
-  const ONC = { acil: "(ACİL)", stat: "(STAT)" };
+  const ONC = PRIO_CIKTI;
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Çalışma Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${list.length - ilskSayisi} kalem${ilskSayisi ? ` + ${ilskSayisi} ilişkili` : ""} · ${vakaSayisi} vaka · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>

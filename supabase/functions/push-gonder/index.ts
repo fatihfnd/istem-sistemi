@@ -140,18 +140,19 @@ export async function pushGonder(ab: Abonelik, yuk: unknown, vapid: Vapid, acil 
 
 // ================================================================
 // Bildirim metni — alıcının kendi gruplarına göre
-// "17730/26 · 3 İHK (Acil)" · "17730/26 · 2 İHK · 1 HK (STAT)"
+// "17730/26 · 3 İHK (Acil)" · "17730/26 · 2 İHK · 1 HK (Çok Acil)"
+// (veritabanında öncelik 'stat' — görünen ad "Çok Acil")
 // ================================================================
 export function bildirimMetni(patNo: string, oncelik: string, sayac: Map<string, number>, gruplar: Map<string, { kisa: string; sira: number }>): string {
   const parca = [...sayac].sort((a, b) => (gruplar.get(a[0])?.sira ?? 999) - (gruplar.get(b[0])?.sira ?? 999))
     .map(([g, n]) => `${n} ${gruplar.get(g)?.kisa || g}`);
-  const onc = oncelik === "stat" ? " (STAT)" : oncelik === "acil" ? " (Acil)" : "";
+  const onc = oncelik === "stat" ? " (Çok Acil)" : oncelik === "acil" ? " (Acil)" : "";
   return `${patNo} · ${parca.join(" · ")}${onc}`;
 }
 
-// Toplu gönderim: "FD · 4 vaka, 12 test (toplu)" — acil/STAT vaka varsa sonda.
+// Toplu gönderim: "FD · 4 vaka, 12 test (toplu)" — acil / çok acil vaka varsa sonda.
 export function topluBildirimMetni(kim: string, vaka: number, test: number, acil: number, stat: number): string {
-  const ek = [stat ? `${stat} STAT` : "", acil ? `${acil} acil` : ""].filter(Boolean).join(", ");
+  const ek = [stat ? `${stat} çok acil` : "", acil ? `${acil} acil` : ""].filter(Boolean).join(", ");
   return `${kim} · ${vaka} vaka, ${test} test (toplu)${ek ? ` · ${ek}` : ""}`;
 }
 

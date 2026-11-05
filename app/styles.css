@@ -240,7 +240,7 @@ thead .bulkcell input[type=checkbox]{margin:0}
 .prio{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:6px;white-space:nowrap}
 .p-rutin{background:var(--paper);color:var(--ink-2);border:1px solid var(--line)}
 .p-acil{background:var(--amber-b);color:var(--amber-i)}
-.p-stat{background:var(--accent-soft);color:var(--accent)}
+.p-stat{background:var(--kritik-b);color:var(--kritik-i);font-weight:700}
 .act{border:1px solid var(--line);background:var(--card);color:var(--ink-2);border-radius:7px;padding:3px 9px;font-size:12px;font-weight:560;cursor:pointer;font-family:var(--sans);white-space:nowrap}
 .act:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .act:disabled{opacity:.5;cursor:not-allowed}
@@ -360,7 +360,7 @@ td.c-durum{width:1%}
 .prios button{flex:1;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:8px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
 .prios button[data-p=rutin].on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 .prios button[data-p=acil].on{background:var(--amber-i);border-color:var(--amber-i);color:var(--card)}
-.prios button[data-p=stat].on{background:var(--accent-h);border-color:var(--accent-h);color:var(--on-accent)}
+.prios button[data-p=stat].on{background:var(--kritik-i);border-color:var(--kritik-i);color:#fff}
 .rail textarea{width:100%;min-height:52px;resize:vertical;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;font-family:var(--sans);outline:0}
 .rail textarea:focus{border-color:var(--accent)}
 .onbehalf,.finput{width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--line);background:var(--card);border-radius:9px;padding:9px 11px;outline:0}
@@ -997,9 +997,7 @@ select.finput:disabled{opacity:.6;cursor:not-allowed}
 .teslim-isaret{display:inline-block;margin-left:2px;padding:0 5px;border-radius:5px;background:var(--green-b);color:var(--green-i);border:1px solid color-mix(in srgb, var(--green-i) 40%, transparent);font-size:10.5px;font-weight:700;white-space:nowrap;cursor:help}
 /* "24+ sa" — teslim bekleyen, eşikten uzun süredir Tamamlandı */
 .badge-gec{display:inline-block;margin-left:5px;padding:1px 6px;border-radius:5px;background:var(--gec-i);color:var(--on-gec);font-family:var(--sans);font-size:10.5px;font-weight:800;letter-spacing:.02em;white-space:nowrap;cursor:help}
-tbody tr.row-teslim-gec:not(.sel){background:color-mix(in srgb, var(--gec-i) 6%, var(--paper))}
-tbody tr.row-teslim-gec:not(.sel):hover{background:color-mix(in srgb, var(--gec-i) 10%, var(--paper))}
-tbody tr.row-teslim-gec > td.c-durum{box-shadow:inset 3px 0 0 var(--gec-i)}
+/* Teslim gecikmesi satırda yalnız "24+ sa" rozetiyle gösterilir — sol kenar şeridi önceliğe ayrıldı. */
 .tabs .gec-say{font-size:11px;font-weight:700;color:var(--gec-i);white-space:nowrap}
 .teslim-not{margin:-6px 0 14px;font-size:12px;color:var(--ink-3);line-height:1.4}
 .tl .lbl .badge-gec{vertical-align:1px}
@@ -1239,3 +1237,36 @@ tbody tr.toplu-ayrac td{padding:6px 14px 4px;background:var(--line-2);border-top
 @media print{ .duyuru-serit, .duyuru-bildirim, .dy-ov{display:none!important} }
 .dy-panel-bas .rx{border:0;background:transparent;font-size:20px;color:var(--ink-3);cursor:pointer;width:30px;height:30px;border-radius:8px}
 .dy-panel-bas .rx:hover{background:var(--line-2)}
+
+/* ---------------- Öncelik ve notlar: dar ekranda da görünür ---------------- */
+/* Sol kenar şeridi yalnız önceliği anlatır: Çok Acil kırmızı, Acil turuncu, Rutin yok */
+tbody tr.onc-stat > td:first-child{box-shadow:inset 4px 0 0 var(--kritik-i)}
+tbody tr.onc-acil > td:first-child{box-shadow:inset 4px 0 0 var(--amber-i)}
+/* Patoloji no yanında "Ç.ACİL" / "ACİL" — yazı olarak, renge dayanmadan okunur */
+.onc-rozet{display:inline-block;margin-left:6px;padding:0 5px;border:1px solid currentColor;border-radius:4px;font-family:var(--sans);font-size:10.5px;font-weight:800;line-height:1.5;letter-spacing:.03em;vertical-align:2px;white-space:nowrap;cursor:help}
+.onc-rozet.onc-stat{color:var(--kritik-i);background:var(--kritik-b)}
+.onc-rozet.onc-acil{color:var(--amber-i);background:var(--amber-b)}
+/* Not ikonu + sayı */
+.not-ikon{display:inline-flex;align-items:center;gap:2px;margin-left:6px;padding:0 5px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink-2);font-family:var(--sans);font-size:11px;font-weight:700;line-height:1.6;vertical-align:1px;cursor:pointer}
+.not-ikon span{font-size:11px;line-height:1}
+.not-ikon:hover{border-color:var(--accent);color:var(--accent)}
+@media (pointer:coarse){ .not-ikon{padding:2px 7px} }
+/* Not balonu */
+.not-balon{position:fixed;z-index:140;width:max-content;max-width:min(320px, calc(100vw - 16px));padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);box-shadow:var(--shadow);font-size:12.5px;line-height:1.4}
+.not-balon[hidden]{display:none}
+.not-balon .nb-metin{white-space:pre-wrap;overflow-wrap:anywhere;max-height:40vh;overflow-y:auto}
+.not-balon .nb-alt{display:flex;flex-wrap:wrap;gap:2px 8px;margin-top:5px;font-size:11.5px;color:var(--ink-3)}
+.not-balon .nb-alt b{color:var(--ink-2)}
+.not-balon .nb-daha{font-weight:600;color:var(--ink-2)}
+.not-balon .nb-detay{display:block;margin-top:6px;font-size:12px}
+/* Durum sekmelerinin yanında hızlı filtre: "3 acil · 1 çok acil" */
+.acil-cip{display:inline-flex;align-items:center;gap:6px;flex:none;padding:6px 11px;border:1px solid color-mix(in srgb, var(--amber-i) 45%, transparent);border-radius:9px;background:var(--amber-b);color:var(--ink);font-family:var(--sans);font-size:12.5px;font-weight:650;white-space:nowrap;cursor:pointer}
+.acil-cip .ac-nokta{width:8px;height:8px;border-radius:50%;background:var(--kritik-i)}
+.acil-cip:hover{border-color:var(--amber-i)}
+.acil-cip.on{background:var(--amber-i);border-color:var(--amber-i);color:var(--card)}
+.acil-cip.on .ac-nokta{background:var(--card)}
+.acil-cip.hidden{display:none}
+.acil-anahtar input{accent-color:var(--kritik-i)}
+/* Dar ekranda Öncelik ve Not sütunları gizli (bilgi solda: şerit, rozet, 💬) */
+@media (max-width:900px){ #qhead th.c-onc, #qhead th.c-not, #rows td.c-onc, #rows td.c-not{display:none} }
+.ilsk-anahtar + .acil-anahtar{margin-left:0}
