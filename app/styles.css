@@ -83,7 +83,7 @@
 }
 /* Tablo yoğunluğu — Kompakt / Normal (varsayılan, :root) / Geniş */
 :root[data-yogunluk="kompakt"]{ --cell-py:2px; --cell-px:5px; --fs-cell:12.5px; --fs-id:14px; --fs-small:10.5px; --act-size:22px }
-:root[data-yogunluk="genis"]{ --cell-py:8px; --cell-px:10px; --fs-cell:14px; --fs-id:16px; --fs-small:11.5px; --act-size:30px }
+:root[data-yogunluk="genis"]{ --cell-py:8px; --cell-px:8px; --fs-cell:14px; --fs-id:16px; --fs-small:11.5px; --act-size:30px }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{
@@ -155,7 +155,7 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .thcol{position:relative}
 .thlabel{cursor:pointer;user-select:none}
 .thlabel:hover{color:var(--ink)}
-.thcaret{border:0;background:transparent;color:var(--ink-3);cursor:pointer;font-size:9px;margin-left:3px;padding:2px 4px;border-radius:4px;vertical-align:middle}
+.thcaret{border:0;background:transparent;color:var(--ink-3);cursor:pointer;font-size:9px;margin-left:2px;padding:2px 3px;border-radius:4px;vertical-align:middle}
 .thcaret:hover{background:var(--line-2);color:var(--ink)}
 .thcaret.on{color:var(--accent)}
 .thfilter{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:4px;min-width:150px;max-height:220px;overflow-y:auto;z-index:2}
@@ -171,7 +171,7 @@ thead th{position:sticky;top:0;background:var(--paper);text-align:left;font-size
 .thcheck input{margin:0;accent-color:var(--accent)}
 .thcol.filtered{background:var(--accent-soft)}
 /* Not (teknisyene) — tam metin, sarmalanır; çok uzun notlar sütunu sonsuz genişletmesin diye üst sınır */
-.note-txt{display:block;width:max-content;max-width:320px;color:var(--ink-2);font-size:12.5px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
+.note-txt{display:block;width:max-content;max-width:220px;color:var(--ink-2);font-size:12.5px;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
 .note-by{display:inline-block;margin-right:5px;padding:0 4px;border-radius:4px;background:var(--line-2);color:var(--ink-3);font-size:10.5px;font-weight:700;letter-spacing:.02em;vertical-align:1px}
 .note-more{display:inline-block;margin-left:6px;padding:0 6px;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:11px;font-weight:700;white-space:nowrap;vertical-align:1px}
 .exportbox{position:relative}
@@ -1243,12 +1243,12 @@ tbody tr.toplu-ayrac td{padding:6px 14px 4px;background:var(--line-2);border-top
 tbody tr.onc-stat > td:first-child{box-shadow:inset 4px 0 0 var(--kritik-i)}
 tbody tr.onc-acil > td:first-child{box-shadow:inset 4px 0 0 var(--amber-i)}
 /* Patoloji no yanında "Ç.ACİL" / "ACİL" — yazı olarak, renge dayanmadan okunur */
-.onc-rozet{display:inline-block;margin-left:6px;padding:0 5px;border:1px solid currentColor;border-radius:4px;font-family:var(--sans);font-size:10.5px;font-weight:800;line-height:1.5;letter-spacing:.03em;vertical-align:2px;white-space:nowrap;cursor:help}
+.onc-rozet{display:inline-block;margin-left:4px;padding:0 4px;border:1px solid currentColor;border-radius:4px;font-family:var(--sans);font-size:10.5px;font-weight:800;line-height:1.5;letter-spacing:.03em;vertical-align:2px;white-space:nowrap;cursor:help}
 .onc-rozet.onc-stat{color:var(--kritik-i);background:var(--kritik-b)}
 .onc-rozet.onc-acil{color:var(--amber-i);background:var(--amber-b)}
 /* Not ikonu + sayı */
-.not-ikon{display:inline-flex;align-items:center;gap:2px;margin-left:6px;padding:0 5px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink-2);font-family:var(--sans);font-size:11px;font-weight:700;line-height:1.6;vertical-align:1px;cursor:pointer}
-.not-ikon span{font-size:11px;line-height:1}
+.not-ikon{display:inline-flex;align-items:center;gap:1px;margin-left:4px;padding:0 4px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink-2);font-family:var(--sans);font-size:10.5px;font-weight:700;line-height:1.5;vertical-align:1px;cursor:pointer}
+.not-ikon span{font-size:10px;line-height:1}
 .not-ikon:hover{border-color:var(--accent);color:var(--accent)}
 @media (pointer:coarse){ .not-ikon{padding:2px 7px} }
 /* Not balonu */
@@ -1270,3 +1270,26 @@ tbody tr.onc-acil > td:first-child{box-shadow:inset 4px 0 0 var(--amber-i)}
 /* Dar ekranda Öncelik ve Not sütunları gizli (bilgi solda: şerit, rozet, 💬) */
 @media (max-width:900px){ #qhead th.c-onc, #qhead th.c-not, #rows td.c-onc, #rows td.c-not{display:none} }
 .ilsk-anahtar + .acil-anahtar{margin-left:0}
+
+/* ---------------- Sütun genişlikleri: içeriğe göre sıkı ----------------
+   Kısa içerikli sütunlar width:1% + nowrap ile içeriği kadar; kalan alanı
+   Test sütunu alır (uzun test adı ve klon / kontrol satırı sarar, kesilmez). */
+#rows td.c-durum, #rows td.c-pat, #rows td.c-blok, #rows td.c-tip, #rows td.c-kisi,
+#rows td.c-zaman, #rows td.c-onc, #rows td.c-not{width:1%}
+#rows td.c-tip, #rows td.c-zaman, #rows td.c-onc{white-space:nowrap}
+#rows td.c-zaman{color:var(--ink-3);font-size:12px}
+#rows td.c-test{overflow-wrap:break-word;min-width:110px} /* uzun ad kelime kelime alt alta dizilmesin */
+.c-zaman .t-kisa{display:none}
+/* Patoloji no + öğeleri: ikon grubu aralarında 4 px, sütunu gereksiz genişletmez */
+.c-pat .pat-bas{white-space:nowrap}
+.c-pat .pat-ek{display:inline-flex;align-items:center;gap:4px;margin-left:4px;white-space:nowrap;vertical-align:1px}
+.c-pat .pat-ek > *{margin-left:0;vertical-align:0}
+.c-pat .case-sel{margin-right:4px}
+.c-pat .duz-rozet{margin-left:4px}
+@media (max-width:900px){
+  /* Dar ekranda rozet / 💬 / yazıcı grubu patoloji no'nun altına inebilir */
+  #rows td.c-pat{white-space:normal}
+  .c-pat .pat-ek{display:flex;width:max-content;margin:2px 0 0}
+  .c-zaman .t-uzun{display:none}
+  .c-zaman .t-kisa{display:inline}
+}

@@ -200,6 +200,7 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 - **Not ikonu:** notu olan kalemde patoloji no yanında 💬 + sayı. Üzerine gelince ya da dokununca balon: son not, yazan, zaman, "+N not daha", "Detay panelinde aç".
 - **Acilleri üstte tut** (kapsam satırındaki anahtar): Çok Acil, sonra Acil kalemler seçili sıralamadan bağımsız olarak başta (kendi içlerinde mevcut sırayla; vaka görünümünde uygulanmaz). Varsayılan teknisyende açık, diğerlerinde kapalı; tercih kullanıcı başına bu tarayıcıda. Durum sekmelerinin yanında hızlı filtre çipi "3 acil · 1 çok acil" (o anki sekme / kapsam / aramaya göre); tıklayınca yalnız acil ve çok acil kalemler, tekrar tıklayınca hepsi.
 - **Dar ekran (≤ 900 px):** Öncelik ve Not sütunları gizlenir (bilgi soldaki şerit, rozet ve 💬'da); geniş ekranda yerinde.
+- **Sütun genişlikleri:** Patoloji No, Blok, Durum, Tip, İsteyen / Uzman, Tarih, Öncelik ve Not içeriğe göre dar (width: 1% + nowrap); kalan alanı İstek (test) sütunu alır — uzun test adı ve klon / kontrol satırı sarar, kesilmez (en az 110 px). Patoloji no yanındaki rozet, 💬 ve yazıcı ikonu tek grupta, aralarında 4 px; dar ekranda grup patoloji no'nun altına iner. Tarih dar ekranda "06.11 13:22" (yıl yok). Hücre yatay dolgusu 6 px (Geniş yoğunlukta 8 px); yazı boyutu ve vaka çizgileri aynı.
 
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):

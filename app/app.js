@@ -1420,13 +1420,13 @@ function renderTable() {
     const tekrarTag = r.tekrar_kaynagi_id ? TEKRAR_BADGE : "";
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
       <td class="c-durum">${durumAksiyon(r)}</td>
-      <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${patRozet}${notIkonHTML(r)}${duzRozet(r, "patoloji_no")}${yazdirIkonu([r], "calisma")}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
+      <td class="c-pat"><span class="pat-bas">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}</span>${patEkHTML(patRozet, notIkonHTML(r), yazdirIkonu([r], "calisma"))}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
       <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duyuruSatirIsaretiHTML(r)}${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
-      <td>${tipTag(r.grup)}</td>
+      <td class="c-tip">${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam", duzRozet(r, "uzman") + duzEski(r, "uzman"))}
-      <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
+      <td class="c-zaman">${tarihHucre(r.created_at)}</td>
       <td class="c-onc">${prioCip(r.oncelik)}${duzRozet(r, "oncelik")}${duzEski(r, "oncelik")}</td>
       <td class="c-not">${notHucre(r)}</td>`;
     tb.appendChild(tr);
@@ -1583,6 +1583,14 @@ function kisiTd(ad, kisa, tfKey, ek = "") {
 
 // İstemin notları (istem_notlari, en yeniden eskiye). Görünüm eskiyse
 // (ek_ozellikler_sema.sql henüz çalışmadıysa) tekil not_metni'ne düşer.
+// Patoloji no yanındaki küçük öğeler (öncelik rozeti, 💬, yazıcı ikonu) tek
+// grupta, aralarında 4 px; dar ekranda grup patoloji no'nun altına inebilir.
+function patEkHTML(...parcalar) {
+  const ic = parcalar.filter(Boolean).join("");
+  return ic ? `<span class="pat-ek">${ic}</span>` : "";
+}
+// Tarih hücresi: geniş ekranda "06.11.2026 13:22", dar ekranda (CSS) "06.11 13:22".
+const tarihHucre = (iso) => (iso ? `<span class="t-uzun">${formatDateFull(iso)}</span><span class="t-kisa">${kisaTarih(iso)}</span>` : "");
 // Patoloji no yanında: "Ç.ACİL" / "ACİL" — yazı olarak (renge dayanmadan
 // okunur); tam ad üzerine gelince ya da dokununca.
 function oncelikRozeti(o) {
@@ -1864,13 +1872,13 @@ function iliskiliSatirHTML(r, dahil = false) {
   const etiket = `<span class="ilsk-etiket">ilişkili</span>`;
   return `<td class="bulkcell">${dahil ? `<input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç">` : ""}</td>
       <td class="c-durum">${dahil ? durumAksiyon(r, etiket) : `<div class="dacts">${etiket}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div>`}</td>
-      <td class="c-pat"><span class="pat-no">${esc(r.patoloji_no)}</span>${oncelikRozeti(r.oncelik)}${notIkonHTML(r)}${duzRozet(r, "patoloji_no")}${dahil ? yazdirIkonu([r], "calisma") : ""}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
+      <td class="c-pat"><span class="pat-bas"><span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}</span>${patEkHTML(oncelikRozeti(r.oncelik), notIkonHTML(r), dahil ? yazdirIkonu([r], "calisma") : "")}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${duzEski(r, "blok_no")}</td>
       <td class="c-test">${esc(r.test_adi)}${duzRozet(r, "test")}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
-      <td>${tipTag(r.grup)}</td>
+      <td class="c-tip">${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, null, duzRozet(r, "uzman") + duzEski(r, "uzman"))}
-      <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDateFull(r.created_at)}</td>
+      <td class="c-zaman">${tarihHucre(r.created_at)}</td>
       <td class="c-onc">${prioCip(r.oncelik)}${duzRozet(r, "oncelik")}${duzEski(r, "oncelik")}</td>
       <td class="c-not">${notHucre(r)}</td>`;
 }
