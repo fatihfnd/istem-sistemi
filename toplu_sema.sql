@@ -4,8 +4,8 @@
 -- teslim_sema.sql'den SONRA çalıştırın. İDEMPOTENT'tir (tekrar çalıştırmak
 -- güvenlidir). Kod bu dosyadan önce de yayınlanabilir: kolonlar / fonksiyon
 -- yoksa "Sepete ekle" görünmez, kuyruk ve Hizmetler eski sıralamaya düşer.
--- istem_kuyruk_v'nin SON HALİ bu dosyadadır (teslim_sema.sql yeniden
--- çalıştırılırsa geri almaz).
+-- istem_kuyruk_v'nin son hali artık duyuru_sema.sql'dedir (bu dosya yeniden
+-- çalıştırılırsa onu geri almaz); teslim_sema.sql bunu geri almaz.
 --
 -- Toplu gönderim = toplu_istem_olustur(p_vakalar jsonb) — TEK RPC, TEK
 -- işlem: ya bütün vakalar (istem + not + kalemler + durum kaydı) kaydedilir
@@ -197,6 +197,15 @@ begin;
 --   toplu_id, toplu_sira. İş Kuyruğu bu sırayla sıralar:
 --   istem_created_at ↓ → toplu_id → toplu_sira ↑ → istem → kalem zamanı.
 -- ------------------------------------------------------------
+-- duyuru_sema.sql çalıştıysa görünümün son hali (test_id ile) oradadır —
+-- o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'test_id'
+  ) then
+    execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -302,7 +311,10 @@ cross join (
   select coalesce(
            (select (s.deger #>> '{}')::timestamptz from sistem_ayarlari s where s.anahtar = 'teslim_takip_baslangic'),
            '-infinity'::timestamptz) as baslangic
-) tb;
+) tb
+$sql$;
+  end if;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

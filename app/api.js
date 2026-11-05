@@ -1435,6 +1435,71 @@
         .subscribe();
       return () => client.removeChannel(channel);
     },
+
+    // ---------------- Duyurular (duyuru_sema.sql) ----------------
+    // duyuru_v: aktif = cozuldu_at boş VE (bitis_at boş YA DA gelecekte) —
+    // veritabanı saatiyle. Tablo / görünüm yoksa (SQL çalıştırılmamış) null.
+    async getDuyurular({ aktif = true, limit = 100 } = {}) {
+      let q = client.from("duyuru_v").select("*").eq("aktif", aktif);
+      q = aktif
+        ? q.order("onem_sira", { ascending: true }).order("created_at", { ascending: false })
+        : q.order("kapanis_at", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }).limit(limit);
+      const { data, error } = await q;
+      if (error) {
+        if (error.code === "PGRST205" || error.code === "42P01" || /duyuru_v|does not exist|schema cache/i.test(String(error.message || ""))) return null;
+        throw error;
+      }
+      return data || [];
+    },
+    // Yazan / zaman / çözen sunucuda (tetikleyici) yazılır.
+    async duyuruEkle(v) {
+      const { data, error } = await client.from("duyurular").insert({
+        baslik: v.baslik, metin: v.metin || "", onem: v.onem, test_id: v.test_id || null, cihaz_id: v.cihaz_id || null, bitis_at: v.bitis_at || null,
+      }).select("id").single();
+      if (error) throw error;
+      return data.id;
+    },
+    // RLS'e takılan güncelleme hata vermez, 0 satır döner — yetki hatası sayılır.
+    async duyuruGuncelle(id, degisiklik) {
+      const { data, error } = await client.from("duyurular").update(degisiklik).eq("id", id).select("id");
+      if (error) throw error;
+      if (!data || !data.length) { const e = new Error("Bu duyuruyu değiştirme yetkiniz yok"); e.code = "42501"; throw e; }
+    },
+    duyuruCozuldu(id) { return this.duyuruGuncelle(id, { cozuldu_at: new Date().toISOString() }); },
+    duyuruYenidenAc(id) { return this.duyuruGuncelle(id, { cozuldu_at: null }); },
+    async duyuruSil(id) {
+      const { data, error } = await client.from("duyurular").delete().eq("id", id).select("id");
+      if (error) throw error;
+      if (!data || !data.length) { const e = new Error("Duyuruyu yalnız yönetici silebilir"); e.code = "42501"; throw e; }
+    },
+    async duyuruGuncellemeEkle(duyuruId, metin) {
+      const { error } = await client.from("duyuru_guncellemeleri").insert({ duyuru_id: duyuruId, metin });
+      if (error) throw error;
+    },
+    async duyuruGizle(duyuruId, kullaniciId) {
+      const { error } = await client.from("duyuru_gizleme").insert({ duyuru_id: duyuruId, kullanici_id: kullaniciId });
+      if (error && error.code !== "23505") throw error;
+    },
+    async duyuruGoster(duyuruId, kullaniciId) {
+      const { error } = await client.from("duyuru_gizleme").delete().eq("duyuru_id", duyuruId).eq("kullanici_id", kullaniciId);
+      if (error) throw error;
+    },
+    // "CD3 duyurusu çözüldü" — kişi bu testi son N günde istemiş mi?
+    async testiSonGunlerdeIstedim(testId, kullaniciId, gun = 7) {
+      const sinir = new Date(Date.now() - gun * 86400000).toISOString();
+      const { data, error } = await client.from("istem_kalemleri").select("id, istemler!inner(istem_yapan_id)")
+        .eq("test_id", testId).eq("istemler.istem_yapan_id", kullaniciId).gte("created_at", sinir).limit(1);
+      if (error) throw error;
+      return Boolean(data && data.length);
+    },
+    subscribeDuyurular(onChange) {
+      const channel = client
+        .channel("duyurular-realtime")
+        .on("postgres_changes", { event: "*", schema: "public", table: "duyurular" }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "duyuru_guncellemeleri" }, onChange)
+        .subscribe();
+      return () => client.removeChannel(channel);
+    },
   };
 
   window.Api = Api;

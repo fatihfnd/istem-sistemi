@@ -49,6 +49,7 @@ const EMPTY_MSG = {
   "test-katalogu": { t: "Bir test seç", d: "Düzenlemek için bir teste dokun, ya da yeni test ekle." },
   yedekler: { t: "Otomatik yedekler", d: "Her gece 02:00'de alınan veritabanı yedeklerini buradan indirebilirsiniz." },
   istatistikler: { t: "İstatistikler", d: "Canlı veritabanından hesaplanır — tarih aralığını ve dönemi üstten seç." },
+  duyurular: { t: "Duyurular", d: "Teste ya da cihaza bağlı duyurular İstek Ver formunda, İş Kuyruğu'nda ve detayda da görünür." },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -359,6 +360,7 @@ const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "test-katalogu", "
 function pageAllowed(page) {
   if (ADMIN_PAGES.has(page)) return isAdmin();
   if (page === "sablonlar") return !isTeknisyen();
+  if (page === "duyurular") return duyuruVar; // duyuru_sema.sql çalıştıysa
   return true;
 }
 // Nav/sidebar görünürlüğü — her girişte (initApp) yeniden uygulanır.
@@ -555,6 +557,7 @@ async function handleLogout() {
   await Promise.race([bildirimleriKapat({ sessiz: true }).catch(() => {}), new Promise((r) => setTimeout(r, 3000))]);
   pushDurum = { yuklendi: false, abone: false, tercihler: new Set(), mesgul: false };
   yaziyorKapat();
+  duyuruKapat();
   await Api.signOut();
   if (unsub) { unsub(); unsub = null; }
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -618,6 +621,8 @@ async function initApp(user) {
   wireStaticUI();
   if (unsub) unsub();
   unsub = Api.subscribeQueue(scheduleReload);
+  duyuruArayuzuBagla();
+  duyuruBaslat(); // şerit, Duyurular menüsü, bağlamsal işaretler (tablo yoksa hiçbiri)
 
   // Varsayılan kapsam rol/ekibe göre (bkz. varsayilanKapsam); sekreter
   // girişte Hizmetler'de açılır.
@@ -730,6 +735,8 @@ function navigate(page) {
     renderYedeklerPage();
   } else if (page === "istatistikler") {
     renderIstatistiklerPage();
+  } else if (page === "duyurular") {
+    renderDuyurularPage();
   }
 }
 
@@ -1318,7 +1325,7 @@ function renderTable() {
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}${yazdirIkonu([r], "calisma")}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
       <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
-      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
+      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duyuruSatirIsaretiHTML(r)}${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td>${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam", duzRozet(r, "uzman") + duzEski(r, "uzman"))}
@@ -2550,6 +2557,548 @@ function yaziyorYazdirOnayi(patlar) {
 }
 
 // ================================================================
+// DUYURULAR / UYARILAR (duyuru_sema.sql) — istemden bağımsız.
+// Aktif: cozuldu_at boş VE (bitis_at boş YA DA gelecekte). Liste sunucudan
+// (duyuru_v.aktif — veritabanı saati) gelir; bitiş saati ekran açıkken de
+// dolabileceği (veritabanı değişmez, canlı olay gelmez) için dakikada bir
+// burada da süzülür.
+// Gizleme: yalnız BİLGİ, kişi başına. Gizlenen bilgi duyurusu şeritte ve
+// bağlamsal yerlerde (form, kuyruk, detay) görünmez — panelde
+// "Gizlediklerin" altında, sayfada "Göster" ile.
+// Bağlamsal: test seçici (! işareti), form içi kutu, kritik onayı (İstek Ver,
+// Sepete ekle; Toplu gönder'de yalnız sonradan çıkanlar), İş Kuyruğu ⚠,
+// detay paneli, Tekrar İste uyarısı, Çalışma Listesi çıktısı.
+// ================================================================
+let DUYURULAR = [];             // aktif duyurular (duyuru_v satırları)
+let duyuruVar = false;          // tablo var mı (duyuru_sema.sql çalışmış mı)
+let duyuruUnsub = null, duyuruReloadTimer = null, duyuruSaat = null, duyuruImza = "";
+let duyuruPanelAcik = false, dyBagli = false, dyGizliAcik = false, dyBekleyenCizim = false;
+let dyArsiv = null, dyArsivLimit = 100, dySekme = "aktif", dyFiltreTest = "", dyFiltreCihaz = "";
+const dyGuncTaslak = new Map();      // duyuru id → açık "Güncelleme ekle" metni
+const dyBenimDegisikligim = new Map(); // id → zaman: kendi değişikliğimin canlı olayı bildirim üretmesin
+const DY_ONEM = {
+  kritik: { ad: "KRİTİK", kisa: "Kritik", sira: 0 },
+  uyari: { ad: "UYARI", kisa: "Uyarı", sira: 1 },
+  bilgi: { ad: "BİLGİ", kisa: "Bilgi", sira: 2 },
+};
+const dyOnem = (d) => DY_ONEM[d && d.onem] || DY_ONEM.bilgi;
+const duyuruAktifMi = (d) => Boolean(d) && !d.cozuldu_at && (!d.bitis_at || Date.parse(d.bitis_at) > Date.now());
+const duyuruGorunur = (d) => duyuruAktifMi(d) && !(d.onem === "bilgi" && d.gizledim);
+const duyuruSirala = (a, b) => dyOnem(a).sira - dyOnem(b).sira || Date.parse(b.created_at) - Date.parse(a.created_at);
+const gorunurDuyurular = () => (duyuruVar ? DUYURULAR.filter(duyuruGorunur).sort(duyuruSirala) : []);
+const gorunurImza = () => gorunurDuyurular().map((d) => d.id + d.onem).join(",");
+const gunAy = (iso) => { const d = new Date(iso); return `${iki(d.getDate())}.${iki(d.getMonth() + 1)}`; };
+function katalogTest(id) {
+  if (!id) return null;
+  for (const l of Object.values(CAT)) { const t = (l || []).find((x) => x.id === id); if (t) return t; }
+  return null;
+}
+const dyTestAd = (d) => d.test_adi || katalogTest(d.test_id)?.ad || "";
+const duyuruKisa = (d) => `${dyTestAd(d) ? dyTestAd(d) + " — " : ""}${d.baslik}`;
+const dyKisi = (ad, kisaltma) => kisaltma || (ad ? initials(ad) : "?");
+const dyBul = (id) => DUYURULAR.find((d) => d.id === id) || (dyArsiv || []).find((d) => d.id === id) || null;
+const dyBenim = (id) => { if (id) dyBenimDegisikligim.set(id, Date.now()); };
+// Bir testin / kalemin (test ya da atanmış cihaz) aktif ve görünür duyuruları, önem sırasıyla.
+const testDuyurulari = (testId) => (testId ? gorunurDuyurular().filter((d) => d.test_id === testId) : []);
+const kalemDuyurulari = (r) => (r ? gorunurDuyurular().filter((d) => (d.test_id && d.test_id === r.test_id) || (d.cihaz_id && d.cihaz_id === r.cihaz_id)) : []);
+// Kritik onayı için: verilen testlere bağlı aktif kritik duyurular (kritik gizlenemez).
+const kritikDuyurular = (testIdler) => gorunurDuyurular().filter((d) => d.onem === "kritik" && d.test_id && testIdler.includes(d.test_id));
+// Düzenleme / Çözüldü / yeniden açma: yazan kişi, teknisyen, yönetici (RLS de öyle).
+const canDuyuruDuzenle = (d) => Boolean(session && d) && (d.yazan_id === session.id || session.rol === "teknisyen" || isAdmin());
+const dyHata = (e) => (e && (e.code === "42501" || /row-level security|yetki/i.test(String(e.message || ""))) ? " — bu işlem için yetkiniz yok" : "");
+
+// ---------------- Yükleme, canlı güncelleme ----------------
+async function duyurulariYukle() {
+  if (!session || !Api.getDuyurular) return;
+  let l;
+  try { l = await Api.getDuyurular({ aktif: true }); } catch (e) { return; } // geçici bağlantı sorunu: eldekiyle devam
+  if (!session) return;
+  duyuruVar = l !== null;
+  DUYURULAR = l || [];
+  duyuruUygula();
+}
+function duyuruBaslat() {
+  duyurulariYukle().then(() => {
+    if (!duyuruVar || !session || !Api.subscribeDuyurular) return;
+    if (duyuruUnsub) duyuruUnsub();
+    duyuruUnsub = Api.subscribeDuyurular(duyuruDegisti);
+  });
+  clearInterval(duyuruSaat);
+  duyuruSaat = setInterval(() => { if (duyuruVar && gorunurImza() !== duyuruImza) duyuruUygula(); }, 60000);
+}
+function duyuruKapat() {
+  if (duyuruUnsub) { try { duyuruUnsub(); } catch (e) { /* önemli değil */ } duyuruUnsub = null; }
+  clearInterval(duyuruSaat); duyuruSaat = null;
+  clearTimeout(duyuruReloadTimer);
+  DUYURULAR = []; duyuruVar = false; dyArsiv = null; duyuruImza = ""; dyGuncTaslak.clear();
+  duyuruPaneliKapat();
+  const b = $("#duyuruBildirim"); if (b) b.hidden = true;
+  renderDuyuruSerit();
+  const nav = $('#nav a[data-page="duyurular"]'); if (nav) nav.classList.add("hidden");
+  const say = $("#dyNavSay"); if (say) say.hidden = true;
+}
+function duyuruDegisti(p) {
+  try { duyuruOlayi(p); } catch (e) { /* bildirim üretilemedi — liste yine yenilenir */ }
+  clearTimeout(duyuruReloadTimer);
+  duyuruReloadTimer = setTimeout(async () => {
+    await duyurulariYukle();
+    if (currentPage === "duyurular" && dySekme === "arsiv") duyuruArsiviYukle();
+  }, 250);
+}
+// Canlı olay: yeni (ya da kritiğe yükseltilen / yeniden açılan) kritik → ekran
+// bildirimi (yazan / değiştiren kişide değil); teste bağlı duyuru çözüldü →
+// o testi son 7 günde istemiş kişiye kısa bildirim.
+function duyuruOlayi(p) {
+  if (!p || p.table !== "duyurular" || !p.new || !p.new.id || !session) return;
+  const n = p.new, once = DUYURULAR.find((d) => d.id === n.id);
+  const benim = Date.now() - (dyBenimDegisikligim.get(n.id) || 0) < 15000;
+  const simdiKritik = n.onem === "kritik" && duyuruAktifMi(n);
+  const onceKritik = Boolean(once) && once.onem === "kritik" && duyuruAktifMi(once);
+  if (simdiKritik && !onceKritik && n.yazan_id !== session.id && !benim) kritikBildir({ ...n, test_adi: once?.test_adi });
+  if (p.eventType === "UPDATE" && n.cozuldu_at && once && !once.cozuldu_at && n.test_id && n.cozen_id !== session.id && !benim && Api.testiSonGunlerdeIstedim) {
+    const ad = once.test_adi || katalogTest(n.test_id)?.ad || n.baslik;
+    Api.testiSonGunlerdeIstedim(n.test_id, session.id, 7).then((evet) => { if (evet) toast(`${ad} duyurusu çözüldü`); }).catch(() => {});
+  }
+}
+function kritikBildir(d) {
+  const el = $("#duyuruBildirim");
+  if (!el) return;
+  $("#duyuruBildirimMetin").innerHTML = `<b>Kritik duyuru</b><span class="yb-ozet">${esc(duyuruKisa(d))}</span>`;
+  el.hidden = false;
+  el.classList.remove("parla"); void el.offsetWidth; el.classList.add("parla");
+  const s = $("#duyuruSerit");
+  if (s) { s.classList.remove("parla"); void s.offsetWidth; s.classList.add("parla"); }
+  if (sesAcik()) zilCal();
+}
+
+// Liste değişti: her görünüm kendini yeniler (tablo yeniden çizilmez).
+function duyuruUygula() {
+  duyuruImza = gorunurImza();
+  const nav = $('#nav a[data-page="duyurular"]');
+  if (nav) nav.classList.toggle("hidden", !duyuruVar || !session);
+  const say = $("#dyNavSay");
+  if (say) { const n = gorunurDuyurular().length; say.hidden = !n; say.textContent = n; }
+  renderDuyuruSerit();
+  if (duyuruPanelAcik) renderDuyuruPanel();
+  if (currentPage === "duyurular") { if (duyuruVar) renderDuyuruListesi(); else navigate("kuyruk"); }
+  duyuruIsaretleri();
+  const r = selId ? rows.find((x) => x.kalem_id === selId) : null;
+  const dd = $("#dDuyuru"); if (dd) dd.innerHTML = r ? detayDuyuruHTML(r) : "";
+  const dt = $("#dTekrarUyari"); if (dt) dt.innerHTML = r ? tekrarUyariHTML(r) : "";
+  if ($("#mPat") && $("#antis")) renderAntis($("#antiSearch")?.value || ""); // seçicideki işaretler + form içi kutu
+}
+
+function duyuruArayuzuBagla() {
+  if (dyBagli) return;
+  dyBagli = true;
+  const s = $("#duyuruSerit");
+  if (s) {
+    s.addEventListener("click", () => duyuruPaneliAc());
+    s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); duyuruPaneliAc(); } });
+  }
+  const bg = $("#duyuruBildirimGoster"); if (bg) bg.onclick = () => { $("#duyuruBildirim").hidden = true; duyuruPaneliAc(); };
+  const bk = $("#duyuruBildirimKapat"); if (bk) bk.onclick = () => { $("#duyuruBildirim").hidden = true; };
+  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("[data-dy-panel]")) { e.preventDefault(); duyuruPaneliAc(); } });
+}
+
+// ---------------- Üst şerit ----------------
+function renderDuyuruSerit() {
+  const el = $("#duyuruSerit");
+  if (!el) return;
+  const l = gorunurDuyurular();
+  const yukseklik = (h) => document.documentElement.style.setProperty("--dy-serit-h", `${h}px`); // sağdan kayan panel şeridin altından açılsın
+  if (!l.length) { el.className = "duyuru-serit hidden"; el.innerHTML = ""; yukseklik(0); return; }
+  const d = l[0], o = dyOnem(d);
+  const parla = el.classList.contains("parla");
+  el.className = `duyuru-serit ds-${d.onem}${parla ? " parla" : ""}`;
+  el.innerHTML = `<span class="ds-ikon" aria-hidden="true">${d.onem === "bilgi" ? "ℹ" : "⚠"}</span><b class="ds-onem">${o.ad}</b><span class="ds-metin">${esc(duyuruKisa(d))}</span>${l.length > 1 ? `<span class="ds-ek">+${l.length - 1} duyuru</span>` : ""}`;
+  el.title = "Duyuruları göster";
+  el.setAttribute("aria-label", `${o.kisa}: ${duyuruKisa(d)}${l.length > 1 ? ` ve ${l.length - 1} duyuru daha` : ""} — duyuruları göster`);
+  yukseklik(el.offsetHeight);
+}
+
+// ---------------- Kart (panel + sayfa) ----------------
+function duyuruKartHTML(d) {
+  const o = dyOnem(d), aktif = duyuruAktifMi(d), yetki = canDuyuruDuzenle(d);
+  const testTxt = d.test_id ? `Test: ${esc(dyTestAd(d) || "?")}${d.test_grup ? ` (${esc(grupKisa(d.test_grup))})` : ""}` : "";
+  const cihazAd = d.cihaz_adi || CIHAZLAR.find((c) => c.id === d.cihaz_id)?.ad || "?";
+  const meta = [
+    `<span title="${esc(d.yazan_adi || "")}">${esc(dyKisi(d.yazan_adi, d.yazan_kisaltma))}</span> · ${kisaTarih(d.created_at)}`,
+    testTxt, d.cihaz_id ? `Cihaz: ${esc(cihazAd)}` : "",
+    d.bitis_at && aktif ? `Bitiş: ${gunAy(d.bitis_at)}` : "",
+  ].filter(Boolean).join(" · ");
+  const kapanis = d.cozuldu_at
+    ? `<div class="dy-kapanis">✓ Çözüldü — <span title="${esc(d.cozen_adi || "")}">${esc(dyKisi(d.cozen_adi, d.cozen_kisaltma))}</span> · ${kisaTarih(d.cozuldu_at)}</div>`
+    : !aktif ? `<div class="dy-kapanis">Süresi doldu · ${kisaTarih(d.bitis_at)}</div>` : "";
+  const gunc = (d.guncellemeler || []).map((u) => `<li><span class="dy-g-meta"><b title="${esc(u.yazan || "")}">${esc(dyKisi(u.yazan, u.kisaltma))}</b> · ${kisaTarih(u.zaman)}</span> ${esc(u.metin)}</li>`).join("");
+  const taslak = dyGuncTaslak.get(d.id);
+  const aks = [
+    taslak === undefined ? `<button type="button" class="linkbtn" data-dy-gunc="${d.id}">Güncelleme ekle</button>` : "",
+    aktif && yetki ? `<button type="button" class="linkbtn" data-dy-coz="${d.id}">Çözüldü</button>` : "",
+    yetki ? `<button type="button" class="linkbtn" data-dy-duz="${d.id}">Düzenle</button>` : "",
+    aktif && d.onem === "bilgi" && !d.gizledim ? `<button type="button" class="linkbtn" data-dy-gizle="${d.id}" title="Yalnız senin ekranından kalkar">Gizle</button>` : "",
+    aktif && d.onem === "bilgi" && d.gizledim ? `<button type="button" class="linkbtn" data-dy-goster="${d.id}">Göster</button>` : "",
+    d.cozuldu_at && yetki ? `<button type="button" class="linkbtn" data-dy-yac="${d.id}">Yeniden aç</button>` : "",
+    isAdmin() ? `<button type="button" class="linkbtn dy-sil" data-dy-sil="${d.id}">Sil</button>` : "",
+  ].filter(Boolean).join("");
+  return `<article class="dy-kart dy-${esc(d.onem)}${aktif ? "" : " dy-kapali"}" data-dy="${d.id}">
+      <div class="dy-ust"><span class="dy-onem">${o.ad}</span><b class="dy-baslik">${esc(d.baslik)}</b>${d.gizledim && d.onem === "bilgi" ? `<span class="dy-gizli-not">gizledin</span>` : ""}</div>
+      ${d.metin ? `<div class="dy-metin">${esc(d.metin)}</div>` : ""}
+      <div class="dy-meta">${meta}</div>
+      ${kapanis}
+      ${gunc ? `<ul class="dy-gunc">${gunc}</ul>` : ""}
+      ${taslak !== undefined ? `<div class="dy-gunc-form"><textarea class="finput" data-dy-gunc-metin="${d.id}" maxlength="2000" rows="2" placeholder="Ek bilgi… ör. Yeni lot geldi, deneniyor">${esc(taslak)}</textarea>
+        <div class="dy-gunc-btn"><button type="button" class="btn-ghost btn-sm" data-dy-gunc-vazgec="${d.id}">Vazgeç</button><button type="button" class="btn-primary btn-sm" data-dy-gunc-kaydet="${d.id}">Ekle</button></div></div>` : ""}
+      <div class="dy-aks">${aks}</div>
+    </article>`;
+}
+// Güncelleme yazılırken (alan odakta) liste yeniden çizilmez; odak çıkınca çizilir.
+function dyCizimErtele(kap) {
+  const a = document.activeElement;
+  if (a && kap.contains(a) && a.matches && a.matches("[data-dy-gunc-metin]")) { dyBekleyenCizim = true; return true; }
+  return false;
+}
+function duyuruYenidenCiz() {
+  dyBekleyenCizim = false;
+  if (duyuruPanelAcik) renderDuyuruPanel();
+  if (currentPage === "duyurular") renderDuyuruListesi();
+}
+function dyKapBagla(kap) {
+  kap.addEventListener("click", duyuruTikla);
+  kap.addEventListener("input", (e) => { const t = e.target; if (t.matches && t.matches("[data-dy-gunc-metin]")) dyGuncTaslak.set(t.dataset.dyGuncMetin, t.value); });
+  kap.addEventListener("focusout", () => { setTimeout(() => { if (dyBekleyenCizim && !dyCizimErtele(kap)) duyuruYenidenCiz(); }, 250); });
+  kap.addEventListener("toggle", (e) => { if (e.target.matches && e.target.matches(".dy-gizli")) dyGizliAcik = e.target.open; }, true);
+}
+async function duyuruSonrasi() {
+  await duyurulariYukle();
+  if (currentPage === "duyurular" && dySekme === "arsiv") await duyuruArsiviYukle();
+  duyuruYenidenCiz();
+}
+async function duyuruTikla(e) {
+  const yakin = (s) => e.target.closest(s);
+  let x;
+  if (yakin("[data-dy-yeni]")) { duyuruFormuAc(null); return; }
+  if ((x = yakin("[data-dy-daha]"))) { dyArsivLimit += 100; duyuruArsiviYukle(); return; }
+  if ((x = yakin("[data-dy-gunc]"))) {
+    const id = x.dataset.dyGunc;
+    if (!dyGuncTaslak.has(id)) dyGuncTaslak.set(id, "");
+    duyuruYenidenCiz();
+    const ta = document.querySelector(`[data-dy-gunc-metin="${id}"]`); if (ta) ta.focus();
+    return;
+  }
+  if ((x = yakin("[data-dy-gunc-vazgec]"))) { dyGuncTaslak.delete(x.dataset.dyGuncVazgec); duyuruYenidenCiz(); return; }
+  if ((x = yakin("[data-dy-gunc-kaydet]"))) {
+    const id = x.dataset.dyGuncKaydet;
+    const ta = document.querySelector(`[data-dy-gunc-metin="${id}"]`);
+    const metin = (ta ? ta.value : "").trim();
+    if (!metin) { toast("Güncelleme metni boş", true); if (ta) ta.focus(); return; }
+    x.disabled = true;
+    try {
+      dyBenim(id);
+      await Api.duyuruGuncellemeEkle(id, metin);
+      dyGuncTaslak.delete(id);
+      toast("Güncelleme eklendi");
+      await duyuruSonrasi();
+    } catch (err) { x.disabled = false; toast(`Güncelleme eklenemedi${dyHata(err)}`, true); }
+    return;
+  }
+  const islem = async (id, fn, basari) => {
+    try { dyBenim(id); await fn(); toast(basari); await duyuruSonrasi(); }
+    catch (err) { toast(`İşlem yapılamadı${dyHata(err)}`, true); }
+  };
+  if ((x = yakin("[data-dy-coz]"))) {
+    const d = dyBul(x.dataset.dyCoz); if (!d) return;
+    if (!(await onayPenceresi({
+      baslik: `"${duyuruKisa(d)}" çözüldü olarak işaretlensin mi?`,
+      aciklama: d.test_id ? `Duyuru arşive taşınır; bu testi son 7 günde isteyenlere "${dyTestAd(d)} duyurusu çözüldü" bildirimi gider.` : "Duyuru arşive taşınır.",
+      onayMetni: "Çözüldü",
+    }))) return;
+    islem(d.id, () => Api.duyuruCozuldu(d.id), "Duyuru çözüldü olarak işaretlendi");
+    return;
+  }
+  if ((x = yakin("[data-dy-yac]"))) {
+    const d = dyBul(x.dataset.dyYac); if (!d) return;
+    if (!(await onayPenceresi({ baslik: `"${duyuruKisa(d)}" yeniden açılsın mı?`, aciklama: d.bitis_at && Date.parse(d.bitis_at) <= Date.now() ? "Bitiş tarihi geçmiş — aktif olması için Düzenle'den bitiş tarihini de değiştirin." : "Duyuru yeniden aktif olur.", onayMetni: "Yeniden aç" }))) return;
+    islem(d.id, () => Api.duyuruYenidenAc(d.id), "Duyuru yeniden açıldı");
+    return;
+  }
+  if ((x = yakin("[data-dy-duz]"))) { const d = dyBul(x.dataset.dyDuz); if (d) duyuruFormuAc(d); return; }
+  if ((x = yakin("[data-dy-gizle]"))) { const id = x.dataset.dyGizle; islem(id, () => Api.duyuruGizle(id, session.id), "Duyuru gizlendi — yalnız senin ekranından kalktı"); return; }
+  if ((x = yakin("[data-dy-goster]"))) { const id = x.dataset.dyGoster; islem(id, () => Api.duyuruGoster(id, session.id), "Duyuru yeniden gösteriliyor"); return; }
+  if ((x = yakin("[data-dy-sil]"))) {
+    const d = dyBul(x.dataset.dySil); if (!d) return;
+    if (!(await onayPenceresi({ baslik: `"${duyuruKisa(d)}" silinsin mi?`, aciklama: "Duyuru ve güncellemeleri kalıcı olarak silinir. Bu geri alınamaz.", onayMetni: "Sil" }))) return;
+    islem(d.id, () => Api.duyuruSil(d.id), "Duyuru silindi");
+  }
+}
+
+// ---------------- Panel (şeride tıklayınca) ----------------
+function duyuruPaneliAc() {
+  if (!duyuruVar || !session) return;
+  duyuruPanelAcik = true;
+  if (!$("#dyPanelOv")) {
+    const ov = document.createElement("div");
+    ov.id = "dyPanelOv";
+    ov.className = "dy-ov";
+    ov.innerHTML = `<div class="dy-panel" role="dialog" aria-modal="true" aria-labelledby="dyPanelBaslik">
+        <div class="dy-panel-bas"><h2 id="dyPanelBaslik">Duyurular</h2><button class="btn-primary btn-sm" type="button" data-dy-yeni>+ Yeni duyuru</button><button class="rx" type="button" data-dy-kapat title="Kapat" aria-label="Kapat">×</button></div>
+        <div class="dy-panel-govde" id="dyPanelGovde"></div>
+        <div class="dy-panel-alt"><button class="linkbtn" type="button" data-dy-sayfa>Tüm duyurular ve arşiv →</button></div>
+      </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov || e.target.closest("[data-dy-kapat]")) { duyuruPaneliKapat(); return; }
+      if (e.target.closest("[data-dy-sayfa]")) { duyuruPaneliKapat(); navigate("duyurular"); }
+    });
+    dyKapBagla(ov.querySelector(".dy-panel"));
+    document.addEventListener("keydown", dyPanelTus, true);
+  }
+  renderDuyuruPanel();
+  const kapat = $("#dyPanelOv [data-dy-kapat]"); if (kapat) kapat.focus();
+}
+function dyPanelTus(e) {
+  if (e.key !== "Escape" || !$("#dyPanelOv") || document.querySelector(".onay-ov")) return;
+  e.preventDefault(); e.stopPropagation();
+  duyuruPaneliKapat();
+}
+function duyuruPaneliKapat() {
+  duyuruPanelAcik = false;
+  const ov = $("#dyPanelOv"); if (ov) ov.remove();
+  document.removeEventListener("keydown", dyPanelTus, true);
+}
+function renderDuyuruPanel() {
+  const g = $("#dyPanelGovde");
+  if (!g || dyCizimErtele(g)) return;
+  const aktif = gorunurDuyurular();
+  const gizli = DUYURULAR.filter((d) => duyuruAktifMi(d) && d.onem === "bilgi" && d.gizledim).sort(duyuruSirala);
+  g.innerHTML = (aktif.length ? aktif.map(duyuruKartHTML).join("") : `<div class="dy-bos">Aktif duyuru yok.</div>`)
+    + (gizli.length ? `<details class="dy-gizli"${dyGizliAcik ? " open" : ""}><summary>Gizlediklerin (${gizli.length})</summary>${gizli.map(duyuruKartHTML).join("")}</details>` : "");
+}
+
+// ---------------- Duyurular sayfası ----------------
+function renderDuyurularPage() {
+  $("#mainView").innerHTML = `<div class="dy-sayfa" id="dySayfa">
+      <div class="page-head">
+        <h1>Duyurular</h1>
+        <div class="sub">Laboratuvar duyuruları ve uyarılar — teste ya da cihaza bağlı olanlar ilgili ekranlarda da görünür.</div>
+        <div class="spacer"></div>
+        <button class="btn-primary btn-sm" type="button" data-dy-yeni>+ Yeni duyuru</button>
+      </div>
+      <div class="dy-sayfa-ust">
+        <div class="tabs" id="dyTabs"><button type="button" data-s="aktif">Aktif <span class="count" id="dyAktifSay"></span></button><button type="button" data-s="arsiv">Arşiv</button></div>
+        <select class="finput dy-filtre" id="dyFiltreTest" aria-label="Teste göre filtre"></select>
+        <select class="finput dy-filtre" id="dyFiltreCihaz" aria-label="Cihaza göre filtre"></select>
+      </div>
+      <div class="dy-liste" id="dyListe"></div>
+    </div>`;
+  const kap = $("#dySayfa");
+  dyKapBagla(kap);
+  $("#dyTabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-s]"); if (!b || b.dataset.s === dySekme) return;
+    dySekme = b.dataset.s;
+    dyFiltreTest = ""; dyFiltreCihaz = "";
+    if (dySekme === "arsiv") { dyArsiv = null; duyuruArsiviYukle(); }
+    renderDuyuruListesi();
+  });
+  $("#dyFiltreTest").onchange = (e) => { dyFiltreTest = e.target.value; renderDuyuruListesi(); };
+  $("#dyFiltreCihaz").onchange = (e) => { dyFiltreCihaz = e.target.value; renderDuyuruListesi(); };
+  if (dySekme === "arsiv") duyuruArsiviYukle();
+  renderDuyuruListesi();
+}
+function renderDuyuruListesi() {
+  const el = $("#dyListe");
+  if (!el) return;
+  $$("#dyTabs button").forEach((b) => b.classList.toggle("on", b.dataset.s === dySekme));
+  const say = $("#dyAktifSay"); if (say) say.textContent = DUYURULAR.filter(duyuruAktifMi).length;
+  if (dyCizimErtele(el)) return;
+  const kaynak = dySekme === "aktif" ? DUYURULAR.filter(duyuruAktifMi).sort(duyuruSirala) : (dyArsiv || []);
+  // Filtre seçenekleri: bu sekmede geçen testler / cihazlar.
+  const secenek = (sel, harita, deger, tumu) => {
+    if (!sel) return;
+    const l = [...harita].sort((a, b) => a[1].localeCompare(b[1], "tr"));
+    sel.innerHTML = `<option value="">${tumu}</option>` + l.map(([id, ad]) => `<option value="${esc(id)}"${id === deger ? " selected" : ""}>${esc(ad)}</option>`).join("");
+    sel.disabled = !l.length;
+  };
+  const testler = new Map(), cihazlar = new Map();
+  kaynak.forEach((d) => {
+    if (d.test_id) testler.set(d.test_id, dyTestAd(d) || "?");
+    if (d.cihaz_id) cihazlar.set(d.cihaz_id, d.cihaz_adi || "?");
+  });
+  if (dyFiltreTest && !testler.has(dyFiltreTest)) dyFiltreTest = "";
+  if (dyFiltreCihaz && !cihazlar.has(dyFiltreCihaz)) dyFiltreCihaz = "";
+  secenek($("#dyFiltreTest"), testler, dyFiltreTest, "Tüm testler");
+  secenek($("#dyFiltreCihaz"), cihazlar, dyFiltreCihaz, "Tüm cihazlar");
+  if (dySekme === "arsiv" && dyArsiv === null) { el.innerHTML = `<div class="dy-bos">Yükleniyor…</div>`; return; }
+  const l = kaynak.filter((d) => (!dyFiltreTest || d.test_id === dyFiltreTest) && (!dyFiltreCihaz || d.cihaz_id === dyFiltreCihaz));
+  const filtreli = dyFiltreTest || dyFiltreCihaz;
+  el.innerHTML = l.length
+    ? l.map(duyuruKartHTML).join("") + (dySekme === "arsiv" && (dyArsiv || []).length >= dyArsivLimit ? `<button class="btn-ghost btn-sm dy-daha" type="button" data-dy-daha>Daha fazla göster</button>` : "")
+    : `<div class="dy-bos">${dySekme === "aktif" ? "Aktif duyuru yok." : "Arşivde duyuru yok."}${filtreli ? " (filtreye uyan)" : ""}</div>`;
+}
+async function duyuruArsiviYukle() {
+  try { const l = await Api.getDuyurular({ aktif: false, limit: dyArsivLimit }); dyArsiv = l || []; }
+  catch (e) { if (dyArsiv === null) dyArsiv = []; toast("Arşiv yüklenemedi", true); }
+  if (currentPage === "duyurular") renderDuyuruListesi();
+}
+
+// ---------------- Yeni / düzenle formu (açılır pencere) ----------------
+const tarihInput = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${iki(d.getMonth() + 1)}-${iki(d.getDate())}`; };
+// Bitiş: seçilen günün sonuna kadar (yerel 23:59:59).
+const bitisISO = (v) => { if (!v) return null; const [y, m, g] = v.split("-").map(Number); return new Date(y, m - 1, g, 23, 59, 59).toISOString(); };
+function duyuruFormuAc(d) {
+  if (document.querySelector(".dy-form-ov")) return;
+  let onem = d ? d.onem : "bilgi", testId = d ? d.test_id : null;
+  const testAdlari = d && d.test_id ? { ad: dyTestAd(d), grup: d.test_grup } : null;
+  const cihazlar = CIHAZLAR.filter((c) => c.aktif !== false || (d && c.id === d.cihaz_id));
+  const ov = document.createElement("div");
+  ov.className = "onay-ov dy-form-ov";
+  ov.innerHTML = `<form class="onay-kutu dy-form" role="dialog" aria-modal="true" aria-labelledby="dyFormBaslik" novalidate>
+      <h3 id="dyFormBaslik">${d ? "Duyuruyu düzenle" : "Yeni duyuru"}</h3>
+      <label class="m-label" for="dyBaslik">Başlık</label>
+      <input class="finput" id="dyBaslik" maxlength="200" placeholder="ör. Çalışmıyor" value="${esc(d ? d.baslik : "")}">
+      <label class="m-label" for="dyMetin">Metin</label>
+      <textarea class="finput" id="dyMetin" maxlength="4000" rows="3" placeholder="Ayrıntı (isteğe bağlı)">${esc(d ? d.metin : "")}</textarea>
+      <p class="m-label">Önem</p>
+      <div class="dy-onem-sec" id="dyOnem">${["bilgi", "uyari", "kritik"].map((k) => `<button type="button" data-o="${k}" class="dy-o-${k}${k === onem ? " on" : ""}" aria-pressed="${k === onem}">${DY_ONEM[k].kisa}</button>`).join("")}</div>
+      <label class="m-label" for="dyTestAra">Test (isteğe bağlı)</label>
+      <div class="dy-test-sec"><div id="dyTestSecili"></div>
+        <input class="finput" id="dyTestAra" placeholder="Katalogda ara… ör. CD3" autocomplete="off">
+        <div class="dy-test-sonuc" id="dyTestSonuc"></div></div>
+      <label class="m-label" for="dyCihaz">Cihaz (isteğe bağlı)</label>
+      <select class="finput" id="dyCihaz"><option value="">— cihaz yok —</option>${cihazlar.map((c) => `<option value="${esc(c.id)}"${d && d.cihaz_id === c.id ? " selected" : ""}>${esc(c.ad)}</option>`).join("")}</select>
+      <label class="m-label" for="dyBitis">Bitiş tarihi (isteğe bağlı — o günün sonuna kadar)</label>
+      <input class="finput" type="date" id="dyBitis" value="${d && d.bitis_at ? tarihInput(d.bitis_at) : ""}" min="${tarihInput(new Date().toISOString())}">
+      <div class="onay-btns"><button type="button" class="btn-ghost" data-dy-iptal>Vazgeç</button><button type="submit" class="btn-primary" id="dyKaydet">${d ? "Kaydet" : "Yayınla"}</button></div>
+    </form>`;
+  document.body.appendChild(ov);
+  const kapat = () => { document.removeEventListener("keydown", tus, true); ov.remove(); };
+  const tus = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); kapat(); } };
+  document.addEventListener("keydown", tus, true);
+  const tumTestler = Object.values(CAT).flat().filter(Boolean);
+  const secili = () => {
+    const t = katalogTest(testId) || (testId && testAdlari) || null;
+    $("#dyTestSecili").innerHTML = testId ? `<span class="bchip">${esc(t ? t.ad : "?")}${t && t.grup ? ` (${esc(grupKisa(t.grup))})` : ""} <span class="x" data-dy-test-sil role="button" aria-label="Testi kaldır">×</span></span>` : "";
+  };
+  const ara = () => {
+    const q = aramaNorm($("#dyTestAra").value);
+    const l = q ? tumTestler.filter((t) => aramaNorm(t.ad).includes(q)).slice(0, 8) : [];
+    $("#dyTestSonuc").innerHTML = l.map((t) => `<button type="button" data-dy-t="${esc(t.id)}">${esc(t.ad)}${t.klon ? ` <small>${esc(t.klon)}</small>` : ""} <small>· ${esc(grupKisa(t.grup))}</small></button>`).join("")
+      + (q && !l.length ? `<div class="dy-test-yok">Katalogda yok</div>` : "");
+  };
+  secili();
+  $("#dyTestAra").addEventListener("input", ara);
+  ov.addEventListener("click", (e) => {
+    if (e.target === ov || e.target.closest("[data-dy-iptal]")) { kapat(); return; }
+    const o = e.target.closest("[data-o]");
+    if (o) { onem = o.dataset.o; ov.querySelectorAll("#dyOnem button").forEach((b) => { b.classList.toggle("on", b === o); b.setAttribute("aria-pressed", String(b === o)); }); return; }
+    const t = e.target.closest("[data-dy-t]");
+    if (t) { testId = t.dataset.dyT; $("#dyTestAra").value = ""; ara(); secili(); return; }
+    if (e.target.closest("[data-dy-test-sil]")) { testId = null; secili(); }
+  });
+  ov.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const baslik = $("#dyBaslik").value.trim();
+    if (!baslik) { toast("Başlık gerekli", true); $("#dyBaslik").focus(); return; }
+    const v = { baslik, metin: $("#dyMetin").value.trim(), onem, test_id: testId || null, cihaz_id: $("#dyCihaz").value || null, bitis_at: bitisISO($("#dyBitis").value) };
+    if (v.bitis_at && Date.parse(v.bitis_at) <= Date.now()) { toast("Bitiş tarihi geçmişte olamaz", true); return; }
+    const btn = $("#dyKaydet"); btn.disabled = true;
+    try {
+      if (d) { dyBenim(d.id); await Api.duyuruGuncelle(d.id, v); }
+      else dyBenim(await Api.duyuruEkle(v));
+      kapat();
+      toast(d ? "Duyuru güncellendi" : v.onem === "kritik" ? "Kritik duyuru yayınlandı — herkese bildirim gidiyor" : "Duyuru yayınlandı");
+      await duyuruSonrasi();
+    } catch (err) {
+      btn.disabled = false;
+      toast(`Duyuru kaydedilemedi${dyHata(err)}`, true);
+    }
+  });
+  setTimeout(() => $("#dyBaslik").focus(), 0);
+}
+
+// ---------------- Bağlamsal gösterim ----------------
+// Test seçici çipi: kritikte kırmızı, uyarıda turuncu "!".
+function testDuyuruIsareti(testId) {
+  const d = testDuyurulari(testId).find((x) => x.onem !== "bilgi");
+  if (!d) return "";
+  const m = `${dyOnem(d).kisa} duyuru: ${d.baslik}`;
+  return `<span class="dy-cip dy-${d.onem}" title="${esc(m)}" aria-label="${esc(m)}">!</span>`;
+}
+// İstek Ver formu: seçili testlere bağlı duyurular (seçilenlerin altında).
+function renderFormDuyurulari() {
+  const el = $("#formDuyurular");
+  if (!el) return;
+  const ids = [...selectedTests.keys()];
+  const l = gorunurDuyurular().filter((d) => d.test_id && ids.includes(d.test_id));
+  el.innerHTML = l.map((d) => `<div class="dy-kutu dy-${d.onem}"><div class="dy-kutu-bas"><span class="dy-onem">${dyOnem(d).ad}</span> <b>${esc(duyuruKisa(d))}</b></div>${d.metin ? `<div class="dy-kutu-metin">${esc(d.metin)}</div>` : ""}<div class="dy-kutu-meta">${esc(dyKisi(d.yazan_adi, d.yazan_kisaltma))} · ${kisaTarih(d.created_at)}</div></div>`).join("");
+}
+// "CD3 için kritik duyuru var: çalışmıyor. Yine de istensin mi?"
+function kritikOnayi(l, onayMetni) {
+  const tek = l.length === 1;
+  return onayPenceresi({
+    baslik: tek ? `${dyTestAd(l[0])} için kritik duyuru var: ${l[0].baslik}` : "Seçilen testlerde kritik duyuru var",
+    aciklama: "Yine de istensin mi?",
+    liste: tek ? [] : l.map((d) => `${dyTestAd(d)} — ${d.baslik}`),
+    onayMetni,
+    tekSutun: true,
+  });
+}
+// İş Kuyruğu: tamamlanmamış satırda test (ya da atanmış cihaz) duyurusu → ⚠
+function duyuruSatirIsaretiHTML(r) {
+  if (!r || r.durum === "tamamlandi") return "";
+  const l = kalemDuyurulari(r);
+  if (!l.length) return "";
+  const m = l.map((d) => `${dyOnem(d).kisa}: ${duyuruKisa(d)}`).join("\n");
+  return `<span class="dy-isaret dy-${l[0].onem}" title="${esc(m)}" aria-label="${esc(m)}">${l[0].onem === "bilgi" ? "ℹ" : "⚠"}</span>`;
+}
+function duyuruIsaretleri() {
+  const tb = $("#rows");
+  if (!tb) return;
+  const trs = tb.querySelectorAll("tr[data-kalem]");
+  if (!trs.length) return;
+  const byId = new Map(rows.map((r) => [r.kalem_id, r]));
+  trs.forEach((tr) => {
+    const td = tr.querySelector(".c-test");
+    if (!td) return;
+    const html = duyuruSatirIsaretiHTML(byId.get(tr.dataset.kalem));
+    const eski = td.querySelector(".dy-isaret");
+    if (eski && eski.outerHTML === html) return;
+    if (eski) eski.remove();
+    if (!html) return;
+    const tf = td.querySelector(".tf");
+    if (tf) tf.insertAdjacentHTML("afterend", html); else td.insertAdjacentHTML("afterbegin", html);
+  });
+}
+// Detay paneli (en üstte): kalemin testine ya da atanmış cihazına bağlı aktif duyurular.
+function detayDuyuruHTML(r) {
+  return kalemDuyurulari(r).map((d) => {
+    const son = (d.guncellemeler || []).slice(-1)[0];
+    const bag = d.test_id && d.test_id === r.test_id ? "" : ` <span class="dy-bag">(cihaz: ${esc(d.cihaz_adi || "")})</span>`;
+    return `<div class="dy-kutu dy-${d.onem}">
+        <div class="dy-kutu-bas"><span class="dy-onem">${dyOnem(d).ad}</span> <b>${esc(duyuruKisa(d))}</b>${bag}</div>
+        ${d.metin ? `<div class="dy-kutu-metin">${esc(d.metin)}</div>` : ""}
+        ${son ? `<div class="dy-kutu-son">Son güncelleme: ${esc(son.metin)} <span>(${esc(dyKisi(son.yazan, son.kisaltma))} · ${kisaTarih(son.zaman)})</span></div>` : ""}
+        <div class="dy-kutu-meta">${esc(dyKisi(d.yazan_adi, d.yazan_kisaltma))} · ${kisaTarih(d.created_at)} · <button type="button" class="linkbtn" data-dy-panel>Duyuruyu aç</button></div>
+      </div>`;
+  }).join("");
+}
+// Tekrar İste: onay istenmez; testte uyarı / kritik duyuru varsa engellemeyen uyarı.
+function tekrarUyarilari(testIdler) {
+  return gorunurDuyurular().filter((d) => d.onem !== "bilgi" && d.test_id && testIdler.includes(d.test_id))
+    .map((d) => (d.onem === "kritik" ? `${dyTestAd(d)} için kritik duyuru var: ${d.baslik}` : `${dyTestAd(d)} için uyarı var: ${d.baslik}`));
+}
+function tekrarUyariHTML(r) {
+  if (!(r.durum === "cihazda" || r.durum === "tamamlandi")) return "";
+  return tekrarUyarilari([r.test_id]).map((m) => `<div class="dy-tekrar-uyari">⚠ ${esc(m)}</div>`).join("");
+}
+// Çalışma Listesi çıktısı: teste bağlı aktif uyarı / kritik — "! Kontrol kötü — 03.11"
+function yazdirDuyuruHTML(r) {
+  if (!r.test_id || !duyuruVar) return "";
+  return DUYURULAR.filter((d) => duyuruAktifMi(d) && d.onem !== "bilgi" && d.test_id === r.test_id).sort(duyuruSirala)
+    .map((d) => `<div class="yl-duyuru">! ${esc(d.baslik)} — ${gunAy(d.created_at)}</div>`).join("");
+}
+
+// ================================================================
 // ÇIKTI SIRALAMASI — Yazdır menüsünden; tüm çıktılarda tek tercih (localStorage)
 //   giris: istemin zamanı, aynı istemin kalemleri giriliş sırasıyla
 //          (kalem created_at — yaziyor_sema.sql'den sonra satır satır;
@@ -2674,7 +3223,8 @@ async function bulkTekrar() {
   const targets = rows.filter((r) => bulkSelected.has(r.kalem_id) && (r.durum === "cihazda" || r.durum === "tamamlandi"));
   const skipped = bulkSelected.size - targets.length;
   if (!targets.length) { toast("Uygun satır yok — yalnız İşlemde/Tamamlandı kalemler tekrar istenebilir", true); return; }
-  const neden = prompt(`${targets.length} kalem için tekrar istensin mi?${skipped ? ` (${skipped} uygun olmayan atlanacak)` : ""}\nAynı istemden gelenler tek yeni istemde toplanır.\n\nTekrar nedeni (opsiyonel, teknisyene not olarak gider):`, "");
+  const uyari = tekrarUyarilari([...new Set(targets.map((r) => r.test_id).filter(Boolean))]).map((m) => `⚠ ${m}\n`).join("");
+  const neden = prompt(`${uyari}${uyari ? "\n" : ""}${targets.length} kalem için tekrar istensin mi?${skipped ? ` (${skipped} uygun olmayan atlanacak)` : ""}\nAynı istemden gelenler tek yeni istemde toplanır.\n\nTekrar nedeni (opsiyonel, teknisyene not olarak gider):`, "");
   if (neden === null) return;
   try {
     const s = await Api.tekrarIsteToplu(targets.map((r) => r.kalem_id), neden.trim());
@@ -2748,7 +3298,9 @@ function detailEditing() {
 // Bekleyen kalem (ayrı bir istem kaydı olarak) kuyruğa düşer. prompt():
 // hem onay (İptal = vazgeç) hem opsiyonel tekrar nedeni (yeni istemin notu).
 async function tekrarIste(r) {
-  const neden = prompt(`${r.patoloji_no} · ${r.blok_no || "—"} · ${r.test_adi}\n\nBu kalem için tekrar istensin mi?\nTekrar nedeni (opsiyonel, teknisyene not olarak gider):`, "");
+  // Onay istenmez; testte uyarı / kritik duyuru varsa engellemeyen bir uyarı satırı.
+  const uyari = tekrarUyarilari([r.test_id]).map((m) => `⚠ ${m}\n`).join("");
+  const neden = prompt(`${uyari}${uyari ? "\n" : ""}${r.patoloji_no} · ${r.blok_no || "—"} · ${r.test_adi}\n\nBu kalem için tekrar istensin mi?\nTekrar nedeni (opsiyonel, teknisyene not olarak gider):`, "");
   if (neden === null) return;
   try {
     const yeniId = await Api.tekrarIste(r.kalem_id, neden.trim());
@@ -2876,6 +3428,7 @@ async function showDetail(r) {
     : `<div class="not-bos">Henüz not yok.</div>`;
 
   $("#detailBody").innerHTML = `
+    <div id="dDuyuru">${detayDuyuruHTML(r)}</div>
     <div id="dKimlik">
       <div class="d-pat">${esc(r.patoloji_no)}${duzRozet(r, "patoloji_no")}</div>${duzEski(r, "patoloji_no")}
       <div class="d-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}</div>${duzEski(r, "blok_no")}
@@ -2883,7 +3436,7 @@ async function showDetail(r) {
     </div>
     <div class="d-test"><div class="n">${esc(r.test_adi)}${duzRozet(r, "test")}</div>${duzEski(r, "test")}${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}${r.kontrol ? `<div class="c kontrol">Kontrol: ${esc(r.kontrol)}</div>` : ""}</div>
     ${tekrarInfo}
-    ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button></div>` : ""}
+    ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button><div id="dTekrarUyari">${tekrarUyariHTML(r)}</div></div>` : ""}
     <div class="d-grid">
       <div><div class="k">Tip</div><div class="v">${tipTag(r.grup)}</div></div>
       <div><div class="k">Öncelik</div><div class="v"><span class="prio ${PRIO[r.oncelik][0]}">${PRIO[r.oncelik][1]}</span>${duzRozet(r, "oncelik")}</div></div>
@@ -3054,6 +3607,7 @@ function pickerSectionsHTML({ withQuickFill }) {
       <div id="pickedSec" style="display:none;margin-bottom:12px">
         <p class="m-label">Seçilenler</p>
         <div class="antis" id="pickedChips"></div>
+        <div class="form-duyurular" id="formDuyurular"></div>
       </div>
       <div class="antis" id="antis"></div>
       <div class="otherbox" id="otherbox"><input id="otherin" placeholder="Katalogda olmayan istek…"><button class="add" id="addOtherBtn">+</button></div></div>
@@ -3165,7 +3719,7 @@ function renderAntis(q = "") {
   catMatches.forEach((t) => {
     const el = document.createElement("span");
     el.className = "anti";
-    el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}`;
+    el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${testDuyuruIsareti(t.id)}`;
     el.onclick = () => {
       selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
       aramaTemizle();
@@ -3228,8 +3782,9 @@ function renderPicked() {
 
   sec.style.display = chips.length ? "" : "none";
   wrap.innerHTML = chips.map((c) =>
-    `<span class="anti sel" data-kind="${c.kind}" data-key="${esc(c.key)}">${esc(c.ad)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}</span>`
+    `<span class="anti sel" data-kind="${c.kind}" data-key="${esc(c.key)}">${esc(c.ad)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}${c.kind === "cat" ? testDuyuruIsareti(c.key) : ""}</span>`
   ).join("");
+  renderFormDuyurulari();
   wrap.querySelectorAll(".anti").forEach((el) => {
     el.onclick = () => {
       if (el.dataset.kind === "cat") selectedTests.delete(el.dataset.key);
@@ -3568,6 +4123,14 @@ async function sepeteEkle() {
     onayMetni: "Yine de ekle",
     tekSutun: true,
   }))) return;
+  // Kritik duyuru onayı vaka bazında burada; onaylananlar vakaya yazılır —
+  // Toplu gönder'de yalnız bundan SONRA açılan / kritiğe yükseltilenler sorulur.
+  // (Düzenlenen vakada daha önce onaylananlar tekrar sorulmaz.)
+  const kritik = kritikDuyurular(vaka.testler.map((t) => t.test_id).filter(Boolean));
+  const oncekiOnay = (sepetDuzenlenen && liste.find((v) => v.id === sepetDuzenlenen)?.onayli_duyurular) || [];
+  const sorulacak = kritik.filter((d) => !oncekiOnay.includes(d.id));
+  if (sorulacak.length && !(await kritikOnayi(sorulacak, "Yine de ekle"))) return;
+  vaka.onayli_duyurular = kritik.map((d) => d.id);
   const duzenlenen = sepetDuzenlenen && liste.findIndex((v) => v.id === sepetDuzenlenen);
   if (sepetDuzenlenen && duzenlenen >= 0) liste[duzenlenen] = { ...vaka, id: sepetDuzenlenen, eklendi: liste[duzenlenen].eklendi };
   else liste.push(vaka);
@@ -3633,9 +4196,29 @@ async function sepetiBosalt() {
 // Toplu gönder — onay → TEK RPC (tek işlem). Başarıda sepet boşalır; hata
 // olursa sepet aynen kalır.
 async function topluGonder() {
-  const liste = sepetOku();
+  let liste = sepetOku();
   if (!liste.length) return;
   if (sepetDuzenlenen) { toast("Önce düzenlenen vakayı \"Sepette güncelle\" ile kaydedin ya da düzenlemeden vazgeçin", true); return; }
+  // Yalnız sepete eklendikten SONRA açılan ya da kritiğe yükseltilen kritik
+  // duyurular sorulur (eklerken onaylananlar vakada kayıtlı).
+  const yeniKritik = [];
+  liste.forEach((v) => kritikDuyurular(v.testler.map((t) => t.test_id).filter(Boolean))
+    .forEach((d) => { if (!(v.onayli_duyurular || []).includes(d.id)) yeniKritik.push({ v, d }); }));
+  if (yeniKritik.length) {
+    if (!(await onayPenceresi({
+      baslik: "Sepete eklendikten sonra kritik duyuru açıldı",
+      aciklama: "Bu vakalar yine de gönderilsin mi?",
+      liste: yeniKritik.map(({ v, d }) => `${v.patoloji_no} · ${dyTestAd(d)} — ${d.baslik}`),
+      onayMetni: "Yine de gönder",
+      tekSutun: true,
+    }))) return;
+    // Onaylananlar kaydedilir — gönderim başarısız olur da tekrar denenirse yeniden sorulmaz.
+    liste = liste.map((v) => {
+      const ek = yeniKritik.filter((x) => x.v.id === v.id).map((x) => x.d.id);
+      return ek.length ? { ...v, onayli_duyurular: [...new Set([...(v.onayli_duyurular || []), ...ek])] } : v;
+    });
+    sepetYaz(liste);
+  }
   const oz = sepetOzet(liste);
   if (!(await onayPenceresi({
     baslik: `${oz.vaka} vaka, ${oz.test} test toplu gönderilecek`,
@@ -3811,6 +4394,9 @@ async function submitForm() {
   if (!uzman_id) { toast("Uzman adına seçin", true); uzmanEl?.focus(); return; }
   const not_metni = $("#mNot").value.trim() || null;
   const secilenler = secilenTestler();
+  // Seçili testte aktif kritik duyuru: "CD3 için kritik duyuru var: … Yine de istensin mi?"
+  const kritik = kritikDuyurular(testler.map((t) => t.test_id).filter(Boolean));
+  if (kritik.length && !(await kritikOnayi(kritik, "Yine de iste"))) return;
 
   $("#submitForm").disabled = true;
   try {
@@ -6188,7 +6774,7 @@ function calismaListesiYazdir(mod = "gorunen") {
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(r.patoloji_no)}${duzNot(r, "patoloji_no")}</td>
           <td class="yl-id">${esc(r.blok_no || "—")}${duzNot(r, "blok_no")}</td>
-          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${r.kontrol ? `<div class="yl-kontrol">K: ${esc(r.kontrol)}</div>` : ""}${duzNot(r, "test")}</td>
+          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${r.kontrol ? `<div class="yl-kontrol">K: ${esc(r.kontrol)}</div>` : ""}${yazdirDuyuruHTML(r)}${duzNot(r, "test")}</td>
           <td>${ONC[r.oncelik] || ""}${duzNot(r, "oncelik")}</td>
           <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}${duzNot(r, "uzman")}</td>
           <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>
