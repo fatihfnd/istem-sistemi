@@ -1102,13 +1102,26 @@ tbody tr.toplu-ayrac td{padding:6px 14px 4px;background:var(--line-2);border-top
 
 /* ---------------- Duyurular / uyarılar ---------------- */
 /* Üst şerit: kritik kırmızı, uyarı turuncu, bilgi nötr */
-.duyuru-serit{flex:none;display:flex;align-items:center;gap:8px;min-height:30px;padding:5px 16px;font-size:12.5px;line-height:1.3;cursor:pointer;border-bottom:1px solid var(--line);background:var(--line-2);color:var(--ink);user-select:none}
+.duyuru-serit{flex:none;display:flex;align-items:center;gap:8px;min-height:30px;padding:3px 10px 3px 16px;font-size:12.5px;line-height:1.3;border-bottom:1px solid var(--line);background:var(--line-2);color:var(--ink);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;transition:background-color .3s ease, color .3s ease, border-color .3s ease}
 .duyuru-serit.hidden{display:none}
-.duyuru-serit:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* Tıklanınca gösterilen duyuruyu panelde açan ana alan; sığmayan metin "…" ile kesilir (kayan yazı yok) */
+.duyuru-serit .ds-ana{flex:1;min-width:0;display:flex;align-items:center;min-height:24px;margin:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;overflow:hidden}
+.duyuru-serit .ds-ana:focus-visible{outline:2px solid currentColor;outline-offset:1px;border-radius:4px}
+.duyuru-serit .ds-govde{flex:1;min-width:0;display:flex;align-items:center;gap:8px;transition:opacity .15s ease, transform .15s ease}
+.duyuru-serit .ds-govde.ds-cikiyor{opacity:0;transform:translateY(-8px)}
+.duyuru-serit .ds-govde.ds-giriyor{opacity:0;transform:translateY(8px);transition:none}
 .duyuru-serit .ds-ikon{flex:none;font-weight:700}
 .duyuru-serit .ds-onem{flex:none;font-size:10.5px;letter-spacing:.06em}
 .duyuru-serit .ds-metin{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.duyuru-serit .ds-ek{flex:none;font-weight:600;padding:1px 8px;border-radius:10px;background:color-mix(in srgb, currentColor 12%, transparent);white-space:nowrap}
+/* Konum göstergesi "2 / 4" ve ‹ › okları */
+.duyuru-serit .ds-nav{flex:none;display:inline-flex;align-items:center;gap:2px}
+.duyuru-serit .ds-nav[hidden]{display:none}
+.duyuru-serit .ds-sayac{min-width:36px;text-align:center;font-size:11.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.duyuru-serit .ds-ok{width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;margin:0;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:17px;line-height:1;cursor:pointer}
+.duyuru-serit .ds-ok:hover{background:color-mix(in srgb, currentColor 14%, transparent)}
+.duyuru-serit .ds-ok:focus-visible{outline:2px solid currentColor;outline-offset:-1px}
+@media (pointer:coarse){ .duyuru-serit .ds-ok{width:32px;height:28px} }
+@media (prefers-reduced-motion:reduce){ .duyuru-serit, .duyuru-serit .ds-govde{transition:none} }
 .duyuru-serit.ds-kritik{background:var(--kritik-i);color:#fff;border-bottom-color:var(--kritik-i)}
 :root[data-mod="koyu"] .duyuru-serit.ds-kritik{color:#1d0705}
 .duyuru-serit.ds-uyari{background:var(--amber-b);color:var(--ink);border-bottom-color:color-mix(in srgb, var(--amber-i) 40%, transparent)}
@@ -1171,6 +1184,7 @@ tbody tr.toplu-ayrac td{padding:6px 14px 4px;background:var(--line-2);border-top
 .dy-gizli{margin-top:4px}
 .dy-gizli summary{cursor:pointer;font-size:12.5px;color:var(--ink-2);padding:4px 0}
 .dy-gizli .dy-kart{margin-top:8px}
+.dy-kart.dy-vurgu{box-shadow:0 0 0 2px var(--accent), var(--shadow)}
 /* Duyurular sayfası */
 .dy-sayfa{display:flex;flex-direction:column;min-height:0;flex:1}
 .dy-sayfa-ust{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:0 26px 12px}

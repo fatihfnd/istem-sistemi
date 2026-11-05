@@ -2631,6 +2631,7 @@ function duyuruKapat() {
   clearInterval(duyuruSaat); duyuruSaat = null;
   clearTimeout(duyuruReloadTimer);
   DUYURULAR = []; duyuruVar = false; dyArsiv = null; duyuruImza = ""; dyGuncTaslak.clear();
+  dsSifirla();
   duyuruPaneliKapat();
   const b = $("#duyuruBildirim"); if (b) b.hidden = true;
   renderDuyuruSerit();
@@ -2654,7 +2655,10 @@ function duyuruOlayi(p) {
   const benim = Date.now() - (dyBenimDegisikligim.get(n.id) || 0) < 15000;
   const simdiKritik = n.onem === "kritik" && duyuruAktifMi(n);
   const onceKritik = Boolean(once) && once.onem === "kritik" && duyuruAktifMi(once);
-  if (simdiKritik && !onceKritik && n.yazan_id !== session.id && !benim) kritikBildir({ ...n, test_adi: once?.test_adi });
+  if (simdiKritik && !onceKritik) {
+    dsSerit.atla = { id: n.id, zaman: Date.now() }; // liste yenilenince şerit hemen ona geçer
+    if (n.yazan_id !== session.id && !benim) kritikBildir({ ...n, test_adi: once?.test_adi });
+  }
   if (p.eventType === "UPDATE" && n.cozuldu_at && once && !once.cozuldu_at && n.test_id && n.cozen_id !== session.id && !benim && Api.testiSonGunlerdeIstedim) {
     const ad = once.test_adi || katalogTest(n.test_id)?.ad || n.baslik;
     Api.testiSonGunlerdeIstedim(n.test_id, session.id, 7).then((evet) => { if (evet) toast(`${ad} duyurusu çözüldü`); }).catch(() => {});
@@ -2664,6 +2668,7 @@ function kritikBildir(d) {
   const el = $("#duyuruBildirim");
   if (!el) return;
   $("#duyuruBildirimMetin").innerHTML = `<b>Kritik duyuru</b><span class="yb-ozet">${esc(duyuruKisa(d))}</span>`;
+  el.dataset.dyId = d.id;
   el.hidden = false;
   el.classList.remove("parla"); void el.offsetWidth; el.classList.add("parla");
   const s = $("#duyuruSerit");
@@ -2693,28 +2698,142 @@ function duyuruArayuzuBagla() {
   dyBagli = true;
   const s = $("#duyuruSerit");
   if (s) {
-    s.addEventListener("click", () => duyuruPaneliAc());
-    s.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); duyuruPaneliAc(); } });
+    s.addEventListener("click", (e) => {
+      const ok = e.target.closest("[data-ds-ok]");
+      if (ok) { dsGec(Number(ok.dataset.dsOk)); return; } // elle geçiş — sayaç baştan
+      const ana = e.target.closest(".ds-ana");
+      if (ana) duyuruPaneliAc(ana.dataset.dyId); // gösterilen duyuru panelde açılır
+    });
+    // Duraklatma: fare üzerindeyken, dokunup basılı tutulurken, klavye odağındayken.
+    s.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") dsDuraklat("fare"); });
+    s.addEventListener("pointerleave", (e) => dsDevam(e.pointerType === "mouse" ? "fare" : "dokunma"));
+    s.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") dsDuraklat("dokunma"); });
+    ["pointerup", "pointercancel"].forEach((t) => s.addEventListener(t, (e) => { if (e.pointerType !== "mouse") dsDevam("dokunma"); }));
+    s.addEventListener("contextmenu", (e) => { if (dsSerit.dur.has("dokunma")) e.preventDefault(); }); // uzun basış menü açmasın
+    s.addEventListener("focusin", (e) => { if (e.target.matches && e.target.matches(":focus-visible")) dsDuraklat("odak"); });
+    s.addEventListener("focusout", (e) => { if (!s.contains(e.relatedTarget)) dsDevam("odak"); });
   }
-  const bg = $("#duyuruBildirimGoster"); if (bg) bg.onclick = () => { $("#duyuruBildirim").hidden = true; duyuruPaneliAc(); };
+  // Sekme arka plandayken zamanlayıcı durur; dönünce kalan süreden devam eder.
+  if (document.visibilityState === "hidden") dsDuraklat("gizli");
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") dsDuraklat("gizli"); else dsDevam("gizli"); });
+  const bg = $("#duyuruBildirimGoster"); if (bg) bg.onclick = () => { const b = $("#duyuruBildirim"); b.hidden = true; duyuruPaneliAc(b.dataset.dyId); };
   const bk = $("#duyuruBildirimKapat"); if (bk) bk.onclick = () => { $("#duyuruBildirim").hidden = true; };
-  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("[data-dy-panel]")) { e.preventDefault(); duyuruPaneliAc(); } });
+  document.addEventListener("click", (e) => { const x = e.target.closest && e.target.closest("[data-dy-panel]"); if (x) { e.preventDefault(); duyuruPaneliAc(x.dataset.dyPanel || null); } });
 }
 
-// ---------------- Üst şerit ----------------
+// ---------------- Üst şerit: otomatik geçiş ----------------
+// Görünür aktif duyurular önem sırasıyla (kritik → uyarı → bilgi; eşitse en
+// yeni) döner: kritik 8, uyarı 6, bilgi 5 sn kalır, ~300 ms yumuşak geçişle
+// (yukarı kayıp solarak; "hareketi azalt" açıksa animasyonsuz) sıradakine
+// geçer, sondan başa döner. Şerit rengi gösterilen duyurunun önemi.
+// Duraklar: fare üzerindeyken, dokunup basılı tutulurken, klavye odağı
+// içindeyken, sekme arka plandayken — dönünce KALAN süreden devam eder.
+// ‹ › elle geçer, süre o andan baştan sayılır. Yeni kritik gelince hemen ona
+// atlanır. Tek duyuruda geçiş, ok ve sayaç yok.
+const DS_SURE = { kritik: 8000, uyari: 6000, bilgi: 5000 };
+const dsSerit = { id: null, idx: 0, aktif: false, timer: null, bitis: 0, kalan: 0, dur: new Set(), atla: null, gecis: null };
+const dsSure = (d) => DS_SURE[d && d.onem] || DS_SURE.bilgi;
+const azHareket = () => Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+// Süre sayacı: duraklatılmışsa yalnız kalan süre saklanır.
+function dsZamanla(ms) {
+  clearTimeout(dsSerit.timer);
+  dsSerit.timer = null;
+  dsSerit.kalan = ms;
+  if (dsSerit.dur.size || !dsSerit.aktif) return;
+  dsSerit.bitis = Date.now() + ms;
+  dsSerit.timer = setTimeout(() => { dsSerit.timer = null; dsGec(1); }, ms);
+}
+function dsDuraklat(neden) {
+  if (dsSerit.dur.has(neden)) return;
+  dsSerit.dur.add(neden);
+  if (dsSerit.timer) {
+    clearTimeout(dsSerit.timer);
+    dsSerit.timer = null;
+    dsSerit.kalan = Math.max(0, dsSerit.bitis - Date.now());
+  }
+}
+function dsDevam(neden) {
+  if (!dsSerit.dur.delete(neden) || dsSerit.dur.size || dsSerit.timer || !dsSerit.aktif) return;
+  dsZamanla(Math.max(dsSerit.kalan, 300));
+}
+function dsSifirla() {
+  clearTimeout(dsSerit.timer); clearTimeout(dsSerit.gecis);
+  Object.assign(dsSerit, { id: null, idx: 0, aktif: false, timer: null, kalan: 0, atla: null, gecis: null });
+  ["fare", "dokunma", "odak"].forEach((n) => dsSerit.dur.delete(n));
+}
 function renderDuyuruSerit() {
   const el = $("#duyuruSerit");
   if (!el) return;
   const l = gorunurDuyurular();
   const yukseklik = (h) => document.documentElement.style.setProperty("--dy-serit-h", `${h}px`); // sağdan kayan panel şeridin altından açılsın
-  if (!l.length) { el.className = "duyuru-serit hidden"; el.innerHTML = ""; yukseklik(0); return; }
-  const d = l[0], o = dyOnem(d);
-  const parla = el.classList.contains("parla");
-  el.className = `duyuru-serit ds-${d.onem}${parla ? " parla" : ""}`;
-  el.innerHTML = `<span class="ds-ikon" aria-hidden="true">${d.onem === "bilgi" ? "ℹ" : "⚠"}</span><b class="ds-onem">${o.ad}</b><span class="ds-metin">${esc(duyuruKisa(d))}</span>${l.length > 1 ? `<span class="ds-ek">+${l.length - 1} duyuru</span>` : ""}`;
-  el.title = "Duyuruları göster";
-  el.setAttribute("aria-label", `${o.kisa}: ${duyuruKisa(d)}${l.length > 1 ? ` ve ${l.length - 1} duyuru daha` : ""} — duyuruları göster`);
+  if (!l.length) { dsSifirla(); el.className = "duyuru-serit hidden"; el.innerHTML = ""; yukseklik(0); return; }
+  // Gösterilecek: yeni gelen kritik → gösterilen (listede kaldıysa) → aynı sıradaki.
+  const onceki = el.classList.contains("hidden") ? null : dsSerit.id;
+  let i = -1;
+  if (dsSerit.atla) {
+    if (Date.now() - dsSerit.atla.zaman > 15000) dsSerit.atla = null;
+    else if ((i = l.findIndex((d) => d.id === dsSerit.atla.id)) >= 0) dsSerit.atla = null;
+  }
+  if (i < 0) i = l.findIndex((d) => d.id === dsSerit.id);
+  if (i < 0) i = Math.min(dsSerit.idx, l.length - 1);
+  const yeni = l[i].id !== dsSerit.id;
+  dsSerit.idx = i;
+  dsSerit.id = l[i].id;
+  dsSerit.aktif = l.length > 1;
+  dsCiz(el, l, i, yeni && onceki !== null);
   yukseklik(el.offsetHeight);
+  if (!dsSerit.aktif) { clearTimeout(dsSerit.timer); dsSerit.timer = null; dsSerit.kalan = 0; return; }
+  if (yeni) dsZamanla(dsSure(l[i]));
+  else if (!dsSerit.timer) {
+    if (dsSerit.kalan <= 0) dsSerit.kalan = dsSure(l[i]);
+    if (!dsSerit.dur.size) dsZamanla(dsSerit.kalan);
+  }
+}
+// yon: +1 sonraki, -1 önceki (sondan başa / baştan sona döner).
+function dsGec(yon) {
+  const el = $("#duyuruSerit");
+  const l = gorunurDuyurular();
+  if (!el || l.length < 2) { renderDuyuruSerit(); return; }
+  let i = l.findIndex((d) => d.id === dsSerit.id);
+  if (i < 0) i = dsSerit.idx;
+  i = (i + yon + l.length) % l.length;
+  dsSerit.idx = i;
+  dsSerit.id = l[i].id;
+  dsSerit.aktif = true;
+  dsCiz(el, l, i, true);
+  dsZamanla(dsSure(l[i]));
+}
+function dsCiz(el, l, i, animasyon) {
+  const d = l[i], o = dyOnem(d), coklu = l.length > 1;
+  if (!el.querySelector(".ds-ana")) {
+    el.innerHTML = `<button type="button" class="ds-ana"><span class="ds-govde"></span></button>`
+      + `<span class="ds-nav"><button type="button" class="ds-ok" data-ds-ok="-1" aria-label="Önceki duyuru" title="Önceki duyuru">‹</button>`
+      + `<span class="ds-sayac" aria-hidden="true"></span>`
+      + `<button type="button" class="ds-ok" data-ds-ok="1" aria-label="Sonraki duyuru" title="Sonraki duyuru">›</button></span>`;
+  }
+  const ana = el.querySelector(".ds-ana"), govde = el.querySelector(".ds-govde");
+  el.querySelector(".ds-nav").hidden = !coklu;
+  el.querySelector(".ds-sayac").textContent = coklu ? `${i + 1} / ${l.length}` : "";
+  ana.dataset.dyId = d.id;
+  ana.title = `${duyuruKisa(d)} — panelde aç`;
+  ana.setAttribute("aria-label", `${o.kisa}: ${duyuruKisa(d)}${coklu ? ` (duyuru ${i + 1} / ${l.length})` : ""} — panelde aç`);
+  const html = `<span class="ds-ikon" aria-hidden="true">${d.onem === "bilgi" ? "ℹ" : "⚠"}</span><b class="ds-onem">${o.ad}</b><span class="ds-metin">${esc(duyuruKisa(d))}</span>`;
+  const uygula = () => {
+    govde.innerHTML = html;
+    el.className = `duyuru-serit ds-${d.onem}${el.classList.contains("parla") ? " parla" : ""}`;
+  };
+  clearTimeout(dsSerit.gecis);
+  govde.classList.remove("ds-cikiyor", "ds-giriyor");
+  if (!animasyon || azHareket()) { uygula(); return; }
+  // ~300 ms: 150 ms yukarı kayıp solar, içerik ve renk değişir, 150 ms aşağıdan gelir.
+  govde.classList.add("ds-cikiyor");
+  dsSerit.gecis = setTimeout(() => {
+    uygula();
+    govde.classList.remove("ds-cikiyor");
+    govde.classList.add("ds-giriyor");
+    void govde.offsetWidth;
+    govde.classList.remove("ds-giriyor");
+  }, 150);
 }
 
 // ---------------- Kart (panel + sayfa) ----------------
@@ -2833,7 +2952,8 @@ async function duyuruTikla(e) {
 }
 
 // ---------------- Panel (şeride tıklayınca) ----------------
-function duyuruPaneliAc() {
+// odakId: panel o duyuruya kaydırılır ve kısa süre vurgulanır (şeritten açılınca).
+function duyuruPaneliAc(odakId) {
   if (!duyuruVar || !session) return;
   duyuruPanelAcik = true;
   if (!$("#dyPanelOv")) {
@@ -2854,7 +2974,13 @@ function duyuruPaneliAc() {
     document.addEventListener("keydown", dyPanelTus, true);
   }
   renderDuyuruPanel();
-  const kapat = $("#dyPanelOv [data-dy-kapat]"); if (kapat) kapat.focus();
+  const kapat = $("#dyPanelOv [data-dy-kapat]"); if (kapat) kapat.focus({ preventScroll: true });
+  const kart = odakId ? [...$$("#dyPanelGovde .dy-kart")].find((k) => k.dataset.dy === odakId) : null;
+  if (kart) {
+    kart.scrollIntoView({ block: "nearest", behavior: azHareket() ? "auto" : "smooth" });
+    kart.classList.add("dy-vurgu");
+    setTimeout(() => kart.classList.remove("dy-vurgu"), 1800);
+  }
 }
 function dyPanelTus(e) {
   if (e.key !== "Escape" || !$("#dyPanelOv") || document.querySelector(".onay-ov")) return;
@@ -3003,8 +3129,10 @@ function duyuruFormuAc(d) {
     if (v.bitis_at && Date.parse(v.bitis_at) <= Date.now()) { toast("Bitiş tarihi geçmişte olamaz", true); return; }
     const btn = $("#dyKaydet"); btn.disabled = true;
     try {
-      if (d) { dyBenim(d.id); await Api.duyuruGuncelle(d.id, v); }
-      else dyBenim(await Api.duyuruEkle(v));
+      let id;
+      if (d) { id = d.id; dyBenim(id); await Api.duyuruGuncelle(id, v); }
+      else { id = await Api.duyuruEkle(v); dyBenim(id); }
+      if (v.onem === "kritik" && (!d || d.onem !== "kritik")) dsSerit.atla = { id, zaman: Date.now() };
       kapat();
       toast(d ? "Duyuru güncellendi" : v.onem === "kritik" ? "Kritik duyuru yayınlandı — herkese bildirim gidiyor" : "Duyuru yayınlandı");
       await duyuruSonrasi();
@@ -3078,7 +3206,7 @@ function detayDuyuruHTML(r) {
         <div class="dy-kutu-bas"><span class="dy-onem">${dyOnem(d).ad}</span> <b>${esc(duyuruKisa(d))}</b>${bag}</div>
         ${d.metin ? `<div class="dy-kutu-metin">${esc(d.metin)}</div>` : ""}
         ${son ? `<div class="dy-kutu-son">Son güncelleme: ${esc(son.metin)} <span>(${esc(dyKisi(son.yazan, son.kisaltma))} · ${kisaTarih(son.zaman)})</span></div>` : ""}
-        <div class="dy-kutu-meta">${esc(dyKisi(d.yazan_adi, d.yazan_kisaltma))} · ${kisaTarih(d.created_at)} · <button type="button" class="linkbtn" data-dy-panel>Duyuruyu aç</button></div>
+        <div class="dy-kutu-meta">${esc(dyKisi(d.yazan_adi, d.yazan_kisaltma))} · ${kisaTarih(d.created_at)} · <button type="button" class="linkbtn" data-dy-panel="${d.id}">Duyuruyu aç</button></div>
       </div>`;
   }).join("");
 }
