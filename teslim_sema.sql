@@ -83,7 +83,7 @@ create table if not exists sistem_ayarlari (
 
 alter table sistem_ayarlari drop constraint if exists sistem_ayarlari_anahtar_chk;
 alter table sistem_ayarlari add constraint sistem_ayarlari_anahtar_chk
-  check (anahtar in ('teslim_gecikme_saat', 'teslim_takip_baslangic'));
+  check (anahtar in ('teslim_gecikme_saat', 'teslim_takip_baslangic', 'eski_acik_gun'));  -- eski_acik_gun: kons_eski_sema.sql
 
 -- Değer doğrulaması + kim/ne zaman damgası.
 create or replace function public.sistem_ayarlari_kontrol() returns trigger
@@ -104,6 +104,14 @@ begin
       raise exception 'Takip başlangıcı tarih-saat olmalı' using errcode = '22023';
     end if;
     perform (new.deger #>> '{}')::timestamptz; -- geçersizse hata
+  elsif new.anahtar = 'eski_acik_gun' then
+    if jsonb_typeof(new.deger) <> 'number' then
+      raise exception 'Eski açık iş eşiği sayı olmalı' using errcode = '22023';
+    end if;
+    saat := (new.deger #>> '{}')::numeric;
+    if saat < 1 or saat > 365 or saat <> trunc(saat) then
+      raise exception 'Eski açık iş eşiği 1–365 arası tam gün olmalı' using errcode = '22023';
+    end if;
   end if;
   new.guncelleyen_id := public.current_kullanici_id();
   new.updated_at := now();

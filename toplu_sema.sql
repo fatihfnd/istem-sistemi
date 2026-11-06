@@ -50,6 +50,15 @@ begin;
 -- (boş patoloji no, testsiz vaka, geçersiz öncelik, RLS reddi…) işlemin
 -- TAMAMINI geri alır. Dönen: { toplu_id, istem, kalem }.
 -- ------------------------------------------------------------
+-- kons_eski_sema.sql çalıştıysa son hali (kons_no ile) oradadır — YENİDEN TANIMLANMAZ.
+do $tf$
+begin
+  if exists (select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+             where ns.nspname = 'public' and p.proname = 'toplu_istem_olustur' and p.prosrc like '%kons_no%') then
+    raise notice 'toplu_istem_olustur: daha yeni sürüm (kons_eski_sema.sql) kurulu — atlandı';
+    return;
+  end if;
+  execute $sql$
 create or replace function public.toplu_istem_olustur(p_vakalar jsonb) returns jsonb
 language plpgsql security invoker set search_path = public as $$
 declare
@@ -125,6 +134,8 @@ begin
 
   return jsonb_build_object('toplu_id', v_toplu, 'istem', n_istem, 'kalem', n_kalem);
 end $$;
+$sql$;
+end $tf$;
 
 revoke all on function public.toplu_istem_olustur(jsonb) from public, anon;
 grant execute on function public.toplu_istem_olustur(jsonb) to authenticated;

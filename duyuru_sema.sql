@@ -320,6 +320,18 @@ begin;
 -- (İş Kuyruğu / detay / çalışma çıktısı duyurunun testiyle kalemi adla
 -- değil kimlikle eşlesin diye).
 -- ------------------------------------------------------------
+-- kons_eski_sema.sql çalıştıysa görünümün son hali (kons_no ile) oradadır —
+-- o durumda burada YENİDEN TANIMLANMAZ.
+do $vw$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'istem_kuyruk_v' and column_name = 'kons_no'
+  ) then
+    raise notice 'istem_kuyruk_v: daha yeni sürüm (kons_eski_sema.sql) kurulu — atlandı';
+    return;
+  end if;
+  execute $sql$
 create or replace view istem_kuyruk_v
 with (security_invoker = true) as
 select
@@ -426,7 +438,9 @@ cross join (
   select coalesce(
            (select (s.deger #>> '{}')::timestamptz from sistem_ayarlari s where s.anahtar = 'teslim_takip_baslangic'),
            '-infinity'::timestamptz) as baslangic
-) tb;
+) tb
+$sql$;
+end $vw$;
 
 grant select on istem_kuyruk_v to authenticated;
 

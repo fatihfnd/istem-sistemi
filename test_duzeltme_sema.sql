@@ -29,7 +29,7 @@ begin
   end loop;
 end $c$;
 alter table istem_duzeltmeleri add constraint istem_duzeltmeleri_alan_chk
-  check (alan in ('patoloji_no', 'blok_no', 'uzman', 'oncelik', 'test'));
+  check (alan in ('patoloji_no', 'blok_no', 'uzman', 'oncelik', 'test', 'kons_no'));  -- kons_no: kons_eski_sema.sql
 
 -- ------------------------------------------------------------
 -- 2) Test YALNIZ Bekleyen kalemde değişir — fonksiyondan bağımsız olarak
@@ -93,6 +93,15 @@ begin;
 -- p_degisiklik: { patoloji_no?, uzman_id?, oncelik?, bloklar?: [{kalem_id,
 -- blok_no}], testler?: [{kalem_id, test_id}] } — test yalnız Bekleyen kalemde.
 -- ------------------------------------------------------------
+-- kons_eski_sema.sql çalıştıysa son hali (kons_no ile) oradadır — YENİDEN TANIMLANMAZ.
+do $df$
+begin
+  if exists (select 1 from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+             where ns.nspname = 'public' and p.proname = 'istem_duzelt' and p.prosrc like '%kons_no%') then
+    raise notice 'istem_duzelt: daha yeni sürüm (kons_eski_sema.sql) kurulu — atlandı';
+    return;
+  end if;
+  execute $sql$
 create or replace function public.istem_duzelt(p_istem_id uuid, p_degisiklik jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -217,6 +226,8 @@ begin
 
   return jsonb_build_object('duzeltilen', n, 'fatura_kaldirildi', test_degisti and i.fatura_girildi);
 end $$;
+$sql$;
+end $df$;
 
 commit;
 
