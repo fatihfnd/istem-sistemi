@@ -595,7 +595,6 @@ td.c-durum{width:1%}
 .kisa-chip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink-2);font-size:11px;font-weight:700;letter-spacing:.03em;vertical-align:1px}
 
 /* ---------------- Eski kayıtlar (İş Kuyruğu) ---------------- */
-.eski-btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 .eski-ipucu{margin:10px 8px 0;padding:9px 12px;border:1px dashed var(--line-strong);border-radius:9px;font-size:12.5px;color:var(--ink-2)}
 .eski-ipucu b{color:var(--ink)}
 
@@ -657,9 +656,38 @@ tbody tr.bos-satir td{color:var(--ink-3);font-size:13px;padding:18px 10px;text-a
   .eski-sayac{font-size:11.5px}
 }
 
-/* ---------------- Eski kayıtlar: toggle + sayaç ---------------- */
-.eski-kutu{display:flex;align-items:center;gap:8px}
+/* ---------------- Tamamlanan penceresi: seçici + sayaç ---------------- */
+.tam-kutu{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+.tam-kutu label{font-weight:600}
+.tam-kutu select{font:inherit;font-size:12.5px;padding:3px 6px;border:1px solid var(--line-strong);border-radius:7px;background:var(--paper);color:var(--ink)}
 .eski-sayac{font-size:12px;color:var(--ink-3);white-space:nowrap}
+.daha-eski{display:flex;justify-content:center;padding:12px 8px 4px}
+/* Eski açık işler şeridi (tablonun başında, varsayılan kapalı) */
+tbody tr.eski-serit td{padding:5px 10px;background:var(--amber-b);border-top:1px solid color-mix(in srgb, var(--amber-i) 35%, transparent);border-bottom:1px solid color-mix(in srgb, var(--amber-i) 35%, transparent)}
+tbody tr.eski-serit td.bulkcell{padding-left:10px}
+.eski-serit-btn{background:none;border:0;padding:2px 0;font:inherit;font-size:12.5px;font-weight:700;color:var(--amber-i);cursor:pointer}
+.eski-serit-btn:hover{text-decoration:underline}
+.eski-serit-btn .es-ok{display:inline-block;width:12px}
+.eski-serit-ipucu{margin-left:10px;font-size:11.5px;color:var(--ink-3)}
+tbody tr.eski-acik td:first-child{box-shadow:inset 3px 0 0 color-mix(in srgb, var(--amber-i) 55%, transparent)}
+tbody tr.eski-serit-son td{padding:0;height:0;border-bottom:2px solid color-mix(in srgb, var(--amber-i) 45%, transparent)}
+@media (max-width:640px){ .eski-serit-ipucu{display:block;margin:2px 0 0} }
+
+/* ---------------- Patoloji no ikinci satırı + konsültasyon no ---------------- */
+/* Genişliğe katılmaz (width:0 + min-width:100%): sütunu ilk kısım belirler. */
+.pat-alt{display:block;width:0;min-width:100%;font-family:var(--sans);font-size:11px;font-weight:400;color:var(--ink-3);letter-spacing:0;white-space:normal;overflow-wrap:anywhere;line-height:1.3;margin-top:1px}
+.pat-alt.pat-kons{font-family:var(--mono);font-size:11px}
+tbody tr.row-acil .pat-alt, tbody tr.iliskili .pat-alt{font-weight:400}
+.d-pat-alt{margin-top:2px;font-size:13px}
+.d-pat-alt .pat-alt{font-size:12.5px;width:auto;min-width:0}
+.sv-pat-alt{padding-left:26px}
+.sv-pat-alt .pat-alt{width:auto;min-width:0}
+.kons-cb{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:12.5px;color:var(--ink-2);cursor:pointer;user-select:none}
+.kons-alan{margin-top:6px}
+.kons-alan .finput{width:100%}
+.kons-uyari{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--accent-soft);border:1px solid color-mix(in srgb, var(--accent) 35%, transparent);font-size:12.5px;color:var(--ink)}
+.kons-uyari .ku-onizleme{display:block;margin-top:3px;font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.kons-uyari .ku-aks{display:flex;gap:8px;margin-top:7px;flex-wrap:wrap}
 
 /* ---------------- Yedekler: tür etiketi ---------------- */
 .yedek-tur{flex:none;min-width:66px;text-align:center;font-size:11px;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:6px;background:var(--line-2);color:var(--ink-2)}
@@ -978,6 +1006,7 @@ td.c-kisi .duz-eski{overflow:hidden;text-overflow:ellipsis}
 .duz-kalem{color:var(--ink-3);font-size:11.5px}
 @media print{
   .yl-duz{font-size:8.5pt;font-weight:400;font-style:italic;font-family:var(--sans);white-space:normal}
+  .yl-kons{font-size:9pt;font-weight:400;white-space:nowrap}
 }
 
 .duz-uyari{margin-top:8px;padding:7px 9px;border-radius:7px;background:var(--amber-b);color:var(--amber-i);border:1px solid color-mix(in srgb, var(--amber-i) 40%, transparent);font-size:12px;font-weight:600;line-height:1.4}

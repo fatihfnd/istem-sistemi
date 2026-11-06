@@ -124,6 +124,45 @@
   // yok — bir kez anlaşılınca sayfa yenilenene kadar eski sorgu kullanılır.
   let teslimKolonuYok = false, topluKolonuYok = false;
   const kolonYokHatasi = (e) => Boolean(e && (e.code === "42703" || /teslim_|toplu_|istem_created_at/.test(String(e.message || ""))));
+  // kons_eski_sema.sql: istem_kalemleri.tamamlandi_at (görünümde) ve
+  // istemler.kons_no. SQL çalışmadıysa tamamlanan penceresi created_at'e
+  // göre (eski sorgu) uygulanır, konsültasyon alanı gizlenir.
+  let tamamKolonuYok = false;
+  let konsDurum = null; // null: henüz yoklanmadı · true/false
+  const tamamKolonHatasi = (e) => Boolean(e && /tamamlandi_at|kons_no/.test(String(e.message || "")));
+
+  // Sunucudaki kuyruk sırasının aynısı (aşağıda kuyrukOku) — birden çok
+  // sorgunun sonucu birleştirilince yeniden sıralamak için.
+  const azalan = (x, y) => (x < y ? 1 : x > y ? -1 : 0);
+  const artanNullSon = (x, y) => (x == null ? (y == null ? 0 : 1) : y == null ? -1 : x < y ? -1 : x > y ? 1 : 0);
+  function kuyrukSirasi(a, b) {
+    return azalan(a.istem_created_at || "", b.istem_created_at || "")
+      || artanNullSon(a.toplu_id, b.toplu_id)
+      || artanNullSon(a.toplu_sira, b.toplu_sira)
+      || artanNullSon(a.istem_id, b.istem_id)
+      || azalan(a.created_at || "", b.created_at || "")
+      || artanNullSon(a.kalem_id, b.kalem_id);
+  }
+  // Görünümden süzgeçli + sıralı okuma, sayfa sayfa (PostgREST 1000 satır
+  // sınırı). limit verilirse en fazla o kadar satır.
+  async function kuyrukSuz(filtre, sira, limit) {
+    const satirlar = [];
+    for (;;) {
+      const adet = limit ? Math.min(1000, limit - satirlar.length) : 1000;
+      if (adet <= 0) return satirlar;
+      const { data, error } = await sira(filtre(client.from("istem_kuyruk_v").select("*")))
+        .range(satirlar.length, satirlar.length + adet - 1);
+      must(data, error);
+      if (!data.length) return satirlar;
+      satirlar.push(...data);
+    }
+  }
+  const kuyrukSiraSorgu = (q) => q.order("istem_created_at", { ascending: false })
+    .order("toplu_id", { ascending: true, nullsFirst: false })
+    .order("toplu_sira", { ascending: true, nullsFirst: false })
+    .order("istem_id", { ascending: true })
+    .order("created_at", { ascending: false })
+    .order("kalem_id", { ascending: true });
 
   // Sıra (toplu_sema.sql): istemin zamanı ↓ → toplu_id → toplu_sira ↑ →
   // istem → kalem zamanı ↓. Toplu gönderimin tüm istemleri aynı zamanı
@@ -780,7 +819,7 @@
         for (;;) {
           let q = client
             .from("istemler")
-            .select(`${TEMEL}${toplu ? ",toplu_id,toplu_sira" : ""},istem_kalemleri(${kalemSecimi})`)
+            .select(`${TEMEL}${konsDurum ? ",kons_no" : ""}${toplu ? ",toplu_id,toplu_sira" : ""},istem_kalemleri(${kalemSecimi})`)
             .order("created_at", { ascending: false });
           if (toplu) q = q.order("toplu_sira", { ascending: true, nullsFirst: false });
           const { data, error } = await q
@@ -809,6 +848,7 @@
         const { data, error } = await client.from("istem_duzeltmeleri").select("istem_id,alan,eski_deger,duzelten_id,created_at").order("created_at", { ascending: true });
         return error ? [] : data;
       };
+      await this.konsYokla();
       const [istemler, kullaniciMap, geriler, duzList] = await Promise.all([oku(), this.getKullaniciMap(), geriAlmalar(), duzeltmeler()]);
       // istem_id -> { alanSon: {alan: son zaman}, alanKim: {alan: son düzelten}, eskiPat: [..], pat: {eski (ilk), kim, zaman} }
       const duzIstem = new Map();
@@ -868,6 +908,7 @@
           toplu_id: i.toplu_id || null,
           toplu_sira: i.toplu_sira || null,
           patoloji_no: i.patoloji_no,
+          kons_no: i.kons_no || null,
           isteyen_adi: ad(i.istem_yapan_id),
           isteyen_kisaltma: kullaniciMap[i.istem_yapan_id]?.kisaltma || null,
           uzman_adi: i.uzman_id ? ad(i.uzman_id) : "—",
@@ -989,19 +1030,53 @@
     // fiziksel satır sırasına bağlı kalır — bir UPDATE (durum değişimi)
     // o satırın fiziksel konumunu değiştirip sırayı bozabilir.
     //
-    // eskiSinir (ISO zaman) verilirse: Bekleyen/Cihazda HER ZAMAN, Tamamlandı
-    // yalnız created_at >= eskiSinir olanlar gelir (eski tamamlananlar
-    // sunucuda elenir). Verilmezse hepsi.
     // Sayfa sayfa okunur: PostgREST tek istekte en fazla "max rows" (1000)
     // satır döner — eskiden kayıt sayısı büyüyünce en eski satırlar SESSİZCE
     // kayboluyordu. Dönen satır sayısı kadar ilerlenir, boş sayfada durulur.
-    // Teslim bekleyenler (teslim_sema.sql) eski olsa da HER ZAMAN gelir —
-    // teslim edilmeyen lam gözden kaybolmasın. Görünümde kolon yoksa (SQL
-    // henüz çalışmadıysa) eski sorguya düşülür.
-    async listQueue({ eskiSinir } = {}) {
+    //
+    // İş Kuyruğu yükü (kons_eski_sema.sql):
+    //  - açık işler (Bekleyen, Cihazda) tarih sınırı OLMADAN hepsi,
+    //  - Tamamlandı: tamamlanma zamanı (tamamlandi_at) son tamamlananGun gün
+    //    içinde olanlar (0/boş = Tümü), en yeniden; tamamlananLimit verilirse
+    //    en fazla o kadar — fazlası varsa dönen dizide dahaVar = true,
+    //  - pencere dışında da olsa HER ZAMAN: teslim bekleyenler (teslim edilmeyen
+    //    lam gözden kaybolmasın) ve son kesildiGun günde kesilenler ("Kesildi"
+    //    sekmesi).
+    // Sonuç sunucu sırasıyla (kuyrukSirasi) birleştirilir.
+    // tam: true → her şey (Excel'e Aktar).
+    // tamamlandi_at yoksa (SQL çalışmadı) pencere eski usul created_at'e göre.
+    async listQueue({ tamamlananGun = 0, tamamlananLimit = 0, kesildiGun = 7, tam = false } = {}) {
+      const gunISO = (g) => new Date(Date.now() - g * 86400000).toISOString();
+      if (!tam && !tamamKolonuYok && !topluKolonuYok && !teslimKolonuYok) {
+        try {
+          const sinir = tamamlananGun ? gunISO(tamamlananGun) : null;
+          const [acik, tamam, surekli] = await Promise.all([
+            kuyrukSuz((q) => q.in("durum", ["bekleyen", "cihazda"]), kuyrukSiraSorgu),
+            kuyrukSuz((q) => {
+              q = q.eq("durum", "tamamlandi");
+              return sinir ? q.gte("tamamlandi_at", sinir) : q;
+            }, (q) => q.order("tamamlandi_at", { ascending: false, nullsFirst: false }).order("kalem_id", { ascending: true }),
+            tamamlananLimit ? tamamlananLimit + 1 : 0),
+            kuyrukSuz((q) => q.eq("durum", "tamamlandi").or(`teslim_bekliyor.is.true,kesildi_at.gte."${gunISO(kesildiGun)}"`), kuyrukSiraSorgu),
+          ]);
+          const dahaVar = Boolean(tamamlananLimit) && tamam.length > tamamlananLimit;
+          const gorulen = new Set();
+          const liste = [...acik, ...(dahaVar ? tamam.slice(0, tamamlananLimit) : tamam), ...surekli]
+            .filter((r) => (gorulen.has(r.kalem_id) ? false : gorulen.add(r.kalem_id)))
+            .sort(kuyrukSirasi);
+          liste.dahaVar = dahaVar;
+          return liste;
+        } catch (e) {
+          if (!tamamKolonHatasi(e)) throw e;
+          tamamKolonuYok = true;
+        }
+      }
+      const eskiSinir = !tam && tamamlananGun ? gunISO(tamamlananGun) : null;
       for (;;) {
         try {
-          return await kuyrukOku(eskiSinir, !teslimKolonuYok, !topluKolonuYok);
+          const liste = await kuyrukOku(eskiSinir, !teslimKolonuYok, !topluKolonuYok);
+          liste.dahaVar = false;
+          return liste;
         } catch (e) {
           if (!kolonYokHatasi(e)) throw e;
           const m = String(e.message || "");
@@ -1013,26 +1088,45 @@
       }
     },
 
-    // "Eski kayıtları göster (N)" için: gizlenen eski Tamamlandı sayısı
-    // (teslim bekleyenler gizlenmediği için sayılmaz).
-    async gizliEskiSayisi(eskiSinir) {
-      const say = (teslimli) => {
+    // "N daha eski" bilgisi için: pencere dışında kalan (yüklenmeyen)
+    // Tamamlandı sayısı — teslim bekleyenler gizlenmediği için sayılmaz.
+    async gizliEskiSayisi(tamamlananGun) {
+      if (!tamamlananGun) return 0;
+      const sinir = new Date(Date.now() - tamamlananGun * 86400000).toISOString();
+      const say = (teslimli, alan) => {
         let q = client
           .from("istem_kuyruk_v")
           .select("kalem_id", { count: "exact", head: true })
           .eq("durum", "tamamlandi")
-          .lt("created_at", eskiSinir);
+          .lt(alan, sinir);
         if (teslimli) q = q.eq("teslim_bekliyor", false);
         return q;
       };
-      let { count, error } = await say(!teslimKolonuYok);
+      let { count, error } = await say(!teslimKolonuYok, tamamKolonuYok ? "created_at" : "tamamlandi_at");
+      if (error && !tamamKolonuYok && tamamKolonHatasi(error)) {
+        tamamKolonuYok = true;
+        ({ count, error } = await say(!teslimKolonuYok, "created_at"));
+      }
       if (error && !teslimKolonuYok && kolonYokHatasi(error)) {
         teslimKolonuYok = true;
-        ({ count, error } = await say(false));
+        ({ count, error } = await say(false, tamamKolonuYok ? "created_at" : "tamamlandi_at"));
       }
       if (error) throw error;
       return count || 0;
     },
+    // Tamamlanma zamanı gerçek kolondan mı (kons_eski_sema.sql)? İlk
+    // listQueue'dan sonra kesinleşir.
+    tamamlanmaDestekli() { return !tamamKolonuYok; },
+
+    // Konsültasyon no kolonu var mı (kons_eski_sema.sql)? Oturum başında bir
+    // kez yoklanır; sonra konsDestekli() eşzamanlı cevap verir.
+    async konsYokla() {
+      if (konsDurum !== null) return konsDurum;
+      const { error } = await client.from("istemler").select("kons_no").limit(1);
+      konsDurum = !error;
+      return konsDurum;
+    },
+    konsDestekli() { return konsDurum === true; },
 
     // Vaka görünümü "tüm geçmiş"tir: gizli eski kayıtlar dahil o patoloji
     // no'nun bütün kalemleri.
@@ -1142,10 +1236,10 @@
     // -> her blok x her test için ayrı bir istem_kalemi satırı
     // Not (varsa) istemler.not_metni'ye DEĞİL, istem_notlari'na yazılır
     // (yazan + zaman damgalı liste; bkz. ek_ozellikler_sema.sql).
-    async createIstem({ patoloji_no, istem_yapan_id, uzman_id, oncelik, not_metni, bloklar, testler }) {
+    async createIstem({ patoloji_no, kons_no, istem_yapan_id, uzman_id, oncelik, not_metni, bloklar, testler }) {
       const { data: istem, error: e1 } = await client
         .from("istemler")
-        .insert({ patoloji_no, istem_yapan_id, uzman_id, oncelik })
+        .insert({ patoloji_no, istem_yapan_id, uzman_id, oncelik, ...(kons_no ? { kons_no } : {}) })
         .select()
         .single();
       if (e1) throw e1;
@@ -1235,7 +1329,7 @@
     },
 
     // ---------------- İstem düzeltme (duzeltme_sema.sql) ----------------
-    // degisiklik: { patoloji_no?, uzman_id?, oncelik?, bloklar?: [{kalem_id, blok_no}] }
+    // degisiklik: { patoloji_no?, kons_no? (null = sil), uzman_id?, oncelik?, bloklar?: [{kalem_id, blok_no}] }
     // Yetki (giren kişi / yönetici) ve kayıt + not veritabanında, tek işlemde.
     async istemDuzelt(istemId, degisiklik) {
       const { data, error } = await client.rpc("istem_duzelt", { p_istem_id: istemId, p_degisiklik: degisiklik });
