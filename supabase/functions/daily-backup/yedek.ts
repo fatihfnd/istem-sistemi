@@ -56,20 +56,20 @@ export interface Ozet {
   teslimBekleyen: number | null; // null: teslim kolonları yok (teslim_sema.sql çalışmadı)
 }
 
-const SUTUN_ISTEM = ["Patoloji No", "İsteyen", "Uzman Adına", "Öncelik", "Not", "Tarih", "Kalem Sayısı", "Tekrar", "Fatura Durumu", "Fatura Giren", "Fatura Zamanı"];
+const SUTUN_ISTEM = ["Patoloji No", "Kons. No", "İsteyen", "Uzman Adına", "Öncelik", "Not", "Tarih", "Kalem Sayısı", "Tekrar", "Fatura Durumu", "Fatura Giren", "Fatura Zamanı"];
 // Sütun adları KUYRUK_EXPORT_COLS (app.js) ile aynı etiketler ("Teslim Alan",
 // "Teslim Zamanı" Durum'dan hemen sonra).
-const SUTUN_KALEM = ["Patoloji No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Teslim Alan", "Teslim Zamanı", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
+const SUTUN_KALEM = ["Patoloji No", "Kons. No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Teslim Alan", "Teslim Zamanı", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
 const SUTUN_DUZ = ["Zaman", "Patoloji No (güncel)", "Alan", "Eski", "Yeni", "Kalem", "Düzelten"];
 
 // "Düzeltildi" sütunu — uygulamadaki duzeltmeOzeti ile aynı biçim:
 // "Patoloji no: 17730/26 → 17703/26; Blok: A1 → A2" (eski = İLK girilen).
-const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
+const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", kons_no: "Konsültasyon no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
 const duzDeger = (alan: string, v: unknown) => String((alan === "oncelik" ? ONCELIK[String(v)] ?? v : v) || "—");
 export function duzeltmeOzeti(r: Satir): string {
   const d = r.duzeltmeler as Record<string, { eski?: string }> | null | undefined;
   if (!d) return "";
-  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik };
+  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, kons_no: r.kons_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik };
   return Object.keys(DUZ_ALAN).filter((a) => d[a])
     .map((a) => `${DUZ_ALAN[a]}: ${duzDeger(a, d[a].eski)} → ${duzDeger(a, guncel[a])}`).join("; ");
 }
@@ -113,6 +113,7 @@ export function okunabilirSayfalar(v: YedekVerisi) {
     const s = istemSayac.get(i.id) ?? { n: 0, tekrar: 0 };
     return {
       "Patoloji No": i.patoloji_no,
+      "Kons. No": i.kons_no ?? "",
       "İsteyen": ad(i.istem_yapan_id),
       "Uzman Adına": ad(i.uzman_id),
       "Öncelik": ONCELIK[i.oncelik] ?? i.oncelik ?? "",
@@ -128,6 +129,7 @@ export function okunabilirSayfalar(v: YedekVerisi) {
 
   const kalemler = [...v.kuyruk].sort(yeniOnce).map((r) => ({
     "Patoloji No": r.patoloji_no,
+    "Kons. No": r.kons_no ?? "",
     "Blok": r.blok_no ?? "",
     "Test": r.test_adi ?? "",
     "Klon": r.klon ?? "",

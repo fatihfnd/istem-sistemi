@@ -338,7 +338,7 @@ let notDrafts = new Map();    // istem_id -> kaydedilmemiş yeni not taslağı (
 const TAMAMLANAN_SECENEK = [[7, "7 gün"], [30, "30 gün"], [90, "90 gün"], [0, "Tümü"]];
 const TAMAMLANAN_LIMIT = 200;
 let tamamlananGun = 7;
-let tamamlananLimit = TAMAMLANAN_LIMIT;
+let tamamlananLimit = TAMAMLANAN_LIMIT; // 0 = sınırsız
 let dahaEskiVar = false;      // pencerede yüklenmeyen tamamlanan var
 let gizliEskiSayisi = 0;      // pencere dışında kalan (yüklenmeyen) Tamamlandı sayısı
 const tamamlananGunKey = () => "istem_tamamlanan_gun:" + (session ? session.id : "");
@@ -907,7 +907,7 @@ function renderQueuePage() {
   });
   renderZoomCtl();
   $("#tamGun").addEventListener("change", (e) => tamamlananGunSec(Number(e.target.value)));
-  $("#eskiIpucu").addEventListener("click", (e) => { if (e.target.closest("[data-eski-goster]")) tamamlananGunSec(0); });
+  $("#eskiIpucu").addEventListener("click", (e) => { if (e.target.closest("[data-eski-goster]")) tamamlananGunSec(0, { hepsi: true }); });
   $("#dahaEskiBtn").addEventListener("click", dahaEskiYukle);
   bindExportMenu("#qExport", kuyruguDisaAktar);
   $("#bulkCihazaBtn").addEventListener("click", () => bulkAdvance("cihazda", "bekleyen"));
@@ -1203,16 +1203,18 @@ async function kuyruguDisaAktar(which) {
   const cols = list.some((r) => r.__iliskili) ? [{ label: "İlişkili", value: (r) => (r.__iliskili ? "ilişkili" : "") }, ...KUYRUK_EXPORT_COLS] : KUYRUK_EXPORT_COLS;
   exportToExcel(list, cols, `istem_kuyruk_${which === "tum" ? "tumu" : "filtreli"}`);
 }
-async function tamamlananGunSec(gun) {
+// hepsi: sınır olmadan (arama ipucundan) — tamamlananLimit 0 = sınırsız.
+async function tamamlananGunSec(gun, { hepsi = false } = {}) {
   if (!TAMAMLANAN_SECENEK.some(([g]) => g === gun)) return;
   tamamlananGun = gun;
-  tamamlananLimit = TAMAMLANAN_LIMIT;
+  tamamlananLimit = hepsi ? 0 : TAMAMLANAN_LIMIT;
   try { localStorage.setItem(tamamlananGunKey(), String(gun)); } catch (e) { /* bu oturumda geçerli */ }
   const sec = $("#tamGun"); if (sec) sec.value = String(gun);
   clearBulkSelection();
   await loadQueue();
 }
 async function dahaEskiYukle() {
+  if (!tamamlananLimit) return;
   tamamlananLimit += TAMAMLANAN_LIMIT;
   const b = $("#dahaEskiBtn");
   if (b) { b.disabled = true; b.textContent = "Yükleniyor…"; }
@@ -1873,13 +1875,16 @@ function updateCounts() {
       ? `Son ${tamamlananGun} günden önce tamamlanmış ${gizliEskiSayisi} kayıt yüklenmedi — "Tümü"nü seçin ya da patoloji no ile vakayı açın` : "";
   }
   // Arama yapılıyor ve pencere dışında kayıt varsa: aranan şey orada olabilir.
+  // "Tümünü göster" o an sınırsız yükler (aranan en eskilerden olabilir).
   const ip = $("#eskiIpucu");
   if (ip) {
-    const goster = caseView === null && !kesitEkraniMi() && !arsivEkraniMi() && tamamlananGun > 0 && gizliEskiSayisi > 0
-      && Boolean(searchQ || colFilters.pat || colFilters.blok);
-    ip.classList.toggle("hidden", !goster);
-    ip.innerHTML = goster
+    const aramada = caseView === null && !kesitEkraniMi() && !arsivEkraniMi() && Boolean(searchQ || colFilters.pat || colFilters.blok);
+    const pencereDisi = aramada && tamamlananGun > 0 && gizliEskiSayisi > 0;
+    const limitte = aramada && !pencereDisi && dahaEskiVar;
+    ip.classList.toggle("hidden", !pencereDisi && !limitte);
+    ip.innerHTML = pencereDisi
       ? `Aradığın burada yoksa: son ${tamamlananGun} günden önce tamamlanmış <b>${gizliEskiSayisi}</b> kayıt yüklenmedi. <button class="linkbtn" data-eski-goster>Tümünü göster</button>`
+      : limitte ? `Aradığın burada yoksa: daha eski tamamlanan kayıtlar henüz yüklenmedi. <button class="linkbtn" data-eski-goster>Hepsini yükle</button>`
       : "";
   }
   // Pencerede TAMAMLANAN_LIMIT'ten fazla tamamlanan varsa: "Daha eskileri yükle".
@@ -4603,7 +4608,7 @@ function konsAyikla(deger) {
 function konsUyariGizle() {
   clearTimeout(konsUyariZaman);
   const el = $("#mKonsUyari");
-  if (el) { el.classList.add("hidden"); el.innerHTML = ""; }
+  if (el) { el.classList.add("hidden"); el.innerHTML = ""; delete el.dataset.deger; }
 }
 function konsUyariZamanla() {
   clearTimeout(konsUyariZaman);
@@ -4616,6 +4621,10 @@ function konsUyariGoster() {
   const deger = inp.value.trim();
   const a = deger && deger !== konsBirakilan ? konsAyikla(deger) : null;
   if (!a) { konsUyariGizle(); return; }
+  // Aynı öneri zaten görünüyorsa yeniden çizilmez — alandan çıkış (blur)
+  // "Taşı"ya basılırken düğmeyi değiştirip tıklamayı kaybettirmesin.
+  if (!el.classList.contains("hidden") && el.dataset.deger === deger) return;
+  el.dataset.deger = deger;
   el.innerHTML = `<div class="ku-metin">Ek bilgiyi Konsültasyon alanına taşı? <span class="ku-onizleme"><b>${esc(a.pat)}</b> · Kons: <b>${esc(a.kons)}</b></span></div>
     <div class="ku-aks"><button type="button" class="btn-primary btn-sm" data-kons="tasi">Taşı</button><button type="button" class="btn-ghost btn-sm" data-kons="birak">Olduğu gibi bırak</button></div>`;
   el.classList.remove("hidden");

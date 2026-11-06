@@ -1067,7 +1067,9 @@
           liste.dahaVar = dahaVar;
           return liste;
         } catch (e) {
-          if (!tamamKolonHatasi(e)) throw e;
+          // Çok eski şema (kolon yok): eski sorguya düşülür, o da kendi
+          // eksik kolonlarını ayıklar.
+          if (!tamamKolonHatasi(e) && !kolonYokHatasi(e)) throw e;
           tamamKolonuYok = true;
         }
       }
