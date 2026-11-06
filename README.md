@@ -202,6 +202,12 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 - **Dar ekran (≤ 900 px):** Öncelik ve Not sütunları gizlenir (bilgi soldaki şerit, rozet ve 💬'da); geniş ekranda yerinde.
 - **Sütun genişlikleri:** Patoloji No, Blok, Durum, Tip, İsteyen / Uzman, Tarih, Öncelik ve Not içeriğe göre dar (width: 1% + nowrap); kalan alanı İstek (test) sütunu alır — uzun test adı ve klon / kontrol satırı sarar, kesilmez (en az 110 px). Patoloji no yanındaki rozet, 💬 ve yazıcı ikonu tek grupta, aralarında 4 px; dar ekranda grup patoloji no'nun altına iner. Tarih dar ekranda "06.11 13:22" (yıl yok). Hücre yatay dolgusu 6 px (Geniş yoğunlukta 8 px); yazı boyutu ve vaka çizgileri aynı.
 
+## 1q) Uzun blok değerleri (SQL yok)
+- **Girişte ayırma:** İstek Ver formunda (ve Sepete ekle'de) blok alanına boşluk, virgül, noktalı virgül ya da satır sonuyla ayrılmış birden fazla değer yazılırsa ayrı blok çiplerine bölünür ("Yp1 yp12 yp14" → 3 blok). Tire içerenler bölünmez ("1-10", "1-em1"; "1 - 10" = "1-10"). Enter'da hemen; Enter'a basmadan İstek Ver / Sepete ekle'ye basılırsa çiplere bölünür ve gönderim durur — bakıp tekrar basılır. Bant: "9 blok olarak ayrıldı" + "Geri al (tek blok bırak)" (15 sn). Satır sonlu yapıştırma da bölünür.
+- **Tekrar:** aynı blok (büyük/küçük harf ve boşluk farkı yok sayılarak — "Yp1" = "yp1") bir kez eklenir, uyarı verilir.
+- **Görüntü:** İş Kuyruğu ve Kesit / Arşiv ekranlarında blok hücresi en fazla ~10 karakter: "Yp1 yp12 +7" (tek uzun değer "1-em1-ek2…"). Rozete dokununca / üzerine gelince tüm bloklar balonda. Detay panelinde ve çıktılarda tam değer; arama ve filtre tam değerde çalışır.
+- Daha önce tek blok olarak kaydedilmiş uzun değerler veritabanında aynen kalır (tek kalem); yalnız gösterimleri kısalır.
+
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):
 ```

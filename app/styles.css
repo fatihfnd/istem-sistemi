@@ -285,7 +285,7 @@ td.c-durum{width:1%}
 
 /* detail */
 .d-pat{font-family:var(--mono);font-size:20px;font-weight:600;letter-spacing:.01em}
-.d-blok{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600;margin-top:2px}
+.d-blok{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600;margin-top:2px;overflow-wrap:anywhere}
 .d-test{margin:16px 0;padding:13px 14px;background:var(--paper);border:1px solid var(--line-2);border-radius:10px}
 .d-test .n{font-size:16px;font-weight:640}
 .d-test .c{font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:2px}
@@ -748,6 +748,7 @@ tbody tr.row-yeni{background:color-mix(in srgb, var(--accent) 7%, transparent)}
   .yl-tablo tr.vaka-bas td{border-top:1.5pt solid #000}
   .yl-tablo tr.acil td{font-weight:700}
   .yl-tablo .yl-id{font-family:var(--mono);white-space:nowrap}
+  .yl-tablo .yl-id + .yl-id{white-space:normal;overflow-wrap:anywhere;max-width:35mm}
   .yl-kutu{width:16pt}
   .yl-tablo .kutu{display:inline-block;width:10pt;height:10pt;border:1pt solid #000;vertical-align:middle}
 }
@@ -1293,3 +1294,13 @@ tbody tr.onc-acil > td:first-child{box-shadow:inset 4px 0 0 var(--amber-i)}
   .c-zaman .t-uzun{display:none}
   .c-zaman .t-kisa{display:inline}
 }
+
+/* ---------------- Uzun blok değeri: hücrede kısaltma ----------------
+   "Yp1 yp12 +7" — tam değer rozete dokununca / üzerine gelince balonda. */
+.c-blok .blok-kisa{white-space:nowrap}
+.c-blok .blok-daha{display:inline-flex;align-items:center;margin-left:4px;padding:0 5px;border:1px solid color-mix(in srgb, var(--accent) 45%, transparent);border-radius:9px;background:var(--accent-soft);color:var(--accent);font-family:var(--sans);font-size:10.5px;font-weight:800;line-height:1.5;vertical-align:1px;cursor:pointer}
+.c-blok .blok-daha:hover{border-color:var(--accent)}
+@media (pointer:coarse){ .c-blok .blok-daha{padding:1px 7px} }
+.not-balon .nb-baslik{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
+.not-balon .nb-bloklar{display:flex;flex-wrap:wrap;gap:4px;font-family:var(--mono);font-size:12.5px;font-weight:600;white-space:normal}
+.not-balon .nb-bloklar span{padding:1px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent)}

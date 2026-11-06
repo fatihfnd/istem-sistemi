@@ -892,6 +892,16 @@ function renderQueuePage() {
   $("#rows").addEventListener("click", (e) => {
     // Uzun basmanın (dokunmatik seçim) ardından gelen tık — yok sayılır.
     if (uzunBasildi) { uzunBasildi = false; e.preventDefault(); return; }
+    // Not ikonu (son not) / blok rozeti (tüm bloklar): balon — satır, vaka
+    // ya da blok açılmaz; aynı öğeye tekrar dokununca kapanır.
+    const balonEl = e.target.closest(BALON_SEC);
+    if (balonEl) {
+      e.stopPropagation();
+      const b = $("#notBalon");
+      if (b && !b.hidden && b.dataset.sabit && b.dataset.kalem === balonKimlik(balonEl)) notBalonKapat();
+      else balonAc(balonEl, true);
+      return;
+    }
     // ---- Kesit ekranı (blok satırları) ----
     const btr = e.target.closest("tr[data-blok]");
     if (btr) {
@@ -906,15 +916,6 @@ function renderQueuePage() {
       if (e.target.closest("[data-blok-check]") || (secimModu && bulkSelected.size)) { blokSecimToggle(b); return; }
       if (e.target.closest(".c-pat")) { openCaseView(b.pat); return; }
       showBlokDetay(b);
-      return;
-    }
-    // Not ikonu: son notu gösteren balon (aynı ikona tekrar dokununca kapanır).
-    const notAc = e.target.closest("[data-not-ac]");
-    if (notAc) {
-      e.stopPropagation();
-      const b = $("#notBalon");
-      if (b && !b.hidden && b.dataset.sabit && b.dataset.kalem === notAc.dataset.notAc) notBalonKapat();
-      else notBalonAc(notAc, true);
       return;
     }
     // Yazıcı ikonu, öncelik rozeti — dokunmatikte de okunabilsin.
@@ -1026,12 +1027,12 @@ function renderQueuePage() {
   // (dokunarak açılan "sabit" balon dışarı dokununca kapanır).
   $("#rows").addEventListener("pointerover", (e) => {
     if (e.pointerType !== "mouse") return;
-    const ni = e.target.closest("[data-not-ac]");
-    if (ni) { const b = $("#notBalon"); if (!(b && !b.hidden && b.dataset.sabit)) notBalonAc(ni, false); }
+    const ni = e.target.closest(BALON_SEC);
+    if (ni) { const b = $("#notBalon"); if (!(b && !b.hidden && b.dataset.sabit)) balonAc(ni, false); }
   });
   $("#rows").addEventListener("pointerout", (e) => {
     if (e.pointerType !== "mouse") return;
-    const ni = e.target.closest("[data-not-ac]");
+    const ni = e.target.closest(BALON_SEC);
     const b = $("#notBalon");
     if (ni && b && !b.hidden && !b.dataset.sabit && !ni.contains(e.relatedTarget) && !b.contains(e.relatedTarget)) notBalonKapatGecikmeli();
   });
@@ -1421,7 +1422,7 @@ function renderTable() {
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç"></td>
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat"><span class="pat-bas">${caseSel}<span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}</span>${patEkHTML(patRozet, notIkonHTML(r), yazdirIkonu([r], "calisma"))}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
-      <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
+      <td class="c-blok">${blokKisaHTML(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
       <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duyuruSatirIsaretiHTML(r)}${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td class="c-tip">${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
@@ -1589,6 +1590,30 @@ function patEkHTML(...parcalar) {
   const ic = parcalar.filter(Boolean).join("");
   return ic ? `<span class="pat-ek">${ic}</span>` : "";
 }
+// Blok hücresi en fazla ~10 karakter: daha uzun değer ilk öğeler + "+7"
+// rozeti ("Yp1 yp12 +7"); tek uzun öğe kısaltılıp "…". Rozete dokununca /
+// üzerine gelince tam değer balonda (blokBalonAc). Arama, filtre, detay ve
+// çıktılar tam değeri kullanır.
+const BLOK_HUCRE = 10;
+function blokKisaHTML(v) {
+  const tam = String(v == null ? "" : v).trim();
+  if (!tam) return "—";
+  if (tam.length <= BLOK_HUCRE) return esc(tam);
+  const p = blokParcala(tam);
+  const goster = [];
+  let uzunluk = 0;
+  for (const x of p) {
+    const ek = (goster.length ? 1 : 0) + x.length;
+    if (goster.length >= 2 || (goster.length && uzunluk + ek > BLOK_HUCRE)) break;
+    goster.push(x);
+    uzunluk += ek;
+  }
+  const kalan = p.length - goster.length;
+  let metin = goster.join(" ");
+  if (metin.length > BLOK_HUCRE) metin = metin.slice(0, BLOK_HUCRE - 1);
+  const rozet = kalan > 0 ? `+${kalan}` : "…";
+  return `<span class="blok-kisa">${esc(metin)}</span><button type="button" class="blok-daha" data-blok-ac data-blok-tam="${esc(tam)}" aria-label="Tüm bloklar: ${esc(tam)}" aria-haspopup="dialog">${rozet}</button>`;
+}
 // Tarih hücresi: geniş ekranda "06.11.2026 13:22", dar ekranda (CSS) "06.11 13:22".
 const tarihHucre = (iso) => (iso ? `<span class="t-uzun">${formatDateFull(iso)}</span><span class="t-kisa">${kisaTarih(iso)}</span>` : "");
 // Patoloji no yanında: "Ç.ACİL" / "ACİL" — yazı olarak (renge dayanmadan
@@ -1605,10 +1630,30 @@ function notIkonHTML(r) {
   return `<button type="button" class="not-ikon" data-not-ac="${r.kalem_id}" aria-label="${n.length} not — son notu göster" aria-haspopup="dialog"><span aria-hidden="true">💬</span>${n.length}</button>`;
 }
 let notBalonTimer = null;
+// Balon (not / blok): data-not-ac ya da data-blok-ac taşıyan öğeye göre.
+const BALON_SEC = "[data-not-ac], [data-blok-ac]";
+function balonAc(el, sabit) { if (el.hasAttribute("data-blok-ac")) blokBalonAc(el, sabit); else notBalonAc(el, sabit); }
+function balonKimlik(el) { return el.hasAttribute("data-blok-ac") ? "blok:" + el.dataset.blokTam : el.dataset.notAc; }
+function blokBalonAc(el, sabit) {
+  const tam = el.dataset.blokTam || "";
+  const p = blokParcala(tam);
+  const b = balonHazirla();
+  b.innerHTML = `<div class="nb-baslik">Bloklar · ${p.length}</div><div class="nb-metin nb-bloklar">${p.map((x) => `<span>${esc(x)}</span>`).join("")}</div>`;
+  balonGoster(b, el, balonKimlik(el), sabit);
+}
 function notBalonAc(btn, sabit) {
   const r = rows.find((x) => x.kalem_id === btn.dataset.notAc);
   const n = r ? notlarOf(r) : [];
   if (!n.length) return;
+  const b = balonHazirla();
+  const son = n[0]; // en yeni
+  const kim = son.kisaltma || (son.yazan ? initials(son.yazan) : "");
+  b.innerHTML = `<div class="nb-metin">${esc(son.metin)}</div>
+    <div class="nb-alt">${kim ? `<b title="${esc(son.yazan || "")}">${esc(kim)}</b>` : ""}${son.zaman ? `<span>${kisaTarih(son.zaman)}</span>` : ""}${n.length > 1 ? `<span class="nb-daha">+${n.length - 1} not daha</span>` : ""}</div>
+    <button type="button" class="linkbtn nb-detay" data-nb-detay="${r.kalem_id}">Detay panelinde aç →</button>`;
+  balonGoster(b, btn, balonKimlik(btn), sabit);
+}
+function balonHazirla() {
   clearTimeout(notBalonTimer);
   let b = $("#notBalon");
   if (!b) {
@@ -1628,12 +1673,11 @@ function notBalonAc(btn, sabit) {
       if (k) showDetail(k);
     });
   }
-  const son = n[0]; // en yeni
-  const kim = son.kisaltma || (son.yazan ? initials(son.yazan) : "");
-  b.innerHTML = `<div class="nb-metin">${esc(son.metin)}</div>
-    <div class="nb-alt">${kim ? `<b title="${esc(son.yazan || "")}">${esc(kim)}</b>` : ""}${son.zaman ? `<span>${kisaTarih(son.zaman)}</span>` : ""}${n.length > 1 ? `<span class="nb-daha">+${n.length - 1} not daha</span>` : ""}</div>
-    <button type="button" class="linkbtn nb-detay" data-nb-detay="${r.kalem_id}">Detay panelinde aç →</button>`;
-  b.dataset.kalem = r.kalem_id;
+  return b;
+}
+function balonGoster(b, btn, kimlik, sabit) {
+  b.dataset.kalem = kimlik;
+  b.setAttribute("aria-label", kimlik.startsWith("blok:") ? "Tüm bloklar" : "Son not");
   b.dataset.sabit = sabit ? "1" : "";
   b.dataset.acilis = String(Date.now());
   b.hidden = false;
@@ -1647,7 +1691,7 @@ function notBalonKapatGecikmeli() { clearTimeout(notBalonTimer); notBalonTimer =
 // Yakalama aşamasında: satır işleyicileri olayı durdursa da dışarı dokunuş balonu kapatır.
 document.addEventListener("pointerdown", (e) => {
   const b = $("#notBalon");
-  if (b && !b.hidden && !b.contains(e.target) && !(e.target.closest && e.target.closest("[data-not-ac]"))) notBalonKapat();
+  if (b && !b.hidden && !b.contains(e.target) && !(e.target.closest && e.target.closest(BALON_SEC))) notBalonKapat();
 }, true);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") notBalonKapat(); });
 // (Açılıştan hemen sonraki kaydırma — dokunulan ikonun görünür alana alınması — sayılmaz.)
@@ -1873,7 +1917,7 @@ function iliskiliSatirHTML(r, dahil = false) {
   return `<td class="bulkcell">${dahil ? `<input type="checkbox" data-bulk-check="${r.kalem_id}" aria-label="Seç">` : ""}</td>
       <td class="c-durum">${dahil ? durumAksiyon(r, etiket) : `<div class="dacts">${etiket}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div>`}</td>
       <td class="c-pat"><span class="pat-bas"><span class="pat-no">${esc(r.patoloji_no)}</span>${duzRozet(r, "patoloji_no")}</span>${patEkHTML(oncelikRozeti(r.oncelik), notIkonHTML(r), dahil ? yazdirIkonu([r], "calisma") : "")}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
-      <td class="c-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}${duzEski(r, "blok_no")}</td>
+      <td class="c-blok">${blokKisaHTML(r.blok_no)}${duzRozet(r, "blok_no")}${duzEski(r, "blok_no")}</td>
       <td class="c-test">${esc(r.test_adi)}${duzRozet(r, "test")}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td class="c-tip">${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
@@ -2093,7 +2137,7 @@ function renderKesitSatirlari(tb) {
     const cikan = items.find((r) => r.blok_cikarildi_at);
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-blok-check aria-label="Bloğu seç"></td>
       <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span>${duzRozet(blokDuzKalem(items, "patoloji_no"), "patoloji_no")}${yazdirIkonu(items, "calisma")}${duzEski(blokDuzKalem(items, "patoloji_no"), "patoloji_no")}${ciktiEskiHTML(blokCiktiEskimi(items, "calisma"))}</td>
-      <td class="c-blok">${esc(b.blok || "—")}${duzRozet(blokDuzKalem(items, "blok_no"), "blok_no")}${cikan ? blokCikarildiRozeti(cikan) : ""}${duzEski(blokDuzKalem(items, "blok_no"), "blok_no")}</td>
+      <td class="c-blok">${blokKisaHTML(b.blok)}${duzRozet(blokDuzKalem(items, "blok_no"), "blok_no")}${cikan ? blokCikarildiRozeti(cikan) : ""}${duzEski(blokDuzKalem(items, "blok_no"), "blok_no")}</td>
       <td class="c-kesit">${esc(kesitOzeti(items))}${ilsk.length ? `<div class="ilsk-satir"><span class="ilsk-etiket">ilişkili</span> ${esc(iliskiliOzet(ilsk))}</div>` : ""}</td>
       <td>${acil ? prioBuyukCip(stat ? "stat" : "acil") : ""}</td>
       <td style="color:var(--ink-3);font-size:12px;white-space:nowrap">${formatDT(enEski(items))}</td>
@@ -2261,7 +2305,7 @@ function renderArsivSatirlari(tb) {
       : bilgi;
     tr.innerHTML = `<td class="bulkcell"><input type="checkbox" data-blok-check aria-label="Bloğu seç"></td>
       <td class="c-pat"><span class="pat-no">${esc(b.pat)}</span>${duzRozet(blokDuzKalem(b.kalemler, "patoloji_no"), "patoloji_no")}${yazdirIkonu(b.kalemler, "arsiv")}${duzEski(blokDuzKalem(b.kalemler, "patoloji_no"), "patoloji_no")}${ciktiEskiHTML(blokCiktiEskimi(b.kalemler, "arsiv"))}</td>
-      <td class="c-blok">${esc(b.blok || "—")}${duzRozet(blokDuzKalem(b.kalemler, "blok_no"), "blok_no")}${duzEski(blokDuzKalem(b.kalemler, "blok_no"), "blok_no")}</td>
+      <td class="c-blok">${blokKisaHTML(b.blok)}${duzRozet(blokDuzKalem(b.kalemler, "blok_no"), "blok_no")}${duzEski(blokDuzKalem(b.kalemler, "blok_no"), "blok_no")}</td>
       <td class="sayi c-arsiv">${ihk || `<span class="sifir">–</span>`}</td>
       <td class="sayi c-arsiv">${ykhk || `<span class="sifir">–</span>`}</td>
       <td>${acil ? prioBuyukCip(stat ? "stat" : "acil") : ""}</td>
@@ -4277,9 +4321,21 @@ function showForm(prefill) {
 
   $("#blockin").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.value.trim()) {
-      addBlockChip(e.target.value.trim());
+      e.preventDefault();
+      bloklariEkle(e.target.value);
       e.target.value = "";
     }
+  });
+  // Satır sonlu yapıştırma: tek satırlık alan satır sonlarını silerdi
+  // ("Yp1\nYp2" → "Yp1Yp2") — satırlar ayrı blok olarak eklenir.
+  $("#blockin").addEventListener("paste", (e) => {
+    const t = (e.clipboardData && e.clipboardData.getData("text")) || "";
+    if (!/[\r\n]/.test(t)) return;
+    e.preventDefault();
+    const inp = e.target;
+    const metin = inp.value.slice(0, inp.selectionStart) + "\n" + t + "\n" + inp.value.slice(inp.selectionEnd);
+    inp.value = "";
+    bloklariEkle(metin);
   });
   $("#prios").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
@@ -4363,10 +4419,8 @@ function secilenTestler() {
 function formdanVaka() {
   const patNo = $("#mPat").value.trim();
   if (!patNo) { toast("Patoloji no gerekli", true); $("#mPat").focus(); return null; }
-  const blockInput = $("#blockin");
-  const bekleyen = blockInput ? blockInput.value.trim() : "";
-  if (bekleyen) { addBlockChip(bekleyen); blockInput.value = ""; }
-  const bloklar = [...$$("#blocks .bchip")].map((c) => c.textContent.replace("×", "").trim()).filter(Boolean);
+  if (bekleyenBlokGonderimdeDur()) return null;
+  const bloklar = formBloklari();
   const testler = secilenTestler();
   if (!testler.length) { toast("En az bir test seçin", true); return null; }
   const uzmanEl = $("#mUzman");
@@ -4672,9 +4726,61 @@ window.addEventListener("beforeunload", (e) => {
 function addBlockChip(v) {
   const c = document.createElement("span");
   c.className = "bchip";
+  c.dataset.blok = v;
   c.innerHTML = `${esc(v)} <span class="x">×</span>`;
   c.querySelector(".x").onclick = () => c.remove();
   $("#blocks").insertBefore(c, $("#blockin"));
+  return c;
+}
+
+// ---------------- Blok girişi: otomatik ayırma ----------------
+// Boşluk, virgül, noktalı virgül ya da satır sonu ile ayrılmış değerler ayrı
+// blok çiplerine bölünür ("Yp1 yp12, yp14" → 3 blok). Tire içerenler
+// bölünmez: "1-10", "1-em1" (tire çevresindeki boşluk yok sayılır: "1 - 10").
+function blokParcala(v) {
+  return String(v == null ? "" : v).replace(/\s*-\s*/g, "-").split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+}
+const formBloklari = () => [...$$("#blocks .bchip")].map((c) => c.dataset.blok ?? c.textContent.replace("×", "").trim()).filter(Boolean);
+// Yazılan değeri çiplere ekler. Aynı blok (büyük/küçük harf ve boşluk farkı
+// yok sayılarak — "Yp1" = "yp1") bir kez eklenir, uyarı verilir. Birden fazla
+// bloğa bölündüyse bant: "9 blok olarak ayrıldı" + "Geri al (tek blok bırak)".
+// gonderim: İstek Ver / Sepete ekle anında bölündü — gönderim durur, bakıp
+// tekrar basılır (geri alma gönderimden önce yapılabilsin).
+// Dönen: birden fazla bloğa bölündü mü.
+function bloklariEkle(ham, { gonderim = false } = {}) {
+  const parcalar = blokParcala(ham);
+  if (!parcalar.length) return false;
+  const varolan = new Set(formBloklari().map(blokAnahtar));
+  const eklenen = [], tekrar = [];
+  parcalar.forEach((p) => {
+    const k = blokAnahtar(p);
+    if (varolan.has(k)) { if (!tekrar.includes(p)) tekrar.push(p); return; }
+    varolan.add(k);
+    eklenen.push(addBlockChip(p));
+  });
+  if (tekrar.length) toast(`${tekrar.join(", ")} iki kez girildi — bir kez eklendi (büyük/küçük harf farkı yok sayılır)`, true);
+  const bolundu = parcalar.length > 1;
+  if (bolundu && eklenen.length > 1) {
+    const tek = String(ham).trim().replace(/\s+/g, " ");
+    geriAlBandi(`${eklenen.length} blok olarak ayrıldı${gonderim ? " — kontrol edip tekrar gönderin" : ""}`, "Geri al (tek blok bırak)", () => {
+      if (!$("#blocks")) return; // form kapandı
+      eklenen.forEach((c) => c.remove());
+      if (!formBloklari().map(blokAnahtar).includes(blokAnahtar(tek))) addBlockChip(tek);
+      toast("Tek blok olarak bırakıldı");
+    });
+  }
+  return bolundu && eklenen.length > 1;
+}
+// Enter'sız yazılıp gönderilen blok: çipe çevrilir; birden fazla bloğa
+// bölündüyse gönderim durur (true döner).
+function bekleyenBlokGonderimdeDur() {
+  const bi = $("#blockin");
+  const bekleyen = bi ? bi.value.trim() : "";
+  if (!bekleyen) return false;
+  bi.value = "";
+  const dur = bloklariEkle(bekleyen, { gonderim: true });
+  if (dur) bi.focus();
+  return dur;
 }
 
 async function submitForm() {
@@ -4683,11 +4789,9 @@ async function submitForm() {
 
   // Enter'a basılmadan input'ta kalan yazı da otomatik chip'e dönüşsün —
   // blok girişi opsiyonel, Enter'a basmak artık zorunlu değil.
-  const blockInput = $("#blockin");
-  const pending = blockInput ? blockInput.value.trim() : "";
-  if (pending) { addBlockChip(pending); blockInput.value = ""; }
+  if (bekleyenBlokGonderimdeDur()) return;
 
-  let bloklar = [...$$("#blocks .bchip")].map((c) => c.textContent.replace("×", "").trim()).filter(Boolean);
+  let bloklar = formBloklari();
   if (!bloklar.length) bloklar = [""]; // blok girilmemişse tek, boş bloklu kalemler oluşur
 
   const testler = collectPickedTestler();
