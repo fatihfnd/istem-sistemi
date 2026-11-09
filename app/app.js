@@ -807,14 +807,19 @@ function canliEtiket() {
   if (canliDurum === "SUBSCRIBED" && canliMod === "tablo") return ["Tablo dinleme (yedek)", "uyari"];
   return ["Bağlantı yok", "kotu"];
 }
+function canliNotu() {
+  if (canliDurum !== "SUBSCRIBED") return "Kanal bağlanıyor ya da bağlantı koptu; yeniden bağlanınca liste kendiliğinden senkronlanır.";
+  return canliMod === "tablo" ? "Yayın kanalı kurulamadı ya da 10 sn içinde bağlanamadı; tablolar dinleniyor. performans_sema.sql çalıştırıldı mı?"
+    : "Değişiklikler tek özel kanaldan (istem-canli) geliyor.";
+}
 const zamanMetni = (ms) => (ms ? new Date(ms).toLocaleTimeString("tr-TR") : "—");
 function renderSistemPage() {
   const [etiket, tur] = canliEtiket();
   $("#mainView").innerHTML = `
-    <div class="main-head"><div><h1>Sistem</h1><div class="sub">Canlı güncelleme ve senkron durumu</div></div></div>
+    <div class="page-head"><h1>Sistem</h1><div class="sub">Canlı güncelleme ve senkron durumu</div><div class="spacer"></div></div>
     <div class="sistem-kart">
       <div class="sistem-satir"><span class="ss-ad">Canlı güncelleme:</span><b class="ss-deger ss-${tur}" id="sisCanli">${esc(etiket)}</b></div>
-      <div class="sistem-not" id="sisCanliNot">${canliMod === "tablo" ? "Yayın kanalı kurulamadı ya da 10 sn içinde bağlanamadı; tablolar dinleniyor. performans_sema.sql çalıştırıldı mı?" : canliMod === "yayin" ? "Değişiklikler tek özel kanaldan (istem-canli) geliyor." : "Kanal bağlanıyor ya da bağlantı koptu; yeniden bağlanınca liste kendiliğinden senkronlanır."}</div>
+      <div class="sistem-not" id="sisCanliNot">${esc(canliNotu())}</div>
       <div class="sistem-satir"><span class="ss-ad">Kanal durumu:</span><span id="sisDurum">${esc(canliDurum)}</span></div>
       <div class="sistem-satir"><span class="ss-ad">Son canlı olay:</span><span id="sisOlay">${zamanMetni(canliSonOlay)}</span></div>
       <div class="sistem-satir"><span class="ss-ad">Son tam senkron:</span><span id="sisSenkron">${zamanMetni(sonTamSenkron)}</span></div>
@@ -836,6 +841,7 @@ function sistemSayfasiTazele() {
   const el = $("#sisCanli");
   el.textContent = etiket;
   el.className = "ss-deger ss-" + tur;
+  $("#sisCanliNot").textContent = canliNotu();
   $("#sisDurum").textContent = canliDurum;
   $("#sisOlay").textContent = zamanMetni(canliSonOlay);
   $("#sisSenkron").textContent = zamanMetni(sonTamSenkron);
@@ -2245,7 +2251,7 @@ function renderFiltreCipleri() {
 }
 function filtreKaldir(k) {
   if (k === "hepsi") { clearAllFilters(); return; }
-  if (k === "ara") { searchQ = ""; aramaTam = false; const qs = $("#qSearch"); if (qs) qs.value = ""; aramaTemizle(); }
+  if (k === "ara") { searchQ = ""; aramaTam = false; const qs = $("#qSearch"); if (qs) qs.value = ""; kuyrukAramasiniTemizle(); }
   else if (["tip", "oncelik", "tekrar", "durum"].includes(k)) { colFilters[k] = new Set(); if (k === "durum") teslimSekmesi = false; }
   else colFilters[k] = "";
   clearBulkSelection();
@@ -4197,7 +4203,7 @@ function aramayaUyar(r) {
   if (!q) return false;
   return aramaTam ? patTamEslesir(r, q) : (String(r.blok_no || "").toLowerCase().includes(q.toLowerCase()) || patEslesir(r, q.toLowerCase()));
 }
-function aramaTemizle() {
+function kuyrukAramasiniTemizle() {
   clearTimeout(aramaZaman);
   aramaSonucQ = "";
   if (rows.some((r) => r.__arama)) rows = rows.filter((r) => !r.__arama);
@@ -4205,7 +4211,7 @@ function aramaTemizle() {
 function sunucudaAraZamanla() {
   clearTimeout(aramaZaman);
   const q = searchQ.trim();
-  if (!q || (!aramaTam && q.length < 3)) { if (aramaSonucQ || rows.some((r) => r.__arama)) { aramaTemizle(); renderTable(); } return; }
+  if (!q || (!aramaTam && q.length < 3)) { if (aramaSonucQ || rows.some((r) => r.__arama)) { kuyrukAramasiniTemizle(); renderTable(); } return; }
   aramaZaman = setTimeout(() => sunucudaAra(q), aramaTam ? 0 : 350);
 }
 async function sunucudaAra(q) {

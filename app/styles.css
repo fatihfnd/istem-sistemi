@@ -1347,7 +1347,7 @@ tbody tr.onc-acil > td:first-child{box-shadow:inset 4px 0 0 var(--amber-i)}
 .eski-hatirlatma{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;padding:8px 12px;border-radius:9px;background:var(--amber-b);border:1px solid color-mix(in srgb, var(--amber-i) 35%, transparent);color:var(--ink);font-size:13px}
 .eski-hatirlatma b{color:var(--amber-i)}
 .eski-hatirlatma .eh-x{margin-left:auto;background:none;border:0;font-size:18px;line-height:1;color:var(--ink-3);cursor:pointer}
-.sistem-kart{max-width:640px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.sistem-kart{max-width:640px;margin:6px 26px 22px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
 .sistem-satir{display:flex;gap:10px;align-items:baseline;padding:5px 0;font-size:13.5px}
 .sistem-satir .ss-ad{min-width:150px;color:var(--ink-3)}
 .ss-deger.ss-iyi{color:var(--green-i, #1f7a4d)}

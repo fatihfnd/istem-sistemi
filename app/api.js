@@ -134,14 +134,19 @@
   // ---------------- Performans (performans_sema.sql) ----------------
   // istem_ozellikler(): hangi parçalar kurulu ({ getir, canli_yayin, ... }).
   // Oturumda bir kez okunur; fonksiyon yoksa {} (eski sorgular, tablo dinleme).
-  let ozellik = null;
+  let ozellik = null, ozellikIstegi = null;
   async function ozellikYokla() {
     if (ozellik) return ozellik;
-    try {
-      const { data, error } = await client.rpc("istem_ozellikler");
-      ozellik = !error && data && typeof data === "object" ? { ...data } : {};
-    } catch (e) { ozellik = {}; }
-    return ozellik;
+    if (!ozellikIstegi) {
+      ozellikIstegi = (async () => {
+        try {
+          const { data, error } = await client.rpc("istem_ozellikler");
+          ozellik = !error && data && typeof data === "object" ? { ...data } : {};
+        } catch (e) { ozellik = {}; }
+        return ozellik;
+      })();
+    }
+    return ozellikIstegi;
   }
   const fonksiyonYok = (e) => Boolean(e && (e.code === "PGRST202" || e.code === "42883" || /could not find the function|does not exist/i.test(String(e.message || ""))));
 
