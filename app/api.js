@@ -131,6 +131,100 @@
   let konsDurum = null; // null: henüz yoklanmadı · true/false
   const tamamKolonHatasi = (e) => Boolean(e && /tamamlandi_at|kons_no/.test(String(e.message || "")));
 
+  // ---------------- Performans (performans_sema.sql) ----------------
+  // istem_ozellikler(): hangi parçalar kurulu ({ getir, canli_yayin, ... }).
+  // Oturumda bir kez okunur; fonksiyon yoksa {} (eski sorgular, tablo dinleme).
+  let ozellik = null;
+  async function ozellikYokla() {
+    if (ozellik) return ozellik;
+    try {
+      const { data, error } = await client.rpc("istem_ozellikler");
+      ozellik = !error && data && typeof data === "object" ? { ...data } : {};
+    } catch (e) { ozellik = {}; }
+    return ozellik;
+  }
+  const fonksiyonYok = (e) => Boolean(e && (e.code === "PGRST202" || e.code === "42883" || /could not find the function|does not exist/i.test(String(e.message || ""))));
+
+  // Kişi adları: ince liste isim yerine kimlik taşır; adlar oturum başında
+  // bir kez çekilen kullanıcı listesinden tamamlanır. Bilinmeyen kimlik
+  // görülünce (yeni kullanıcı) ya da kullanicilar değişince tazelenir.
+  let kisiler = null, kisiZamani = 0, kisiIstegi = null;
+  async function kisileriYukle(zorla = false) {
+    if (kisiler && !zorla) return kisiler;
+    if (kisiIstegi) return kisiIstegi;
+    kisiIstegi = (async () => {
+      const { data, error } = await client.from("kullanicilar").select("id,ad_soyad,kisaltma");
+      must(data, error);
+      const m = {};
+      data.forEach((u) => { m[u.id] = { ad: u.ad_soyad, kisaltma: u.kisaltma || null }; });
+      kisiler = m;
+      kisiZamani = Date.now();
+      return m;
+    })();
+    try { return await kisiIstegi; } finally { kisiIstegi = null; }
+  }
+  const KISI_KOLON = [["istem_yapan_id", "isteyen"], ["uzman_id", "uzman"], ["kesen_id", "kesen"], ["blok_cikaran_id", "cikaran"], ["teslim_alan_id", "teslim_alan"]];
+  function bilinmeyenKisiVar(liste) {
+    if (!kisiler) return true;
+    return liste.some((r) => KISI_KOLON.some(([k]) => r[k] && !kisiler[r[k]]) || (r.son_not && r.son_not.yazan_id && !kisiler[r.son_not.yazan_id]));
+  }
+  const kisi = (id) => (id && kisiler && kisiler[id]) || null;
+  // Tam görünümdeki (istem_kuyruk_v) ad alanları ince satıra eklenir —
+  // ekranlar iki kaynaktan gelen satırı aynı biçimde kullanır.
+  function adlariTamamla(r) {
+    KISI_KOLON.forEach(([k, on]) => {
+      const u = kisi(r[k]);
+      r[on + "_adi"] = r[k] ? (u ? u.ad : null) : null;
+      r[on + "_kisaltma"] = u ? u.kisaltma : null;
+    });
+    if (r.son_not) { const u = kisi(r.son_not.yazan_id); r.son_not = { ...r.son_not, yazan: u ? u.ad : null, kisaltma: u ? u.kisaltma : null }; }
+    ["yazdirmalar", "duzeltmeler"].forEach((alan) => {
+      if (!r[alan]) return;
+      const yeni = {};
+      Object.entries(r[alan]).forEach(([k, v]) => { const u = kisi(v && v.kim_id); yeni[k] = { ...v, kim: u ? u.ad : (v && v.kim) || null, kisaltma: u ? u.kisaltma : (v && v.kisaltma) || null }; });
+      r[alan] = yeni;
+    });
+    return r;
+  }
+  // kuyruk_getir yanıtı (sütun adları bir kez + satır dizileri) → satır nesneleri.
+  async function getirCoz(veri) {
+    const k = (veri && veri.k) || [];
+    const liste = ((veri && veri.s) || []).map((a) => { const r = {}; k.forEach((c, i) => { r[c] = a[i]; }); return r; });
+    if (bilinmeyenKisiVar(liste) && Date.now() - kisiZamani > 30000) await kisileriYukle(true).catch(() => {});
+    liste.forEach(adlariTamamla);
+    return liste;
+  }
+  async function getir(args) {
+    const oz = await ozellikYokla();
+    if (!oz.getir) return null;
+    if (!kisiler) await kisileriYukle().catch(() => {});
+    const { data, error } = await client.rpc("kuyruk_getir", args);
+    if (error) {
+      if (fonksiyonYok(error)) { oz.getir = false; return null; }
+      throw error;
+    }
+    const liste = await getirCoz(data);
+    liste.dahaVar = Boolean(data && data.daha);
+    liste.eskiSayisi = data && typeof data.eski === "number" ? data.eski : null;
+    return liste;
+  }
+
+  // Canlı kanal olayı (yayın yükü ya da tablo dinleme) → tek biçim:
+  // { t: tablo, o: INSERT|UPDATE|DELETE, k?: kalem id, i?: istem id, id?: kayıt id }
+  const CANLI_TABLOLAR = ["istem_kalemleri", "istemler", "istem_notlari", "yazdirma_kayitlari", "duyurular",
+    "duyuru_guncellemeleri", "istek_setleri", "istek_seti_kalemleri", "cihazlar"];
+  function tabloOlayi(p) {
+    const n = p.new || {}, o = p.old || {}, v = (k) => n[k] ?? o[k] ?? null;
+    const olay = { t: p.table, o: p.eventType };
+    if (p.table === "istem_kalemleri") { olay.k = v("id"); olay.i = v("istem_id"); }
+    else if (p.table === "istem_notlari") olay.i = v("istem_id");
+    else if (p.table === "yazdirma_kayitlari") olay.k = v("kalem_id");
+    else if (p.table === "duyuru_guncellemeleri") olay.id = v("duyuru_id");
+    else if (p.table === "istek_seti_kalemleri") olay.id = v("istek_seti_id");
+    else olay.id = v("id");
+    return olay;
+  }
+
   // Sunucudaki kuyruk sırasının aynısı (aşağıda kuyrukOku) — birden çok
   // sorgunun sonucu birleştirilince yeniden sıralamak için.
   const azalan = (x, y) => (x < y ? 1 : x > y ? -1 : 0);
@@ -796,12 +890,9 @@
     // Tüm kullanıcılar (aktif filtresi yok — geçmişte pasif olmuş
     // kullanıcının adı da eski kayıtlarda görünmeye devam etsin).
     // id -> { ad, kisaltma }
+    // Oturumda bir kez çekilen kişi listesi (canlı olayla / 10 dk'da tazelenir).
     async getKullaniciMap() {
-      const { data, error } = await client.from("kullanicilar").select("id,ad_soyad,kisaltma");
-      must(data, error);
-      const map = {};
-      data.forEach((u) => { map[u.id] = { ad: u.ad_soyad, kisaltma: u.kisaltma || null }; });
-      return map;
+      return { ...(await kisileriYukle(Date.now() - kisiZamani > 600000)) };
     },
 
     // istemler.istem_yapan_id VE fatura_giren_id ikisi de kullanicilar'a
@@ -1045,8 +1136,15 @@
     // Sonuç sunucu sırasıyla (kuyrukSirasi) birleştirilir.
     // tam: true → her şey (Excel'e Aktar).
     // tamamlandi_at yoksa (SQL çalışmadı) pencere eski usul created_at'e göre.
+    //
+    // performans_sema.sql kuruluysa TEK istek: kuyruk_getir (ince satırlar,
+    // sütun adları bir kez; "N daha eski" sayısı da içinde → eskiSayisi).
     async listQueue({ tamamlananGun = 0, tamamlananLimit = 0, kesildiGun = 7, tam = false } = {}) {
       const gunISO = (g) => new Date(Date.now() - g * 86400000).toISOString();
+      if (!tam) {
+        const l = await getir({ p_tamamlanan_gun: tamamlananGun || 0, p_limit: tamamlananLimit || 0, p_kesildi_gun: kesildiGun });
+        if (l) return l;
+      }
       if (!tam && !tamamKolonuYok && !topluKolonuYok && !teslimKolonuYok) {
         try {
           const sinir = tamamlananGun ? gunISO(tamamlananGun) : null;
@@ -1088,6 +1186,103 @@
           else throw e;
         }
       }
+    },
+
+    // Canlı güncelleme: yalnız değişen kalemler (kalem ya da istem kimliğiyle).
+    // Dönen: ince satırlar; istenip dönmeyen kalem silinmiş (ya da artık
+    // görülemiyor) demektir.
+    async kalemleriGetir({ kalemIds = [], istemIds = [] } = {}) {
+      const k = [...new Set(kalemIds.filter(Boolean))], i = [...new Set(istemIds.filter(Boolean))];
+      if (!k.length && !i.length) return [];
+      const l = await getir({ p_kalem_ids: k, p_istem_ids: i });
+      if (l) return l;
+      const sart = [k.length ? `kalem_id.in.(${k.join(",")})` : "", i.length ? `istem_id.in.(${i.join(",")})` : ""].filter(Boolean).join(",");
+      const { data, error } = await client.from("istem_kuyruk_v").select("*").or(sart);
+      return must(data, error);
+    },
+    // Arama kutusu: tarih sınırı olmadan tüm kayıtlarda (patoloji no, eski
+    // patoloji no, kons no, blok) — en yeni 300.
+    async kuyrukAra(metin) {
+      const q = String(metin || "").trim();
+      if (!q) return [];
+      const l = await getir({ p_ara: q, p_limit: 300 });
+      if (l) return l;
+      const d = q.replace(/[,()*"\\]/g, " ").trim();
+      if (!d) return [];
+      const { data, error } = await client.from("istem_kuyruk_v").select("*")
+        .or(`patoloji_no.ilike.*${d}*,blok_no.ilike.*${d}*${konsDurum ? `,kons_no.ilike.*${d}*` : ""}`)
+        .order("created_at", { ascending: false }).limit(300);
+      return must(data, error);
+    },
+    // Detay paneli: kalemin tüm notları + kalite notu (ince listede yok).
+    async kalemDetay(kalemId) {
+      const { data, error } = await client.from("istem_kuyruk_v").select("notlar,kalite_notu,cihaz_adi").eq("kalem_id", kalemId).maybeSingle();
+      must(data, error);
+      return data;
+    },
+    // Blok detayı: istemlerin tüm notları (en yeniden), adlarıyla.
+    async istemNotlari(istemIds) {
+      const ids = [...new Set((istemIds || []).filter(Boolean))];
+      if (!ids.length) return [];
+      const { data, error } = await client.from("istem_notlari").select("id,istem_id,yazan_id,metin,created_at").in("istem_id", ids).order("created_at", { ascending: false });
+      must(data, error);
+      if (!kisiler) await kisileriYukle().catch(() => {});
+      return data.map((n) => { const u = kisi(n.yazan_id); return { id: n.id, istem_id: n.istem_id, yazan_id: n.yazan_id, yazan: u ? u.ad : null, kisaltma: u ? u.kisaltma : null, zaman: n.created_at, metin: n.metin }; });
+    },
+    // Tek duyuru (canlı olayda: kritik / çözüldü bildirimi için).
+    async getDuyuru(id) {
+      const { data, error } = await client.from("duyuru_v").select("*").eq("id", id).maybeSingle();
+      if (error) return null;
+      return data;
+    },
+    // Kişi listesi oturumda bir kez (kullanicilar değişince zorla tazelenir).
+    async kisileriTazele() { return kisileriYukle(true); },
+    async performansOzellikleri() { return { ...(await ozellikYokla()) }; },
+
+    // TEK canlı kanal. Önce özel yayın kanalı ("istem-canli", performans_sema.sql
+    // tetikleyicileri); kurulu değilse, abone olunamazsa ya da 10 sn içinde
+    // SUBSCRIBED olmazsa tablo dinlemeye (yedek) düşer — konsola tek satır
+    // uyarı. onOlay({ t, o, k?, i?, id? }); onDurum(mod, durum) — mod:
+    // "yayin" | "tablo", durum: SUBSCRIBED | CHANNEL_ERROR | TIMED_OUT | CLOSED.
+    canliKanal({ onOlay, onDurum } = {}) {
+      let kanal = null, kapandi = false, zaman = null, mod = null;
+      const bildir = (d) => { if (!kapandi && onDurum) onDurum(mod, d); };
+      const tabloDinle = () => {
+        mod = "tablo";
+        kanal = client.channel("istem-canli-tablo");
+        CANLI_TABLOLAR.forEach((t) => kanal.on("postgres_changes", { event: "*", schema: "public", table: t }, (p) => { if (!kapandi) onOlay(tabloOlayi(p)); }));
+        kanal.subscribe((durum) => bildir(durum));
+      };
+      const dus = (neden) => {
+        if (kapandi || mod !== "yayin") return;
+        clearTimeout(zaman);
+        console.warn(`[canlı] Yayın kanalı kullanılamadı (${neden}) — tablo dinlemeye (yedek) geçildi`);
+        const eski = kanal;
+        kanal = null;
+        if (eski) client.removeChannel(eski);
+        tabloDinle();
+        bildir("BEKLENIYOR");
+      };
+      ozellikYokla().then((oz) => {
+        if (kapandi) return;
+        if (!oz.canli_yayin) { tabloDinle(); bildir("BEKLENIYOR"); return; }
+        mod = "yayin";
+        let abone = false;
+        kanal = client.channel("istem-canli", { config: { private: true } });
+        kanal.on("broadcast", { event: "degisiklik" }, (m) => { if (!kapandi && m && m.payload) onOlay(m.payload); });
+        zaman = setTimeout(() => { if (!abone) dus("10 sn içinde abone olunamadı"); }, 10000);
+        kanal.subscribe((durum, hata) => {
+          if (kapandi || mod !== "yayin") return;
+          if (durum === "SUBSCRIBED") { abone = true; clearTimeout(zaman); }
+          else if (!abone && (durum === "CHANNEL_ERROR" || durum === "TIMED_OUT" || durum === "CLOSED")) { dus(durum + (hata && hata.message ? ": " + hata.message : "")); return; }
+          bildir(durum);
+        });
+        bildir("BEKLENIYOR");
+      });
+      return {
+        mod: () => mod,
+        kapat() { kapandi = true; clearTimeout(zaman); if (kanal) client.removeChannel(kanal); kanal = null; },
+      };
     },
 
     // "N daha eski" bilgisi için: pencere dışında kalan (yüklenmeyen)
@@ -1133,6 +1328,9 @@
     // Vaka görünümü "tüm geçmiş"tir: gizli eski kayıtlar dahil o patoloji
     // no'nun bütün kalemleri.
     async vakaKalemleri(patolojiNo) {
+      // performans_sema.sql: ince satırlar, tek istek (arama + tam eşleşme).
+      const ince = await getir({ p_ara: patolojiNo, p_limit: 1000 });
+      if (ince) return ince.filter((r) => r.patoloji_no === patolojiNo).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || String(a.kalem_id).localeCompare(String(b.kalem_id)));
       const satirlar = [];
       for (;;) {
         const { data, error } = await client

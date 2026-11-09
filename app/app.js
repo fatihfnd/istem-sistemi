@@ -287,7 +287,7 @@ let dragActive = false;       // fare gerçekten başka bir satıra taşındı m
 let dragValue = false;        // sürüklenirken uygulanacak checked durumu
 let uzunBasTimer = null;      // dokunmatik uzun basma
 let uzunBasildi = false;      // uzun basma oldu — ardından gelen tık yok sayılır
-let unsub = null, pageUnsub = null, reloadTimer = null;
+let pageUnsub = null;
 let grp = "ihc", prio = "rutin";
 let selectedTests = new Map(); // test_id -> {ad,klon,grup}
 let customItems = []; // {ad, sel, grup}
@@ -353,6 +353,27 @@ function tamamlananGunOku() {
 // Bekleyen / Cihazda kalemler tablonun başında, varsayılan KAPALI şeritte —
 // listenin üstünü itmezler; sıralama ayarından bağımsız (en eski önce).
 let eskiSeritAcik = false;
+
+// ---------------- Canlı güncelleme + senkron (performans_sema.sql) ----------------
+// TEK canlı kanal (Api.canliKanal): yayın kanalı ya da tablo dinleme (yedek).
+// Olayda liste baştan çekilmez: değişen kalem / istem kimlikleri 500 ms
+// biriktirilip yalnız onlar çekilir (Api.kalemleriGetir). Tam senkron:
+// açılış, tarih seçimi, ↻ Yenile, sekme görünür olunca (en sık 30 sn'de
+// bir), yeniden bağlanınca ve görünürken 5 dakikada bir.
+let canli = null;                  // { kapat(), mod() }
+let canliMod = null;               // "yayin" | "tablo" | null
+let canliDurum = "BEKLENIYOR";     // SUBSCRIBED | CHANNEL_ERROR | TIMED_OUT | CLOSED | BEKLENIYOR
+let canliSonOlay = 0;
+let sonTamSenkron = 0;
+const TAM_SENKRON_ARALIK = 5 * 60 * 1000;
+const bekKalem = new Set(), bekIstem = new Set(), bekYeni = new Set(), bekSilKalem = new Set(), bekSilIstem = new Set();
+let bekTam = false;                // değişeni bilinmeyen olay → tam senkron
+let gizliyken = false;             // sekme gizliyken değişiklik geldi → görünür olunca tam senkron
+let canliZaman = null;
+let islemKimlikleri = null;        // kendi işlemlerimizin etkilediği kalem / istem
+const detayOnbellek = new Map();   // kalem_id -> { notlar, kalite_notu, cihaz_adi } (detay paneli)
+let aramaSonucQ = "";              // arama kutusu: sunucuda (tüm tarihlerde) aranan son metin
+let aramaZaman = null;
 let queueSeq = 0;             // üst üste binen yüklemelerde yalnız en sonuncusu yazsın
 // Yeni istem bildirimi: şimdiye kadar görülen kalem id'leri (null = ilk
 // yükleme henüz olmadı) ve henüz bakılmamış yeni kalemler ("Yeni" etiketi).
@@ -390,7 +411,7 @@ const canTeslimGeriAl = (r) => Boolean(session && r && r.teslim_at && (isAdmin()
 // İstek Setleri: teknisyen dışında herkes ekler/düzenler/siler (RLS de öyle).
 const canManageSets = () => !isTeknisyen();
 const canEditSablon = (s) => isAdmin() || (!isTeknisyen() && s.sahip_id === session.id);
-const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "test-katalogu", "yedekler", "istatistikler"]);
+const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "test-katalogu", "yedekler", "istatistikler", "sistem"]);
 function pageAllowed(page) {
   if (ADMIN_PAGES.has(page)) return isAdmin();
   if (page === "sablonlar") return !isTeknisyen();
@@ -600,9 +621,11 @@ async function handleLogout() {
   yaziyorKapat();
   duyuruKapat();
   await Api.signOut();
-  if (unsub) { unsub(); unsub = null; }
+  canliKapat();
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
-  rows = []; selId = null; searchQ = ""; aramaTam = false;
+  rows = []; selId = null; searchQ = ""; aramaTam = false; aramaSonucQ = "";
+  sonTamSenkron = 0; islemKimlikleri = null; detayOnbellek.clear(); bekTam = false; gizliyken = false;
+  [bekKalem, bekIstem, bekYeni, bekSilKalem, bekSilIstem].forEach((x) => x.clear());
   colFilters = freshColFilters();
   kapsam = "tumu"; kesitSekme = "kesilecek"; arsivSekme = "hepsi"; secimModu = false;
   sortCol = null; sortDir = "asc"; caseView = null;
@@ -662,8 +685,8 @@ async function initApp(user) {
   if (!avatarTimer) avatarTimer = setInterval(async () => { await refreshAvatarlar(); renderMe(); }, 6 * 3600 * 1000);
 
   wireStaticUI();
-  if (unsub) unsub();
-  unsub = Api.subscribeQueue(scheduleReload);
+  islemKaydiKur();
+  canliBaslat(); // TEK canlı kanal: kuyruk, Hizmetler, duyurular, setler, cihazlar, ayarlar, kullanıcılar
   duyuruArayuzuBagla();
   duyuruBaslat(); // şerit, Duyurular menüsü, bağlamsal işaretler (tablo yoksa hiçbiri)
 
@@ -691,7 +714,9 @@ function gruplariUygula(list) {
 // varsayılan kapsam hemen yenilenir.
 let profilSonOkuma = 0;
 async function profilTazele() {
-  if (!session || Date.now() - profilSonOkuma < 60000) return;
+  // Değişiklikler canlı kanalla gelir (kullanicilar / sistem_ayarlari);
+  // bu yalnız yedek: en sık 10 dakikada bir.
+  if (!session || Date.now() - profilSonOkuma < 600000) return;
   profilSonOkuma = Date.now();
   ayarlariTazele(); // yönetici teslim eşiğini değiştirdiyse
   let yeni;
@@ -727,10 +752,6 @@ setInterval(() => {
   renderTable();
 }, 60000);
 
-function scheduleReload() {
-  clearTimeout(reloadTimer);
-  reloadTimer = setTimeout(loadQueue, 150);
-}
 
 async function refreshSablonlar() {
   SABLONLAR = await Api.getSablonlar(session.id);
@@ -754,20 +775,13 @@ function navigate(page) {
   if (page === "kuyruk") {
     renderQueuePage();
   } else if (page === "setler") {
-    renderSetlerPage();
-    pageUnsub = Api.subscribeIstekSetleri(async () => {
-      try { ISTEK_SETLERI = await Api.getIstekSetleri(); SETS_INST = activeSetsInst(ISTEK_SETLERI); if (currentPage === "setler") renderSetlerPage(); } catch (e) { /* geçici bağlantı sorunu */ }
-    });
+    renderSetlerPage(); // canlı değişiklik: setlerCanli
   } else if (page === "sablonlar") {
     renderSablonlarPage();
   } else if (page === "cihazlar") {
-    renderCihazlarPage();
-    pageUnsub = Api.subscribeCihazlar(async () => {
-      try { CIHAZLAR = await Api.getCihazlar(); if (currentPage === "cihazlar") renderCihazlarPage(); } catch (e) { /* geçici bağlantı sorunu */ }
-    });
+    renderCihazlarPage(); // canlı değişiklik: cihazlarCanli
   } else if (page === "hizmetler") {
-    renderHizmetlerPage();
-    pageUnsub = Api.subscribeHizmetler(() => loadHizmetler());
+    renderHizmetlerPage(); // canlı değişiklik: hizmetlerDegisti
   } else if (page === "kullanicilar") {
     renderKullanicilarPage();
   } else if (page === "test-gruplari") {
@@ -780,7 +794,51 @@ function navigate(page) {
     renderIstatistiklerPage();
   } else if (page === "duyurular") {
     renderDuyurularPage();
+  } else if (page === "sistem") {
+    renderSistemPage();
   }
+}
+
+// ================================================================
+// YÖNETİM > SİSTEM — canlı güncelleme kipi ve senkron durumu
+// ================================================================
+function canliEtiket() {
+  if (canliDurum === "SUBSCRIBED" && canliMod === "yayin") return ["Yayın kanalı", "iyi"];
+  if (canliDurum === "SUBSCRIBED" && canliMod === "tablo") return ["Tablo dinleme (yedek)", "uyari"];
+  return ["Bağlantı yok", "kotu"];
+}
+const zamanMetni = (ms) => (ms ? new Date(ms).toLocaleTimeString("tr-TR") : "—");
+function renderSistemPage() {
+  const [etiket, tur] = canliEtiket();
+  $("#mainView").innerHTML = `
+    <div class="main-head"><div><h1>Sistem</h1><div class="sub">Canlı güncelleme ve senkron durumu</div></div></div>
+    <div class="sistem-kart">
+      <div class="sistem-satir"><span class="ss-ad">Canlı güncelleme:</span><b class="ss-deger ss-${tur}" id="sisCanli">${esc(etiket)}</b></div>
+      <div class="sistem-not" id="sisCanliNot">${canliMod === "tablo" ? "Yayın kanalı kurulamadı ya da 10 sn içinde bağlanamadı; tablolar dinleniyor. performans_sema.sql çalıştırıldı mı?" : canliMod === "yayin" ? "Değişiklikler tek özel kanaldan (istem-canli) geliyor." : "Kanal bağlanıyor ya da bağlantı koptu; yeniden bağlanınca liste kendiliğinden senkronlanır."}</div>
+      <div class="sistem-satir"><span class="ss-ad">Kanal durumu:</span><span id="sisDurum">${esc(canliDurum)}</span></div>
+      <div class="sistem-satir"><span class="ss-ad">Son canlı olay:</span><span id="sisOlay">${zamanMetni(canliSonOlay)}</span></div>
+      <div class="sistem-satir"><span class="ss-ad">Son tam senkron:</span><span id="sisSenkron">${zamanMetni(sonTamSenkron)}</span></div>
+      <div class="sistem-satir"><span class="ss-ad">Veritabanı:</span><span id="sisOzellik">…</span></div>
+      <div class="btnrow"><button type="button" class="btn-ghost btn-sm" id="sisSenkronBtn">↻ Şimdi senkronla</button></div>
+    </div>`;
+  $("#sisSenkronBtn").onclick = async () => { await tamSenkron(); renderSistemPage(); };
+  if (typeof Api.performansOzellikleri === "function") {
+    Promise.resolve(Api.performansOzellikleri()).then((o) => {
+      const el = $("#sisOzellik");
+      if (!el || !o || Array.isArray(o)) return;
+      el.textContent = o.getir ? `performans_sema.sql kurulu (sürüm ${o.surum || 1}) · yayın tetikleyicileri ${o.canli_yayin ? "var" : "yok"}` : "performans_sema.sql kurulu değil — eski sorgular kullanılıyor";
+    }).catch(() => {});
+  }
+}
+function sistemSayfasiTazele() {
+  if (currentPage !== "sistem" || !$("#sisCanli")) return;
+  const [etiket, tur] = canliEtiket();
+  const el = $("#sisCanli");
+  el.textContent = etiket;
+  el.className = "ss-deger ss-" + tur;
+  $("#sisDurum").textContent = canliDurum;
+  $("#sisOlay").textContent = zamanMetni(canliSonOlay);
+  $("#sisSenkron").textContent = zamanMetni(sonTamSenkron);
 }
 
 // ================================================================
@@ -793,8 +851,12 @@ function renderQueuePage() {
         <h1>İş Kuyruğu</h1>
         <div class="sub" id="qSub"><b id="totalN">0</b> istek</div>
       </div>
-      <button type="button" class="zil" id="zilBtn"></button>
+      <div class="mh-aks">
+        <button type="button" class="yenile-btn" id="yenileBtn" title="Yenile — listeyi sunucudan baştan yükle" aria-label="Yenile">↻</button>
+        <button type="button" class="zil" id="zilBtn"></button>
+      </div>
     </div>
+    <div class="eski-hatirlatma hidden" id="eskiHatirlatma" role="status"></div>
     <div class="ekip-uyari hidden" id="ekipUyari" role="status">Ekibiniz atanmamış — yöneticiye bildirin</div>
     <div class="yaziyor-serit hidden" id="yaziyorSerit" role="status" aria-live="polite"></div>
     <div class="kapsamlar" id="kapsamlar" role="tablist" aria-label="Kapsam"></div>
@@ -819,6 +881,7 @@ function renderQueuePage() {
         <input id="qSearch" placeholder="Blok, patoloji no…" value="${esc(searchQ)}">
         <button type="button" class="ara-tara" id="qTara" title="Barkodu okut — o vakayı süz" aria-label="Barkodu okutarak ara">${TARA_IKON}</button>
       </div>
+      <span class="arama-not hidden" id="aramaNot" title="Arama tarih filtresinden bağımsız, tüm kayıtlarda yapıldı">Tüm tarihlerde arandı</span>
     </div>
     <div class="filtre-cipleri hidden" id="filtreCipleri"></div>
     <div class="case-banner hidden" id="caseBanner"></div>
@@ -891,13 +954,30 @@ function renderQueuePage() {
     const ids = gorunenBloklar().flatMap((b) => b.kesilecek.map((r) => r.kalem_id)).filter((id) => bulkSelected.has(id));
     blokKesildiYap(ids);
   });
-  $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; aramaTam = false; renderTable(); });
+  $("#qSearch").addEventListener("input", (e) => { searchQ = e.target.value; aramaTam = false; renderTable(); sunucudaAraZamanla(); });
   // Barkod: o vaka (patoloji no TAM eşleşme) süzülür; kapsam ve sekme korunur.
   $("#qTara").addEventListener("click", () => barkodlaAra("#qSearch", (v) => {
     searchQ = v; aramaTam = true;
     clearBulkSelection();
     renderTable();
+    sunucudaAraZamanla();
   }));
+  $("#yenileBtn").addEventListener("click", async () => {
+    const b = $("#yenileBtn");
+    b.classList.add("donuyor");
+    b.disabled = true;
+    try { await tamSenkron(); } finally { b.classList.remove("donuyor"); b.disabled = false; }
+  });
+  $("#eskiHatirlatma").addEventListener("click", (e) => {
+    if (e.target.closest("[data-eh-goster]")) {
+      eskiSeritAcik = true;
+      if (colFilters.durum.size === 1 && colFilters.durum.has("tamamlandi")) setDurumTab("all");
+      $$("#tabs button").forEach((x) => x.classList.toggle("on", isTabActive(x.dataset.f)));
+      renderTable();
+      $(".tablewrap")?.scrollTo({ top: 0 });
+    }
+    if (e.target.closest("[data-eh-goster], [data-eh-kapat]")) $("#eskiHatirlatma").classList.add("hidden");
+  });
   $("#zoomCtl").addEventListener("click", (e) => {
     const b = e.target.closest("[data-zoom]");
     if (!b || !window.Tema) return;
@@ -1133,7 +1213,11 @@ function renderQueuePage() {
     renderTable();
   });
 
-  loadQueue();
+  // Bellekteki liste tazeyse yeniden çekilmez (canlı olaylarla güncel).
+  if (rows.length && sonTamSenkron && Date.now() - sonTamSenkron < TAM_SENKRON_ARALIK && !gizliyken && !bekTam) {
+    renderTable();
+    eskiHatirlatmaKontrol();
+  } else tamSenkron();
 }
 
 function openCaseView(patNo) {
@@ -1165,7 +1249,7 @@ function mergeRows(base, extra) {
 // (sunucuda, istatistik()), Excel'e Aktar (kuyruguDisaAktar — sunucudan tam
 // liste), Hizmetler ve otomatik yedekler onu hiç kullanmaz.
 function eskiGizli(r) {
-  return caseView === null && Boolean(r.__vaka);
+  return caseView === null && (Boolean(r.__vaka) || (Boolean(r.__arama) && !aramaSonucQ));
 }
 // Eski açık iş: AYARLAR.eski_acik_gun günden önce istenmiş Bekleyen / Cihazda.
 const eskiAcikGun = () => { const n = Number(AYARLAR.eski_acik_gun); return Number.isInteger(n) && n >= 1 ? n : 14; };
@@ -1516,7 +1600,7 @@ function eskiSeritCiz(tb, eski, acik) {
   bas.className = "eski-serit" + (eskiSeritAcik ? " acik" : "");
   const bekleyen = eski.filter((r) => r.durum === "bekleyen").length;
   bas.innerHTML = `<td class="bulkcell"><input type="checkbox" data-eski-hepsi aria-label="Eski açık işlerin tümünü seç/kaldır" title="Eski açık işlerin tümünü seç/kaldır"></td>
-    <td colspan="${sutun - 1}"><button type="button" class="eski-serit-btn" data-eski-ac aria-expanded="${eskiSeritAcik}">Eski açık işler (${eski.length}) <span class="es-ok" aria-hidden="true">${eskiSeritAcik ? "▾" : "▸"}</span></button><span class="eski-serit-ipucu">${eskiAcikGun()} günden önce istenmiş · ${bekleyen} bekleyen · ${eski.length - bekleyen} işlemde</span></td>`;
+    <td colspan="${sutun - 1}"><button type="button" class="eski-serit-btn" data-eski-ac aria-expanded="${eskiSeritAcik}">Eski açık işler <span class="es-rozet" aria-label="${eski.length} iş">${eski.length}</span> <span class="es-ok" aria-hidden="true">${eskiSeritAcik ? "▾" : "▸"}</span></button><span class="eski-serit-ipucu">${eskiAcikGun()} günden önce istenmiş · ${bekleyen} bekleyen · ${eski.length - bekleyen} işlemde</span></td>`;
   tb.appendChild(bas);
   if (!eskiSeritAcik) return;
   const gorulen = new Set();
@@ -1533,6 +1617,20 @@ function eskiSeritCiz(tb, eski, acik) {
   son.className = "eski-serit-son";
   son.innerHTML = `<td colspan="${sutun}"></td>`;
   tb.appendChild(son);
+}
+// Teknisyene günde bir kez (bu tarayıcıda, kullanıcı başına): eski açık iş varsa hatırlatma.
+const eskiHatirlatmaKey = () => "istem_eski_hatirlatma:" + (session ? session.id : "");
+function eskiHatirlatmaKontrol() {
+  const el = $("#eskiHatirlatma");
+  if (!el || !session || session.rol !== "teknisyen" || currentPage !== "kuyruk") return;
+  const bugun = new Date().toLocaleDateString("sv-SE");
+  try { if (localStorage.getItem(eskiHatirlatmaKey()) === bugun) return; } catch (e) { /* yine de göster */ }
+  const sinir = Date.now() - eskiAcikGun() * 86400000;
+  const n = rows.filter((r) => !eskiGizli(r) && kapsamaUyar(r) && eskiAcikMi(r, sinir)).length;
+  if (!n) return;
+  try { localStorage.setItem(eskiHatirlatmaKey(), bugun); } catch (e) { /* bu oturumda bir kez */ }
+  el.innerHTML = `<span>⏳ ${eskiAcikGun()} günden önce istenmiş <b>${n}</b> açık iş var.</span><button type="button" class="linkbtn" data-eh-goster>Göster</button><button type="button" class="eh-x" data-eh-kapat aria-label="Kapat">×</button>`;
+  el.classList.remove("hidden");
 }
 function eskiSeritSec() {
   const ids = tabloSatirlari().eski.map((r) => r.kalem_id);
@@ -1755,9 +1853,9 @@ function oncelikRozeti(o) {
 // Notu olan kalemde patoloji no yanında 💬 + sayı; dokununca / üzerine
 // gelince son notu gösteren balon (notBalonAc).
 function notIkonHTML(r) {
-  const n = notlarOf(r);
-  if (!n.length) return "";
-  return `<button type="button" class="not-ikon" data-not-ac="${r.kalem_id}" aria-label="${n.length} not — son notu göster" aria-haspopup="dialog"><span aria-hidden="true">💬</span>${n.length}</button>`;
+  const { sayi } = notOzeti(r);
+  if (!sayi) return "";
+  return `<button type="button" class="not-ikon" data-not-ac="${r.kalem_id}" aria-label="${sayi} not — son notu göster" aria-haspopup="dialog"><span aria-hidden="true">💬</span>${sayi}</button>`;
 }
 let notBalonTimer = null;
 // Balon (not / blok): data-not-ac ya da data-blok-ac taşıyan öğeye göre.
@@ -1773,13 +1871,12 @@ function blokBalonAc(el, sabit) {
 }
 function notBalonAc(btn, sabit) {
   const r = rows.find((x) => x.kalem_id === btn.dataset.notAc);
-  const n = r ? notlarOf(r) : [];
-  if (!n.length) return;
+  const { sayi, son } = r ? notOzeti(r) : { sayi: 0, son: null };
+  if (!sayi || !son) return;
   const b = balonHazirla();
-  const son = n[0]; // en yeni
   const kim = son.kisaltma || (son.yazan ? initials(son.yazan) : "");
   b.innerHTML = `<div class="nb-metin">${esc(son.metin)}</div>
-    <div class="nb-alt">${kim ? `<b title="${esc(son.yazan || "")}">${esc(kim)}</b>` : ""}${son.zaman ? `<span>${kisaTarih(son.zaman)}</span>` : ""}${n.length > 1 ? `<span class="nb-daha">+${n.length - 1} not daha</span>` : ""}</div>
+    <div class="nb-alt">${kim ? `<b title="${esc(son.yazan || "")}">${esc(kim)}</b>` : ""}${son.zaman ? `<span>${kisaTarih(son.zaman)}</span>` : ""}${sayi > 1 ? `<span class="nb-daha">+${sayi - 1} not daha</span>` : ""}</div>
     <button type="button" class="linkbtn nb-detay" data-nb-detay="${r.kalem_id}">Detay panelinde aç →</button>`;
   balonGoster(b, btn, balonKimlik(btn), sabit);
 }
@@ -1835,12 +1932,24 @@ function notlarOf(r) {
   if (Array.isArray(r.notlar)) return r.notlar.map((n) => (n && /STAT/.test(n.metin || "") ? { ...n, metin: oncelikNotMetni(n.metin) } : n));
   return r.not_metni ? [{ metin: r.not_metni }] : [];
 }
+// Liste için yeter: not sayısı + en yeni not. İnce listede (performans_sema.sql)
+// not_sayisi + son_not; tam satırda notlar dizisinden.
+function notOzeti(r) {
+  if (!r) return { sayi: 0, son: null };
+  if (Array.isArray(r.notlar)) { const n = notlarOf(r); return { sayi: n.length, son: n[0] || null }; }
+  if (typeof r.not_sayisi === "number") {
+    const son = r.son_not ? { ...r.son_not, metin: oncelikNotMetni(r.son_not.metin) } : null;
+    return { sayi: r.not_sayisi, son };
+  }
+  return r.not_metni ? { sayi: 1, son: { metin: r.not_metni } } : { sayi: 0, son: null };
+}
 // Tabloda: en yeni not TAM metin (teknisyene talimat — fareyle üzerine
 // gelmeye bağlı kalmasın) + yazanın kısaltması + "+N not".
 function notHucre(r) {
-  const n = notlarOf(r);
-  if (!n.length) return "";
-  const son = n[0];
+  const o = notOzeti(r);
+  if (!o.sayi || !o.son) return "";
+  const n = { length: o.sayi };
+  const son = o.son;
   const kim = son.yazan
     ? `<span class="note-by" title="${esc(son.yazan)} · ${esc(formatDateFull(son.zaman))}">${esc(son.kisaltma || initials(son.yazan))}</span>`
     : "";
@@ -1878,7 +1987,7 @@ function updateCounts() {
   // "Tümünü göster" o an sınırsız yükler (aranan en eskilerden olabilir).
   const ip = $("#eskiIpucu");
   if (ip) {
-    const aramada = caseView === null && !kesitEkraniMi() && !arsivEkraniMi() && Boolean(searchQ || colFilters.pat || colFilters.blok);
+    const aramada = caseView === null && !kesitEkraniMi() && !arsivEkraniMi() && !aramaSonucQ && Boolean(searchQ || colFilters.pat || colFilters.blok);
     const pencereDisi = aramada && tamamlananGun > 0 && gizliEskiSayisi > 0;
     const limitte = aramada && !pencereDisi && dahaEskiVar;
     ip.classList.toggle("hidden", !pencereDisi && !limitte);
@@ -1887,6 +1996,8 @@ function updateCounts() {
       : limitte ? `Aradığın burada yoksa: daha eski tamamlanan kayıtlar henüz yüklenmedi. <button class="linkbtn" data-eski-goster>Hepsini yükle</button>`
       : "";
   }
+  const an = $("#aramaNot");
+  if (an) an.classList.toggle("hidden", !(aramaSonucQ && aramaSonucQ === searchQ.trim() && caseView === null));
   // Pencerede TAMAMLANAN_LIMIT'ten fazla tamamlanan varsa: "Daha eskileri yükle".
   const de = $("#dahaEski");
   if (de) {
@@ -2134,7 +2245,7 @@ function renderFiltreCipleri() {
 }
 function filtreKaldir(k) {
   if (k === "hepsi") { clearAllFilters(); return; }
-  if (k === "ara") { searchQ = ""; aramaTam = false; const qs = $("#qSearch"); if (qs) qs.value = ""; }
+  if (k === "ara") { searchQ = ""; aramaTam = false; const qs = $("#qSearch"); if (qs) qs.value = ""; aramaTemizle(); }
   else if (["tip", "oncelik", "tekrar", "durum"].includes(k)) { colFilters[k] = new Set(); if (k === "durum") teslimSekmesi = false; }
   else colFilters[k] = "";
   clearBulkSelection();
@@ -2252,11 +2363,17 @@ function kesitOzeti(list) {
   return parca.join(" · ");
 }
 function blokNotu(list) {
-  const goruldu = new Set(), notlar = [];
-  list.forEach((r) => { if (goruldu.has(r.istem_id)) return; goruldu.add(r.istem_id); notlar.push(...notlarOf(r)); });
-  if (!notlar.length) return "";
-  notlar.sort((a, b) => String(b.zaman || "").localeCompare(String(a.zaman || "")));
-  return notHucre({ notlar });
+  const goruldu = new Set();
+  let sayi = 0, son = null;
+  list.forEach((r) => {
+    if (goruldu.has(r.istem_id)) return;
+    goruldu.add(r.istem_id);
+    const o = notOzeti(r);
+    sayi += o.sayi;
+    if (o.son && (!son || String(o.son.zaman || "") > String(son.zaman || ""))) son = o.son;
+  });
+  if (!sayi || !son) return "";
+  return notHucre({ not_sayisi: sayi, son_not: son });
 }
 
 function renderKesitSatirlari(tb) {
@@ -2333,7 +2450,15 @@ function showBlokDetay(b) {
   selId = null;
   const kalemler = rows.filter((r) => vakaBlokAnahtari(r) === b.key)
     .sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
-  const notlar = blokNotlari(kalemler);
+  const tamNot = kalemler.every((r) => Array.isArray(r.notlar));
+  const notlar = tamNot ? blokNotlari(kalemler) : "";
+  if (!tamNot && typeof Api.istemNotlari === "function") {
+    Promise.resolve(Api.istemNotlari(kalemler.map((r) => r.istem_id))).then((l) => {
+      const el = $("#blokNotlar");
+      if (!el || !Array.isArray(l)) return;
+      el.innerHTML = l.length ? notListesiHTML(l) : `<div class="not-bos">Not yok.</div>`;
+    }).catch(() => { const el = $("#blokNotlar"); if (el) el.innerHTML = `<div class="not-bos">Notlar yüklenemedi.</div>`; });
+  }
   $("#rail").innerHTML = `<div class="rail-head"><h2>Blok ${esc(b.pat)} · ${esc(b.blok || "—")}</h2><button class="rx" id="closeDetail">×</button></div>
     <div class="rail-body">
       <div class="m-label">${b.tur === "arsiv" ? "Arşiv" : "Kesilecekler"}</div>
@@ -2343,7 +2468,7 @@ function showBlokDetay(b) {
         <span class="bk-test">${esc(r.test_adi)}</span>${tipTag(r.grup)}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${kesitRozeti(r)}
       </a>`).join("")}</div>
       <div class="m-label" style="margin-top:16px">Notlar</div>
-      <div class="notlar">${notlar || `<div class="not-bos">Not yok.</div>`}</div>
+      <div class="notlar" id="blokNotlar">${notlar || (tamNot ? `<div class="not-bos">Not yok.</div>` : `<div class="not-bos">Notlar yükleniyor…</div>`)}</div>
     </div>`;
   $("#closeDetail").onclick = showEmpty;
   $$("#rail [data-goto]").forEach((a) => {
@@ -2354,8 +2479,9 @@ function blokNotlari(kalemler) {
   const goruldu = new Set(), list = [];
   kalemler.forEach((r) => { if (goruldu.has(r.istem_id)) return; goruldu.add(r.istem_id); list.push(...notlarOf(r)); });
   list.sort((a, b) => String(b.zaman || "").localeCompare(String(a.zaman || "")));
-  return list.map((n) => `<div class="not-item"><div class="not-meta"><b>${esc(n.yazan || "—")}</b>${n.zaman ? ` · ${formatDateFull(n.zaman)}` : ""}</div><div class="not-metin">${esc(n.metin)}</div></div>`).join("");
+  return notListesiHTML(list);
 }
+const notListesiHTML = (list) => list.map((n) => `<div class="not-item"><div class="not-meta"><b>${esc(n.yazan || "—")}</b>${n.zaman ? ` · ${formatDateFull(n.zaman)}` : ""}</div><div class="not-metin">${esc(oncelikNotMetni(n.metin))}</div></div>`).join("");
 
 // Kesit ekranında Yazdır: blok listesi (seçilen bloklar; seçim yoksa görünenler),
 // arşiv sırasıyla — patoloji no (yıl, numara), sonra blok.
@@ -2793,10 +2919,10 @@ function duzeltmeFormu(r) {
 // Herkes dinler; kişinin kendisi listelenmez. Kişi başına tek kayıt.
 // ================================================================
 const YAZIYOR_SURE = 2 * 60 * 1000;   // SON etkileşimden sonra yayın kalkar
-const YAZIYOR_TAZELE = 15 * 1000;     // değişmese de en fazla bu aralıkla yeniden yayın
+const YAZIYOR_TAZELE = 30 * 1000;     // değişmese de en fazla bu aralıkla yeniden yayın
 // GEÇİCİ debug: konsolda "[yazıyor]" önekli kanal / track / untrack / sync
 // olayları ve hareketsizlik / sekme görünürlüğü. Sorun çözülünce false.
-const YAZIYOR_DEBUG = true;
+const YAZIYOR_DEBUG = false;
 const ylog = (...a) => { if (YAZIYOR_DEBUG) console.info("[yazıyor]", new Date().toLocaleTimeString("tr-TR"), ...a); };
 const SEKME_KEY = window.crypto && crypto.randomUUID ? crypto.randomUUID() : `s${Date.now()}${Math.random().toString(36).slice(2)}`;
 const yaziyorFormAcik = () => Boolean($("#mPat"));
@@ -2988,11 +3114,7 @@ async function duyurulariYukle() {
   duyuruUygula();
 }
 function duyuruBaslat() {
-  duyurulariYukle().then(() => {
-    if (!duyuruVar || !session || !Api.subscribeDuyurular) return;
-    if (duyuruUnsub) duyuruUnsub();
-    duyuruUnsub = Api.subscribeDuyurular(duyuruDegisti);
-  });
+  duyurulariYukle(); // canlı değişiklik: duyuruCanli (tek kanal)
   clearInterval(duyuruSaat);
   duyuruSaat = setInterval(() => { if (duyuruVar && gorunurImza() !== duyuruImza) duyuruUygula(); }, 60000);
 }
@@ -3752,15 +3874,42 @@ async function bulkDelete() {
   summarize("silindi", ok, skipped, results.length - ok);
 }
 
+// Kuyruk sırası (sunucudaki kuyruk_getir ile aynı): istemin zamanı ↓ →
+// toplu gönderim → toplu sırası → istem → kalem zamanı ↓ → kalem.
+const azalanSira = (x, y) => (x < y ? 1 : x > y ? -1 : 0);
+const artanNullSon = (x, y) => (x == null ? (y == null ? 0 : 1) : y == null ? -1 : x < y ? -1 : x > y ? 1 : 0);
+function kuyrukSirasi(a, b) {
+  return azalanSira(a.istem_created_at || a.created_at || "", b.istem_created_at || b.created_at || "")
+    || artanNullSon(a.toplu_id, b.toplu_id) || artanNullSon(a.toplu_sira, b.toplu_sira)
+    || artanNullSon(a.istem_id, b.istem_id) || azalanSira(a.created_at || "", b.created_at || "")
+    || artanNullSon(a.kalem_id, b.kalem_id);
+}
+
+// İşlemlerden sonra çağrılır (28 yer): kendi işlemimizin kimlikleri biliniyorsa
+// yalnız o kalemler çekilir; bilinmiyorsa tam senkron.
 async function loadQueue() {
+  const isl = islemKimlikleri;
+  islemKimlikleri = null;
+  if (isl && sonTamSenkron && rows.length) {
+    await artimliUygula({ k: [...isl.k], i: [...isl.i], silK: [...isl.silK] });
+    return;
+  }
+  await tamSenkron();
+}
+
+// Tam senkron: listenin tamamı (tek istek: Api.listQueue → kuyruk_getir).
+async function tamSenkron() {
   const seq = ++queueSeq;
   const gun = tamamlananGun;
+  // Bekleyen canlı olaylar bu yüklemenin kapsamında (sonradan gelenler ayrıca uygulanır).
+  clearTimeout(canliZaman);
+  [bekKalem, bekIstem, bekYeni, bekSilKalem, bekSilIstem].forEach((x) => x.clear());
+  bekTam = false; gizliyken = false; islemKimlikleri = null;
   let liste, gizli;
   try {
-    [liste, gizli] = await Promise.all([
-      Api.listQueue({ tamamlananGun: gun, tamamlananLimit, kesildiGun: KESILDI_GUN }),
-      gun ? Api.gizliEskiSayisi(gun).catch(() => 0) : 0,
-    ]);
+    liste = await Api.listQueue({ tamamlananGun: gun, tamamlananLimit, kesildiGun: KESILDI_GUN });
+    gizli = typeof liste.eskiSayisi === "number" ? liste.eskiSayisi
+      : gun ? await Promise.resolve(Api.gizliEskiSayisi(gun)).catch(() => 0) : 0;
   } catch (e) {
     if (seq === queueSeq) toast("İş kuyruğu yüklenemedi", true);
     return;
@@ -3772,24 +3921,318 @@ async function loadQueue() {
     try { liste = mergeRows(liste, await Api.vakaKalemleri(vaka)); } catch (e) { /* yüklü olanlarla devam */ }
   }
   if (seq !== queueSeq) return; // bu arada daha yeni bir yükleme başladı
+  // Arama sürüyorsa sunucudan gelen (pencere dışı) sonuçlar korunur.
+  if (aramaSonucQ) {
+    const ids = new Set(liste.map((r) => r.kalem_id));
+    const kalan = rows.filter((r) => r.__arama && !ids.has(r.kalem_id));
+    if (kalan.length) liste = liste.concat(kalan).sort(kuyrukSirasi);
+  }
+  const eskiSecili = selId ? rows.find((r) => r.kalem_id === selId) : null;
   rows = liste; gizliEskiSayisi = gizli; dahaEskiVar = daha;
+  sonTamSenkron = Date.now();
+  detayOnbellek.clear();
   yeniIstemKontrol(liste);
+  sistemSayfasiTazele();
+  kuyrukEkraniTazele(eskiSecili);
+  eskiHatirlatmaKontrol();
+}
+
+// Liste değişti: tablo + (değiştiyse) açık detay yeniden çizilir.
+function kuyrukEkraniTazele(eskiSecili) {
+  renderYeniBildirim();
   if (currentPage !== "kuyruk") return;
   renderTable();
   if (selId) {
     const cur = rows.find((r) => r.kalem_id === selId);
+    if (!cur) { showEmpty(); return; }
+    if (eskiSecili && satirImzasi(eskiSecili) === satirImzasi(cur)) return; // seçili kalem değişmedi
     // Detayda yazı yazılırken paneli yeniden çizmek imleci/odağı koparır —
     // yenileme, alan odaktan çıkınca yapılır (bkz. showDetail → blur).
-    if (cur && detailEditing()) detailStale = true;
-    else if (cur) showDetail(cur);
-    else showEmpty();
+    if (detailEditing()) detailStale = true;
+    else showDetail(cur);
   }
+}
+const satirImzasi = (r) => JSON.stringify(r, (k, v) => (k === "notlar" || k === "kalite_notu" || k === "cihaz_adi" ? undefined : v));
+
+// ---------------- Canlı olaylar ----------------
+function islemKaydet(x) {
+  if (!x) return;
+  if (!islemKimlikleri) islemKimlikleri = { k: new Set(), i: new Set(), silK: new Set() };
+  (x.k || []).forEach((id) => id && islemKimlikleri.k.add(id));
+  (x.i || []).forEach((id) => id && islemKimlikleri.i.add(id));
+  (x.silK || []).forEach((id) => id && islemKimlikleri.silK.add(id));
+}
+// Kendi işlemlerimiz: etkilenen kimlikler kaydedilir (ardından gelen
+// loadQueue artımlı çalışır). Burada olmayan işlemlerden sonra tam senkron.
+const ISLEM_KIMLIK = {
+  advanceDurum: (a) => ({ k: [a[0]] }),
+  teslimAl: (a) => ({ k: [a[0]] }),
+  teslimGeriAl: (a) => ({ k: [a[0]] }),
+  deleteIstemKalem: (a) => ({ silK: [a[0]] }),
+  assignCihaz: (a) => ({ k: [a[0]] }),
+  blokKesildi: (a) => ({ k: [].concat(a[0] || []) }),
+  blokKesildiGeriAl: (a) => ({ k: [].concat(a[0] || []) }),
+  blokCikarildi: (a) => ({ k: [].concat(a[0] || []) }),
+  blokCikarildiGeriAl: (a) => ({ k: [].concat(a[0] || []) }),
+  yazdirmaKaydet: (a) => ({ k: [].concat(a[0] || []) }),
+  updateKaliteNotu: (a) => ({ k: [a[0]] }),
+  notEkle: (a) => ({ i: [a[0]] }),
+  istemDuzelt: (a) => ({ i: [a[0]] }),
+  tekrarIste: (a, r) => ({ k: [a[0], typeof r === "string" ? r : null] }),
+  createIstem: (a, r) => ({ i: [r && r.id] }),
+};
+let islemKaydiKurulu = false;
+function islemKaydiKur() {
+  if (islemKaydiKurulu || !window.Api) return;
+  islemKaydiKurulu = true;
+  Object.entries(ISLEM_KIMLIK).forEach(([ad, f]) => {
+    const asil = Api[ad];
+    if (typeof asil !== "function") return;
+    Api[ad] = async (...a) => {
+      const r = await asil.apply(Api, a);
+      try { islemKaydet(f(a, r)); } catch (e) { /* kimlik çıkarılamadı → tam senkron */ }
+      return r;
+    };
+  });
+}
+
+function canliBaslat() {
+  canliKapat();
+  if (typeof Api.canliKanal !== "function") return;
+  let abone = false, oncekiMod = null;
+  const k = Api.canliKanal({
+    onOlay: canliOlay,
+    onDurum: (mod, durum) => {
+      const modDegisti = oncekiMod !== null && mod !== oncekiMod;
+      oncekiMod = mod;
+      const eski = canliDurum;
+      canliMod = mod; canliDurum = durum;
+      if (durum === "SUBSCRIBED") {
+        // Koptuktan sonra yeniden bağlandı (ya da yedeğe geçildi): kaçan olaylar için tam senkron.
+        if (eski !== "SUBSCRIBED" && (abone || modDegisti) && sonTamSenkron) senkronIste();
+        abone = true;
+      }
+      sistemSayfasiTazele();
+    },
+  });
+  canli = k && typeof k.kapat === "function" ? k : null;
+}
+function canliKapat() {
+  if (canli) { try { canli.kapat(); } catch (e) { /* önemli değil */ } }
+  canli = null; canliMod = null; canliDurum = "BEKLENIYOR";
+  clearTimeout(canliZaman);
+}
+
+// Olay biçimi: { t: tablo, o: INSERT|UPDATE|DELETE, k?: kalem, i?: istem, id? }
+function canliOlay(e) {
+  if (!e || !e.t || !session) return;
+  canliSonOlay = Date.now();
+  switch (e.t) {
+    case "istem_kalemleri":
+      if (e.o === "DELETE") { if (e.k) bekSilKalem.add(e.k); else bekTam = true; }
+      else if (e.k) { bekKalem.add(e.k); if (e.o === "INSERT") bekYeni.add(e.k); detayOnbellek.delete(e.k); }
+      else bekTam = true;
+      hizmetlerDegisti();
+      break;
+    case "istemler":
+      if (e.o === "DELETE") { if (e.id) bekSilIstem.add(e.id); } else if (e.id) bekIstem.add(e.id); else bekTam = true;
+      hizmetlerDegisti();
+      break;
+    case "istem_notlari":
+      if (e.i) { bekIstem.add(e.i); rows.forEach((r) => { if (r.istem_id === e.i) detayOnbellek.delete(r.kalem_id); }); }
+      else bekTam = true;
+      break;
+    case "yazdirma_kayitlari":
+      if (e.k) bekKalem.add(e.k); else bekTam = true;
+      hizmetlerDegisti();
+      break;
+    case "duyurular": case "duyuru_guncellemeleri": duyuruCanli(e); return;
+    case "istek_setleri": case "istek_seti_kalemleri": setlerCanli(); return;
+    case "cihazlar": cihazlarCanli(); return;
+    case "sistem_ayarlari": ayarlariTazele(); return;
+    case "kullanicilar": kullaniciCanli(e.id); return;
+    default: return;
+  }
+  kuyrukTazeleZamanla();
+}
+function kuyrukTazeleZamanla() {
+  clearTimeout(canliZaman);
+  if (document.visibilityState === "hidden") {
+    // Gizliyken yenileme yok; yalnız yeni istem bildirimi (zil) için yeni kalemler.
+    gizliyken = true;
+    if (bekYeni.size) canliZaman = setTimeout(gizliYenileriCek, 2000);
+    return;
+  }
+  canliZaman = setTimeout(bekleyenleriUygula, 500);
+}
+async function gizliYenileriCek() {
+  const ids = [...bekYeni];
+  bekYeni.clear();
+  ids.forEach((id) => bekKalem.delete(id));
+  if (ids.length) await artimliUygula({ k: ids });
+  if (bekKalem.size || bekIstem.size || bekSilKalem.size || bekSilIstem.size || bekTam) gizliyken = true;
+}
+async function bekleyenleriUygula() {
+  if (!session) return;
+  if (bekTam || bekKalem.size + bekIstem.size > 150) { await tamSenkron(); return; }
+  const k = [...bekKalem], i = [...bekIstem], silK = [...bekSilKalem], silI = [...bekSilIstem];
+  [bekKalem, bekIstem, bekYeni, bekSilKalem, bekSilIstem].forEach((x) => x.clear());
+  await artimliUygula({ k, i, silK, silI });
+}
+// Yalnız değişen kalemler: silinenler çıkar, istenenler sunucudan çekilip
+// yerine konur / eklenir (yüklü pencereye uyuyorsa). Yanıt boş ya da
+// beklenmedikse güvenli tarafta kalınır: tam senkron.
+async function artimliUygula({ k = [], i = [], silK = [], silI = [] }) {
+  const seq = queueSeq;
+  const eskiSecili = selId ? rows.find((r) => r.kalem_id === selId) : null;
+  if (silK.length || silI.length) {
+    const sK = new Set(silK), sI = new Set(silI);
+    rows = rows.filter((r) => !sK.has(r.kalem_id) && !sI.has(r.istem_id));
+  }
+  const kk = k.filter((id) => !silK.includes(id));
+  if (kk.length || i.length) {
+    let gelen;
+    try { gelen = await Api.kalemleriGetir({ kalemIds: kk, istemIds: i }); } catch (e) { gelen = null; }
+    if (seq !== queueSeq) return; // arada tam senkron başladı (o bunları da kapsar)
+    if (!Array.isArray(gelen) || !gelen.length) { await tamSenkron(); return; }
+    satirlariBirlestir(gelen);
+  }
+  kuyrukEkraniTazele(eskiSecili);
+}
+// Gelen satır yüklü listede varsa yerine konur; yoksa yüklü pencereye
+// uyuyorsa eklenir (açık iş, pencere içinde tamamlanan, teslim bekleyen,
+// son kesilen; vaka / arama görünümündekiler işaretleriyle).
+function satirlariBirlestir(gelen) {
+  const yeni = new Map(gelen.map((r) => [r.kalem_id, r]));
+  const sinir = tamamlananGun ? Date.now() - tamamlananGun * 86400000 : null;
+  const kesSinir = Date.now() - KESILDI_GUN * 86400000;
+  const pencerede = (r) => r.durum !== "tamamlandi" || teslimBekliyor(r)
+    || (r.kesildi_at && Date.parse(r.kesildi_at) >= kesSinir)
+    || sinir === null || (r.tamamlandi_at && Date.parse(r.tamamlandi_at) >= sinir);
+  const isaretle = (g, eski) => (pencerede(g) ? g : { ...g, __vaka: eski && eski.__vaka, __arama: eski && eski.__arama });
+  const gorulen = new Set();
+  const out = rows.map((r) => {
+    const g = yeni.get(r.kalem_id);
+    if (!g) return r;
+    gorulen.add(r.kalem_id);
+    return isaretle(g, r);
+  });
+  gelen.forEach((g) => {
+    if (gorulen.has(g.kalem_id)) return;
+    if (pencerede(g)) out.push(g);
+    else if (caseView !== null && g.patoloji_no === caseView) out.push({ ...g, __vaka: true });
+    else if (aramaSonucQ && aramayaUyar(g)) out.push({ ...g, __arama: true });
+  });
+  rows = out.sort(kuyrukSirasi);
+  gelen.forEach((g) => detayOnbellek.delete(g.kalem_id));
+  yeniIstemKontrol(gelen);
+}
+function senkronIste() {
+  if (!session) return;
+  if (currentPage === "kuyruk" && document.visibilityState === "visible") tamSenkron();
+  else sonTamSenkron = 0; // İş Kuyruğu'na dönünce / görünür olunca
+}
+// Sekme görünür olunca: gizliyken değişiklik geldiyse ya da son tam
+// senkrondan 30 sn geçtiyse sessiz tam senkron; Hizmetler bekliyorsa o da.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !session) return;
+  if (currentPage === "kuyruk" && (gizliyken || bekTam || Date.now() - sonTamSenkron > 30000)) tamSenkron();
+  if (hizBekliyor && currentPage === "hizmetler") { hizBekliyor = false; loadHizmetler(); }
+});
+// Görünürken 5 dakikada bir sessiz tam senkron (yalnız İş Kuyruğu açıkken).
+setInterval(() => {
+  if (!session || document.visibilityState !== "visible" || currentPage !== "kuyruk") return;
+  if (Date.now() - sonTamSenkron >= TAM_SENKRON_ARALIK) tamSenkron();
+}, 30000);
+
+// Hizmetler: olayda 500 ms biriktirip yeniden yüklenir (yalnız o sayfa açık ve görünürken).
+let hizZaman = null, hizBekliyor = false;
+function hizmetlerDegisti() {
+  if (currentPage !== "hizmetler") return;
+  if (document.visibilityState === "hidden") { hizBekliyor = true; return; }
+  clearTimeout(hizZaman);
+  hizZaman = setTimeout(() => { if (currentPage === "hizmetler") loadHizmetler(); }, 500);
+}
+let setZaman = null, cihazZaman = null, kisiZaman = null;
+function setlerCanli() {
+  clearTimeout(setZaman);
+  setZaman = setTimeout(async () => {
+    try { ISTEK_SETLERI = await Api.getIstekSetleri(); SETS_INST = activeSetsInst(ISTEK_SETLERI); if (currentPage === "setler") renderSetlerPage(); } catch (e) { /* geçici bağlantı sorunu */ }
+  }, 800);
+}
+function cihazlarCanli() {
+  clearTimeout(cihazZaman);
+  cihazZaman = setTimeout(async () => {
+    try { CIHAZLAR = await Api.getCihazlar(); if (currentPage === "cihazlar") renderCihazlarPage(); } catch (e) { /* geçici bağlantı sorunu */ }
+  }, 800);
+}
+// Kullanıcı değişti: ad listesi (kısaltmalar) tazelenir; kendisiyse profil (ekip / rol / yetki).
+function kullaniciCanli(id) {
+  if (session && id === session.id) { profilSonOkuma = 0; profilTazele(); }
+  clearTimeout(kisiZaman);
+  kisiZaman = setTimeout(async () => {
+    try {
+      if (Api.kisileriTazele) await Api.kisileriTazele();
+      UZMANLAR = await Api.getUzmanlar();
+    } catch (e) { /* geçici bağlantı sorunu */ }
+  }, 2000);
+}
+// Duyuru olayı: yükte yalnız kimlik var — kritik / çözüldü bildirimi için o
+// duyuru çekilir, ardından liste yenilenir.
+async function duyuruCanli(e) {
+  if (e.t === "duyurular" && e.o !== "DELETE" && e.id && typeof Api.getDuyuru === "function") {
+    let d = null;
+    try { d = await Api.getDuyuru(e.id); } catch (x) { d = null; }
+    if (d && d.id) { duyuruDegisti({ table: "duyurular", eventType: e.o, new: d }); return; }
+  }
+  duyuruDegisti(null);
+}
+
+// ---------------- Arama: tüm tarihlerde (sunucuda) ----------------
+// En az 3 karakter (barkodda her zaman): tarih filtresi devre dışı, sunucuda
+// tüm kayıtlarda patoloji no / eski patoloji no / kons no / blok. Gelen
+// pencere dışı satırlar __arama işaretli; arama silinince listeden çıkar.
+function aramayaUyar(r) {
+  const q = searchQ.trim();
+  if (!q) return false;
+  return aramaTam ? patTamEslesir(r, q) : (String(r.blok_no || "").toLowerCase().includes(q.toLowerCase()) || patEslesir(r, q.toLowerCase()));
+}
+function aramaTemizle() {
+  clearTimeout(aramaZaman);
+  aramaSonucQ = "";
+  if (rows.some((r) => r.__arama)) rows = rows.filter((r) => !r.__arama);
+}
+function sunucudaAraZamanla() {
+  clearTimeout(aramaZaman);
+  const q = searchQ.trim();
+  if (!q || (!aramaTam && q.length < 3)) { if (aramaSonucQ || rows.some((r) => r.__arama)) { aramaTemizle(); renderTable(); } return; }
+  aramaZaman = setTimeout(() => sunucudaAra(q), aramaTam ? 0 : 350);
+}
+async function sunucudaAra(q) {
+  let gelen;
+  try { gelen = await Api.kuyrukAra(q); } catch (e) { return; }
+  if (searchQ.trim() !== q || !Array.isArray(gelen)) return;
+  const ids = new Set();
+  rows = rows.filter((r) => !r.__arama);
+  rows.forEach((r) => ids.add(r.kalem_id));
+  gelen.forEach((g) => { if (!ids.has(g.kalem_id)) rows.push({ ...g, __arama: true }); });
+  rows.sort(kuyrukSirasi);
+  aramaSonucQ = q;
+  if (currentPage === "kuyruk") renderTable();
 }
 
 function detailEditing() {
   if (duzeltmeAcik) return true; // düzeltme formu açıkken panel yeniden kurulmaz
   const a = document.activeElement;
   return Boolean(a && (a.id === "kaliteNot" || a.id === "yeniNot"));
+}
+
+async function kalemDetayi(r) {
+  if (Array.isArray(r.notlar) || typeof Api.kalemDetay !== "function") return null;
+  if (detayOnbellek.has(r.kalem_id)) return detayOnbellek.get(r.kalem_id);
+  const d = await Api.kalemDetay(r.kalem_id);
+  if (d && !Array.isArray(d)) detayOnbellek.set(r.kalem_id, d);
+  return d;
 }
 
 // Detay panelindeki "Tekrar İste" — aynı test/klon/blok ile yeni bir
@@ -3860,10 +4303,13 @@ async function showDetail(r) {
   $("#closeDetail").onclick = showEmpty;
 
   // Durum geçmişi + düzeltme geçmişi birlikte; biri okunamazsa onsuz devam.
-  const [logS, duzS] = await Promise.allSettled([Api.getTimeline(r.kalem_id), Api.getDuzeltmeler ? Api.getDuzeltmeler(r.istem_id) : Promise.resolve([])]);
+  // İnce listede notların tamamı ve kalite notu yok: o kalem için ayrıca
+  // (önbellekli; not / kalem değişince canlı olayla geçersizleşir).
+  const [logS, duzS, detS] = await Promise.allSettled([Api.getTimeline(r.kalem_id), Api.getDuzeltmeler ? Api.getDuzeltmeler(r.istem_id) : Promise.resolve([]), kalemDetayi(r)]);
   const logs = logS.status === "fulfilled" ? logS.value || [] : [];
   const duzGecmis = duzS.status === "fulfilled" ? duzS.value || [] : [];
   if (selId !== r.kalem_id) return; // kullanıcı başka satıra geçti
+  if (detS.status === "fulfilled" && detS.value && !Array.isArray(detS.value)) r = { ...r, ...detS.value };
 
   const steps = [["bekleyen", "İstendi"], ["cihazda", "İşleme alındı"], ["tamamlandi", "Tamamlandı"]];
   // 4. adım: teslim alındı (kim, ne zaman) — teslimli ya da teslim bekleyen kalemde.
@@ -7501,9 +7947,9 @@ if (NAV_GENIS_MQ) {
 }
 
 // ================================================================
-// YENİ İSTEM BİLDİRİMİ — ayrı abonelik yok: canlı güncelleme zaten her
-// değişiklikte kuyruğu yeniden yüklüyor (subscribeQueue → loadQueue); her
-// yüklemede bir öncekiyle karşılaştırılır. Daha önce HİÇ görülmemiş ve
+// YENİ İSTEM BİLDİRİMİ — ayrı abonelik yok: canlı kanal değişen kalemleri
+// getirir (artimliUygula; sekme gizliyken de yeni kalemler), tam senkron da
+// listenin tamamını; ikisi de buradan geçer ve bir öncekiyle karşılaştırılır. Daha önce HİÇ görülmemiş ve
 // Bekleyen kalem = yeni. Sayılmayanlar: ilk yükleme, kişinin kendi açtığı
 // istemler. Geri alma (aynı kalem) ve eski kayıt / vaka geçmişi
 // (Tamamlandı) yanlış alarm üretmez; toplu gelenler tek bildirimde toplanır.
