@@ -531,6 +531,116 @@
       return out;
     },
 
+    // ---------------- Yetkiler + katalog (yetki_katalog_sema.sql) ----------------
+    // Oturumda bir kez (ve yetki değişince yayın kanalından). Fonksiyon yoksa
+    // null → uygulama eski rol kurallarıyla çalışır.
+    async yetkilerim() {
+      const { data, error } = await client.rpc("yetkilerim");
+      if (error) { if (fonksiyonYok(error)) return null; throw error; }
+      return data && Array.isArray(data.yetkiler) ? data : null;
+    },
+    // Kataloğun tamamı (aktif + pasif, tüm gruplar) — oturumda bir kez.
+    // Yeni sütunlar yoksa (SQL çalışmadı) eski sütunlarla; yeniAlanlar: false.
+    async getKatalog() {
+      const oku = async (kolonlar) => {
+        const satirlar = [];
+        for (;;) {
+          const { data, error } = await client.from("test_katalog").select(kolonlar)
+            .order("grup").order("sira").order("ad").range(satirlar.length, satirlar.length + 999);
+          if (error) throw error;
+          satirlar.push(...data);
+          if (data.length < 1000) return satirlar;
+        }
+      };
+      let liste, yeni = true;
+      try { liste = await oku("id,grup,ad,klon,kontrol,aciklama,es_adlar,aktif,sira,birlesti_id"); }
+      catch (e) {
+        if (!(e && (e.code === "42703" || /aciklama|es_adlar|birlesti_id/.test(String(e.message || ""))))) throw e;
+        yeni = false;
+        liste = (await oku("id,grup,ad,klon,kontrol,aktif,sira")).map((t) => ({ ...t, aciklama: null, es_adlar: [], birlesti_id: null }));
+      }
+      liste = liste.map((t) => ({ ...t, klon: t.klon || "", kontrol: t.kontrol || "", aciklama: t.aciklama || "", es_adlar: t.es_adlar || [] }));
+      liste.yeniAlanlar = yeni;
+      return liste;
+    },
+    // Ekle (id yok) / düzenle. Tekrar kontrolü veritabanında (23505: "Bu test zaten var: X").
+    async katalogKaydet({ id, grup, ad, klon, kontrol, aciklama, es_adlar, sira, aktif }) {
+      const v = { ad, klon: klon || null, kontrol: kontrol || null, aciklama: aciklama || null, es_adlar: es_adlar || [] };
+      if (aktif !== undefined) v.aktif = aktif;
+      if (sira !== undefined && sira !== null && sira !== "") v.sira = Number(sira) || 0;
+      if (id) {
+        const { data, error } = await client.from("test_katalog").update(v).eq("id", id).select("id");
+        if (error) throw error;
+        if (!data || !data.length) throw forbiddenError();
+        return data[0];
+      }
+      if (v.sira === undefined) {
+        const { data: son } = await client.from("test_katalog").select("sira").eq("grup", grup).order("sira", { ascending: false }).limit(1);
+        v.sira = ((son && son[0] && son[0].sira) || 0) + 10;
+      }
+      const { data, error } = await client.from("test_katalog").insert({ ...v, grup }).select("id").single();
+      if (error) throw error;
+      return data;
+    },
+    async katalogAktif(id, aktif) {
+      const { data, error } = await client.from("test_katalog").update({ aktif }).eq("id", id).select("id");
+      if (error) throw error;
+      if (!data || !data.length) throw forbiddenError();
+    },
+    // Değişiklik izi (yeni → eski), değiştirenin adıyla.
+    async katalogLog(testId) {
+      const { data, error } = await client.from("test_katalog_log").select("alan,eski,yeni,degistiren_id,created_at")
+        .eq("test_id", testId).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(200);
+      if (error) throw error;
+      if (!kisiler) await kisileriYukle().catch(() => {});
+      return (data || []).map((x) => ({ ...x, kim: (kisi(x.degistiren_id) || {}).ad || null }));
+    },
+    // Birleştirme: onizleme true → yalnız sayılar; false → tek işlemde taşır.
+    async testBirlestir(kalanId, gidenId, onizleme = true) {
+      const { data, error } = await client.rpc("test_birlestir", { p_kalan: kalanId, p_giden: gidenId, p_onizleme: onizleme });
+      if (error) throw error;
+      return data;
+    },
+    // Liste içe aktarma: [{islem:"ekle"|"guncelle"|"es_ad", ...}] — tek işlem.
+    async katalogIceAktar(islemler, duyuru = false) {
+      const { data, error } = await client.rpc("katalog_ice_aktar", { p_islemler: islemler, p_duyuru: Boolean(duyuru) });
+      if (error) throw error;
+      return data;
+    },
+    // Ayarlar > Yetkiler (yalnız yönetici yazar — RLS).
+    async getYetkiMatrisi() {
+      const [r, k, e] = await Promise.all([
+        client.from("rol_yetkileri").select("profil,yetki"),
+        client.from("kullanici_yetkileri").select("kullanici_id,yetki,izin,kaynak,sebep,created_at"),
+        client.from("ekip_gruplari").select("ekip,grup_kod"),
+      ]);
+      must(r.data, r.error); must(k.data, k.error); must(e.data, e.error);
+      return { rol: r.data, kisi: k.data, ekipGruplari: e.data };
+    },
+    async rolYetkiAyarla(profil, yetki, izin) {
+      const q = izin ? client.from("rol_yetkileri").upsert({ profil, yetki }).select("profil")
+        : client.from("rol_yetkileri").delete().eq("profil", profil).eq("yetki", yetki).select("profil");
+      const { data, error } = await q;
+      if (error) throw error;
+      if (izin && (!data || !data.length)) throw forbiddenError();
+    },
+    // deger: true (ver) | false (al) | null (role göre — istisna kalkar)
+    async kisiYetkiAyarla(kullaniciId, yetki, deger) {
+      const q = deger === null
+        ? client.from("kullanici_yetkileri").delete().eq("kullanici_id", kullaniciId).eq("yetki", yetki).select("yetki")
+        : client.from("kullanici_yetkileri").upsert({ kullanici_id: kullaniciId, yetki, izin: deger, kaynak: "elle", sebep: null }).select("yetki");
+      const { data, error } = await q;
+      if (error) throw error;
+      if (deger !== null && (!data || !data.length)) throw forbiddenError();
+    },
+    async ekipGrupAyarla(ekip, grupKod, varMi) {
+      const q = varMi ? client.from("ekip_gruplari").upsert({ ekip, grup_kod: grupKod }).select("ekip")
+        : client.from("ekip_gruplari").delete().eq("ekip", ekip).eq("grup_kod", grupKod).select("ekip");
+      const { data, error } = await q;
+      if (error) throw error;
+      if (varMi && (!data || !data.length)) throw forbiddenError();
+    },
+
     // ---------------- Test grupları (yönetim) ----------------
     async getTestGruplari() {
       const { data, error } = await client

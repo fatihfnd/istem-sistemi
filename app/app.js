@@ -62,7 +62,8 @@ const EMPTY_MSG = {
   hizmetler: { t: "Faturalama", d: "Her satır bir istemi temsil eder. \"Girildi\" ile faturalandığını işaretle." },
   kullanicilar: { t: "Bir kullanıcı seç", d: "Düzenlemek için bir kullanıcıya dokun, ya da yeni kullanıcı ekle." },
   "test-gruplari": { t: "Bir grup seç", d: "Düzenlemek için bir gruba dokun, ya da yeni grup ekle." },
-  "test-katalogu": { t: "Bir test seç", d: "Düzenlemek için bir teste dokun, ya da yeni test ekle." },
+  "test-katalogu": { t: "Bir test seç", d: "Klon, kontrol, açıklama ve geçmişini görmek için bir teste dokun." },
+  yetkiler: { t: "Yetkiler", d: "Kutuyu işaretleyince anında kaydedilir. Yönetici her zaman tam yetkilidir." },
   yedekler: { t: "Otomatik yedekler", d: "Her gece 02:00'de alınan veritabanı yedeklerini buradan indirebilirsiniz." },
   istatistikler: { t: "İstatistikler", d: "Canlı veritabanından hesaplanır — tarih aralığını ve dönemi üstten seç." },
   duyurular: { t: "Duyurular", d: "Teste ya da cihaza bağlı duyurular İstek Ver formunda, İş Kuyruğu'nda ve detayda da görünür." },
@@ -386,13 +387,64 @@ let yeniKalemler = new Set();
 // kısıtlarından muaftır (RLS'teki is_teknisyen() ile aynı kural).
 const isAdmin = () => Boolean(session && session.is_admin);
 const isTeknisyen = () => Boolean(session && session.rol === "teknisyen" && !session.is_admin);
+// Yetkiler (yetki_katalog_sema.sql): yetkilerim() oturumda bir kez okunur,
+// matris / kişi istisnası değişince yayın kanalından tazelenir. YETKI null
+// ise (SQL henüz çalışmadı) eski rol kuralları geçerlidir. Yönetici her
+// zaman tam yetkilidir.
+let YETKI = null;        // Set<kod> | null
+let ANA_GRUPLAR = null;  // "Ekibim" görünümündeki gruplar (ekip_gruplari) | null
+let YETKI_PROFIL = null;
+function yetki(kod) {
+  if (!session) return false;
+  if (isAdmin()) return true;
+  if (YETKI) return YETKI.has(kod);
+  const tek = session.rol === "teknisyen";
+  switch (kod) {
+    case "s_arsiv": return session.ekip === "arsiv";
+    case "s_katalog": case "s_istatistik": case "katalog_duzenle": return false;
+    case "istem_ver": case "uzman_adina": case "teslim_al": return !tek;
+    case "durum_degistir": case "duyuru_yonet": return tek;
+    default: return true;
+  }
+}
+// Formdan kataloğa test ekleme: yetki sistemi kuruluysa katalog_duzenle;
+// değilse bugünkü kural (istem girebilen herkes).
+const canKatalogEkle = () => (YETKI ? yetki("katalog_duzenle") : isAdmin() || !isTeknisyen());
+function yetkileriUygula(v) {
+  const eski = YETKI ? [...YETKI].sort().join() + "|" + (ANA_GRUPLAR || []).join() : null;
+  if (v && Array.isArray(v.yetkiler)) {
+    YETKI = new Set(v.yetkiler);
+    ANA_GRUPLAR = Array.isArray(v.ana_gruplar) ? v.ana_gruplar : null;
+    YETKI_PROFIL = v.profil || null;
+  } else { YETKI = null; ANA_GRUPLAR = null; YETKI_PROFIL = null; }
+  const yeni = YETKI ? [...YETKI].sort().join() + "|" + (ANA_GRUPLAR || []).join() : null;
+  return eski !== yeni;
+}
+// Yetki değişti (yayın kanalı) → yeniden oku; fark varsa menü + ekran yenilenir.
+let yetkiZaman = null;
+function yetkiCanli() {
+  clearTimeout(yetkiZaman);
+  yetkiZaman = setTimeout(async () => {
+    if (!session || typeof Api.yetkilerim !== "function") return;
+    let v;
+    try { v = await Api.yetkilerim(); } catch (e) { return; }
+    const degisti = yetkileriUygula(v);
+    if (currentPage === "yetkiler") { yetkiSayfasiTazele(); }
+    if (!degisti) return;
+    applyRoleUI();
+    if (!pageAllowed(currentPage)) { navigate(ilkSayfa()); return; }
+    if (currentPage === "kuyruk") { renderKapsamlar(); renderTable(); }
+    else if (currentPage === "test-katalogu") renderTestKatalogPage();
+    else if (currentPage === "duyurular") renderDuyurularPage();
+  }, 600);
+}
 // Teknisyen sıfırdan istem giremez — tek yolu detay panelindeki "Tekrar İste".
-const canCreateIstem = () => !isTeknisyen();
+const canCreateIstem = () => yetki("istem_ver");
 // Durum değiştirme (İşleme Al / Tamamla / Geri Al): YALNIZ yönetici ve
 // teknisyen — uzman/asistan (admin değilse) hiç görmez; kendi Bekleyen
 // kalemini "İptal Et" (silme kuralı) ile geri çeker. RLS: ekip_sema.sql
 // (istem_kalemleri_geri_alma_kontrol).
-const canAdvance = () => isAdmin() || Boolean(session && session.rol === "teknisyen");
+const canAdvance = () => yetki("durum_degistir");
 // Teslim alınmış kalemin durumu geri alınamaz — önce teslim geri alınır
 // (teslim_sema.sql tetikleyicisi de reddeder).
 const canRevert = (r) => canAdvance() && !(r && r.teslim_at);
@@ -400,28 +452,36 @@ const canRevert = (r) => canAdvance() && !(r && r.teslim_at);
 const canKesildi = () => canAdvance();
 // Admin her kalemi (Tamamlandı dahil); diğerleri kendi istemindeki,
 // Tamamlandı olmayan kalemleri.
-const canDeleteKalem = (r) => isAdmin() || (r.istem_yapan_id === session.id && r.durum !== "tamamlandi");
+const canDeleteKalem = (r) => isAdmin() || (yetki("sil") && r.istem_yapan_id === session.id && r.durum !== "tamamlandi");
 // Teslim al (teslim_sema.sql — RLS/tetikleyici aynı kural): Tamamlandı,
 // takip başlangıcından sonra tamamlanmış, henüz alınmamış kalem; yönetici
 // ya da (teknisyen değilse) istemi giren / adına istenen uzman. Geri alma:
 // işaretleyen kişi ya da yönetici.
 const canTeslimAl = (r) => Boolean(session && r && r.durum === "tamamlandi" && r.teslim_takipte && !r.teslim_at
-  && (isAdmin() || (!isTeknisyen() && (r.istem_yapan_id === session.id || r.uzman_id === session.id))));
+  && (isAdmin() || (yetki("teslim_al") && (r.istem_yapan_id === session.id || r.uzman_id === session.id))));
 const canTeslimGeriAl = (r) => Boolean(session && r && r.teslim_at && (isAdmin() || r.teslim_alan_id === session.id));
 // İstek Setleri: teknisyen dışında herkes ekler/düzenler/siler (RLS de öyle).
 const canManageSets = () => !isTeknisyen();
 const canEditSablon = (s) => isAdmin() || (!isTeknisyen() && s.sahip_id === session.id);
-const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "test-katalogu", "yedekler", "istatistikler", "sistem"]);
+// Yönetim sayfaları yalnız yöneticide (matriste kilitli); diğerleri yetkiye göre.
+const ADMIN_PAGES = new Set(["kullanicilar", "test-gruplari", "yedekler", "sistem", "yetkiler"]);
 function pageAllowed(page) {
   if (ADMIN_PAGES.has(page)) return isAdmin();
+  if (page === "kuyruk") return yetki("s_kuyruk");
+  if (page === "hizmetler") return yetki("s_hizmetler");
+  if (page === "test-katalogu") return yetki("s_katalog");
+  if (page === "istatistikler") return yetki("s_istatistik");
   if (page === "sablonlar") return !isTeknisyen();
-  if (page === "duyurular") return duyuruVar; // duyuru_sema.sql çalıştıysa
+  if (page === "duyurular") return duyuruVar && yetki("s_duyurular"); // duyuru_sema.sql çalıştıysa
   return true;
 }
+const ilkSayfa = () => ["kuyruk", "hizmetler", "test-katalogu", "setler"].find(pageAllowed) || "setler";
 // Nav/sidebar görünürlüğü — her girişte (initApp) yeniden uygulanır.
 function applyRoleUI() {
   $("#newBtn").classList.toggle("hidden", !canCreateIstem());
   $$("#nav [data-admin]").forEach((el) => el.classList.toggle("hidden", !isAdmin()));
+  document.body.classList.toggle("yzd-yok", !yetki("yazdir"));
+  document.body.classList.toggle("dyy-yok", !yetki("duyuru_yayinla"));
   $$("#nav a[data-page]").forEach((a) => {
     if (!a.hasAttribute("data-admin")) a.classList.toggle("hidden", !pageAllowed(a.dataset.page));
   });
@@ -640,6 +700,7 @@ async function handleLogout() {
 // ---------------- App init ----------------
 async function initApp(user) {
   session = user;
+  YETKI = null; ANA_GRUPLAR = null; YETKI_PROFIL = null;
   tamamlananGun = tamamlananGunOku();
   profilSonOkuma = Date.now();
   yaziyorBaslat();
@@ -659,13 +720,16 @@ async function initApp(user) {
   // yine de yüklenir — tek bir eksik tablo tüm girişi kilitlemesin.
   const avatarP = refreshAvatarlar(); // paralel — gelince sol alttaki baş harf fotoğrafa döner
   const results = await Promise.allSettled([
-    Api.getTestKatalog(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getAllTestGruplari(),
+    katalogYukle(), Api.getIstekSetleri(), Api.getSablonlar(user.id), Api.getUzmanlar(), Api.getCihazlar(), Api.getAllTestGruplari(),
     Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id), Api.getAyarlar(),
     Api.konsYokla(),
+    typeof Api.yetkilerim === "function" ? Api.yetkilerim() : null,
   ]);
-  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR, ayarR] = results;
+  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR, ayarR, , yetkiR] = results;
+  yetkileriUygula(yetkiR.status === "fulfilled" ? yetkiR.value : null);
+  applyRoleUI();
   AYARLAR = ayarR.status === "fulfilled" ? ayarR.value : {};
-  if (catR.status === "fulfilled") CAT = catR.value; else toast("Test kataloğu yüklenemedi", true);
+  if (catR.status !== "fulfilled") toast("Test kataloğu yüklenemedi", true);
   if (setlerR.status === "fulfilled") { ISTEK_SETLERI = setlerR.value; SETS_INST = activeSetsInst(ISTEK_SETLERI); }
   else toast("İstek Setleri yüklenemedi — setler_sema.sql çalıştırıldı mı?", true);
   if (sablonR.status === "fulfilled") { SABLONLAR = sablonR.value; SETS_SABLON = groupByGrup(SABLONLAR); }
@@ -695,6 +759,36 @@ async function initApp(user) {
   kapsam = varsayilanKapsam();
   kesitSekme = "kesilecek";
   navigate(session.ekip === "sekreter" ? "hizmetler" : "kuyruk");
+}
+
+// Katalog: oturumda bir kez (tamamı — pasif ve birleştirilmişler dahil),
+// değişince yayın kanalından. CAT = seçicilerdeki aktif testler (gruba göre).
+let KATALOG = [];
+let KATALOG_YENI = false; // açıklama / eş ad / birleştirme sütunları var mı
+async function katalogYukle() {
+  let liste = null;
+  try { if (typeof Api.getKatalog === "function") liste = await Api.getKatalog(); } catch (e) { liste = null; }
+  if (Array.isArray(liste) && liste.length) {
+    KATALOG = liste;
+    KATALOG_YENI = liste.yeniAlanlar !== false;
+    const out = {};
+    liste.forEach((t) => { if (t.aktif !== false && !t.birlesti_id) (out[t.grup] ??= []).push(t); });
+    CAT = out;
+  } else {
+    CAT = await Api.getTestKatalog();
+    KATALOG = Object.values(CAT).flat().map((t) => ({ kontrol: "", aciklama: "", es_adlar: [], aktif: true, birlesti_id: null, ...t }));
+    KATALOG_YENI = false;
+  }
+  return CAT;
+}
+let katalogZaman = null;
+function katalogCanli() {
+  clearTimeout(katalogZaman);
+  katalogZaman = setTimeout(async () => {
+    if (!session) return;
+    try { await katalogYukle(); } catch (e) { return; }
+    if (currentPage === "test-katalogu") katalogListeCiz();
+  }, 1200);
 }
 
 // Gruplar: GROUPS (seçiciler, kapsam çipleri) yalnız AKTİF; TIP ve
@@ -729,8 +823,11 @@ async function profilTazele() {
   renderMe();
   $("#meName").textContent = session.ad_soyad;
   $("#meRole").textContent = (ROL_LABEL[session.rol] || session.rol) + (session.is_admin ? " · Yönetici" : "");
+  if (yetkiDegisti && typeof Api.yetkilerim === "function") {
+    try { yetkileriUygula(await Api.yetkilerim()); } catch (e) { /* eski yetkilerle sürer */ }
+  }
   applyRoleUI();
-  if (!pageAllowed(currentPage)) { navigate("kuyruk"); return; }
+  if (!pageAllowed(currentPage)) { navigate(ilkSayfa()); return; }
   if (yetkiDegisti) kapsam = varsayilanKapsam();
   if (currentPage === "kuyruk") renderTable();
 }
@@ -766,7 +863,7 @@ async function refreshGruplar() {
 // ---------------- Router ----------------
 function navigate(page) {
   profilTazele(); // arka planda — ekip/rol değiştiyse çıkış-giriş gerekmesin
-  if (!pageAllowed(page)) page = "kuyruk";
+  if (!pageAllowed(page)) page = ilkSayfa();
   currentPage = page;
   $$("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.page === page));
   if (pageUnsub) { pageUnsub(); pageUnsub = null; }
@@ -796,6 +893,8 @@ function navigate(page) {
     renderDuyurularPage();
   } else if (page === "sistem") {
     renderSistemPage();
+  } else if (page === "yetkiler") {
+    renderYetkilerPage();
   }
 }
 
@@ -2048,37 +2147,47 @@ async function revertDurum(r) {
 const benimEkip = () => (session && session.ekip) || null;
 const ekipGruplari = (ekip) => Object.values(GRUP_BILGI).filter((g) => g.ekip === ekip).map((g) => g.kod);
 // Arşiv ekibinin kendi test grubu yok — "Ekibim"i arşiv ekranıdır.
-const ekibimVar = () => Boolean(benimEkip() && (benimEkip() === "arsiv" || ekipGruplari(benimEkip()).length));
+// "Ekibim" görünümündeki gruplar: Ayarlar > Yetkiler > Ana sayfa grupları
+// (ekip_gruplari); kurulmadıysa grubun kendi ekibi. Grup çipleri ve bildirim
+// tercihleri bundan etkilenmez.
+const ekibimGruplari = () => (ANA_GRUPLAR ? ANA_GRUPLAR.filter((k) => GRUP_BILGI[k]) : ekipGruplari(benimEkip()));
+const arsivEkibi = () => benimEkip() === "arsiv" && yetki("s_arsiv");
+// Arşiv ekibinde olmayıp Arşiv sayfası yetkisi verilenlere ayrı "Arşiv" çipi.
+const arsivCipiVar = () => Boolean(YETKI) && yetki("s_arsiv") && benimEkip() !== "arsiv";
+const arsivKapsami = () => kapsam === "arsiv" || (kapsam === "ekibim" && arsivEkibi());
+const ekibimVar = () => Boolean(benimEkip() && (arsivEkibi() || ekibimGruplari().length));
 // Uzman/asistan: Benim İsteklerim · teknisyen: Ekibim (ekibi yoksa Tümü) ·
 // yönetici: Tümü. Kesit ekibinde "Ekibim" = Kesit ekranı.
 function varsayilanKapsam() {
   if (!session || isAdmin()) return "tumu";
-  if (benimEkip() === "arsiv") return "ekibim"; // rolü ne olursa olsun arşiv ekranı
+  if (arsivEkibi()) return "ekibim"; // rolü ne olursa olsun arşiv ekranı
   if (session.rol === "teknisyen") return ekibimVar() ? "ekibim" : "tumu";
   if (session.rol === "uzman" || session.rol === "asistan") return "benim";
   return "tumu";
 }
 function kesitEkraniMi() {
   if (caseView !== null || !session) return false;
+  if (!yetki("s_kesit")) return false;
   if (kapsam === "ekibim") return benimEkip() === "kesit";
   if (kapsam.startsWith("g:")) return GRUP_BILGI[kapsam.slice(2)]?.ekip === "kesit";
   return false;
 }
 // Arşiv ekranı: arşiv ekibinin "Ekibim"i (blok bazlı arşiv listesi).
 function arsivEkraniMi() {
-  return caseView === null && Boolean(session) && kapsam === "ekibim" && benimEkip() === "arsiv";
+  return caseView === null && Boolean(session) && arsivKapsami() && yetki("s_arsiv");
 }
 function kapsamaUyar(r) {
   if (!session) return true;
   if (kapsam === "benim") return r.istem_yapan_id === session.id || r.uzman_id === session.id;
-  if (kapsam === "ekibim" && benimEkip() === "arsiv") return grupK(r.grup) || grupE(r.grup);
-  if (kapsam === "ekibim") return GRUP_BILGI[r.grup]?.ekip === benimEkip();
+  if (arsivKapsami()) return grupK(r.grup) || grupE(r.grup);
+  if (kapsam === "ekibim") return ANA_GRUPLAR ? ANA_GRUPLAR.includes(r.grup) : GRUP_BILGI[r.grup]?.ekip === benimEkip();
   if (kapsam.startsWith("g:")) return r.grup === kapsam.slice(2);
   return true;
 }
 function kapsamEtiketi() {
   if (kapsam === "benim") return "Benim İsteklerim";
   if (kapsam === "ekibim") return `Ekibim · ${EKIP_AD[benimEkip()] || ""}`;
+  if (kapsam === "arsiv") return "Arşiv";
   if (kapsam.startsWith("g:")) return TIP[kapsam.slice(2)] || kapsam.slice(2);
   return "Tümü";
 }
@@ -2090,6 +2199,7 @@ function renderKapsamlar() {
   const cipler = [];
   if (!teknisyen) cipler.push(["benim", "Benim İsteklerim"]);
   if (ekibimVar()) cipler.push(["ekibim", `Ekibim · ${EKIP_AD[benimEkip()]}`]);
+  if (arsivCipiVar()) cipler.push(["arsiv", "Arşiv"]);
   cipler.push(["tumu", "Tümü"]);
   const ayrac = cipler.length;
   GROUPS.forEach(([k, l]) => cipler.push(["g:" + k, l]));
@@ -2534,7 +2644,8 @@ function bloklariSec(bloklar, mod, baglam) {
 // "Çıkarıldı" yalnız satırda görünen (damgasız) kalemlerin id'leriyle çağrılır.
 // ================================================================
 const ihkMi = (g) => GRUP_BILGI[g]?.ekip === "immun";
-const canCikar = () => isAdmin() || Boolean(session && session.rol === "teknisyen") || benimEkip() === "arsiv";
+// Blok çıkarma: Arşiv sayfası ya da durum değiştirme yetkisi (blok_cikarma_yetkisi()).
+const canCikar = () => yetki("s_arsiv") || yetki("durum_degistir");
 function arsivBloklari() {
   const m = new Map();
   rows.forEach((r) => {
@@ -2651,6 +2762,7 @@ function arsivListesiYazdir(mod = "gorunen") {
 // ================================================================
 const YZ_IKON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>`;
 function yazdirMenuHTML(seciliVar) {
+  if (!yetki("yazdir")) return "";
   return `<div class="exportbox yzbox">
     <button class="btn-ghost btn-sm yzbtn" type="button">${YAZDIR_IKON} Yazdır ▾</button>
     <div class="thfilter" style="right:auto;left:0">
@@ -2752,7 +2864,7 @@ function geriAlBandi(metin, dugme, onGeriAl) {
 const DUZ_ALAN = { patoloji_no: "Patoloji no", kons_no: "Konsültasyon no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
 const duzBilgi = (r, alan) => (r && r.duzeltmeler && r.duzeltmeler[alan]) || null;
 const duzDeger = (alan, v) => (alan === "oncelik" ? (PRIO[v] && PRIO[v][1]) || v || "—" : v || "—");
-const canDuzelt = (r) => Boolean(session && (isAdmin() || r.istem_yapan_id === session.id));
+const canDuzelt = (r) => Boolean(session && (isAdmin() || (r.istem_yapan_id === session.id && yetki("duzeltme"))));
 function duzRozet(r, alan) {
   const d = duzBilgi(r, alan);
   if (!d) return "";
@@ -3106,7 +3218,7 @@ const kalemDuyurulari = (r) => (r ? gorunurDuyurular().filter((d) => (d.test_id 
 // Kritik onayı için: verilen testlere bağlı aktif kritik duyurular (kritik gizlenemez).
 const kritikDuyurular = (testIdler) => gorunurDuyurular().filter((d) => d.onem === "kritik" && d.test_id && testIdler.includes(d.test_id));
 // Düzenleme / Çözüldü / yeniden açma: yazan kişi, teknisyen, yönetici (RLS de öyle).
-const canDuyuruDuzenle = (d) => Boolean(session && d) && (d.yazan_id === session.id || session.rol === "teknisyen" || isAdmin());
+const canDuyuruDuzenle = (d) => Boolean(session && d) && (d.yazan_id === session.id || yetki("duyuru_yonet"));
 const dyHata = (e) => (e && (e.code === "42501" || /row-level security|yetki/i.test(String(e.message || ""))) ? " — bu işlem için yetkiniz yok" : "");
 
 // ---------------- Yükleme, canlı güncelleme ----------------
@@ -3792,7 +3904,7 @@ function renderBulkBar() {
   ["#bulkCihazaBtn", "#bulkTamamlaBtn", "#bulkGeriBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit || !ilerlet));
   ["#bulkTekrarBtn", "#bulkSilBtn"].forEach((s) => $(s).classList.toggle("hidden", kesit));
   // Teslim al: teknisyen (yönetici değilse) hiçbir zaman.
-  $("#bulkTeslimBtn").classList.toggle("hidden", kesit || isTeknisyen() || !teslimAktif());
+  $("#bulkTeslimBtn").classList.toggle("hidden", kesit || !yetki("teslim_al") || !teslimAktif());
   $("#bulkSilBtn").textContent = ilerlet ? "Sil" : "İptal Et";
   if (!n) return;
   const gorunen = secilebilirSatirlar();
@@ -4057,6 +4169,9 @@ function canliOlay(e) {
     case "cihazlar": cihazlarCanli(); return;
     case "sistem_ayarlari": ayarlariTazele(); return;
     case "kullanicilar": kullaniciCanli(e.id); return;
+    case "rol_yetkileri": case "kullanici_yetkileri": case "ekip_gruplari": yetkiCanli(); return;
+    case "test_katalog": katalogCanli(); return;
+    case "test_gruplari": gruplarCanli(); return;
     default: return;
   }
   kuyrukTazeleZamanla();
@@ -4173,8 +4288,18 @@ function cihazlarCanli() {
   }, 800);
 }
 // Kullanıcı değişti: ad listesi (kısaltmalar) tazelenir; kendisiyse profil (ekip / rol / yetki).
+let grupZaman = null;
+function gruplarCanli() {
+  clearTimeout(grupZaman);
+  grupZaman = setTimeout(async () => {
+    if (!session) return;
+    try { await refreshGruplar(); } catch (e) { return; }
+    if (currentPage === "kuyruk") { renderKapsamlar(); renderTable(); }
+  }, 1500);
+}
 function kullaniciCanli(id) {
   if (session && id === session.id) { profilSonOkuma = 0; profilTazele(); }
+  if (currentPage === "yetkiler") yetkiSayfasiTazele();
   clearTimeout(kisiZaman);
   kisiZaman = setTimeout(async () => {
     try {
@@ -4660,7 +4785,7 @@ function renderAntis(q = "") {
 
   let catMatches;
   if (query) {
-    catMatches = (CAT[grp] || []).filter((t) => aramaNorm(t.ad).includes(query) && !selectedTests.has(t.id));
+    catMatches = (CAT[grp] || []).filter((t) => !selectedTests.has(t.id) && (aramaNorm(t.ad).includes(query) || esAdEslesen(t, query) !== null));
   } else {
     const recent = (RECENT_TESTS[grp] || []).filter((t) => !selectedTests.has(t.id));
     catMatches = recent.length
@@ -4670,8 +4795,11 @@ function renderAntis(q = "") {
   catMatches.forEach((t) => {
     const el = document.createElement("span");
     el.className = "anti";
-    el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${testDuyuruIsareti(t.id)}`;
-    el.onclick = () => {
+    const esAd = query && !aramaNorm(t.ad).includes(query) ? esAdEslesen(t, query) : null;
+    el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${esAd ? `<small class="anti-es">= ${esc(esAd)}</small>` : ""}${testDuyuruIsareti(t.id)}${testBilgiIkonu(t)}`;
+    el.onclick = (e) => {
+      const bilgi = e.target.closest("[data-test-bilgi]");
+      if (bilgi) { e.stopPropagation(); testBilgiBalonu(bilgi); return; }
       selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
       aramaTemizle();
     };
@@ -4698,12 +4826,22 @@ function renderAntis(q = "") {
   // dahil tüm gruplarda çalışır; otherbox'ın tek-seferlik ozel_test akışını
   // bozmaz, ona ek bir yol sunar.
   if (query && catMatches.length === 0 && customMatches.length === 0) {
-    const addBtn = document.createElement("button");
-    addBtn.type = "button";
-    addBtn.className = "anti-add";
-    addBtn.textContent = `+ "${q.trim()}" olarak ekle`;
-    addBtn.onclick = () => addTestToKatalog(q.trim());
-    wrap.appendChild(addBtn);
+    if (canKatalogEkle()) {
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "anti-add";
+      addBtn.textContent = `+ "${q.trim()}" olarak ekle`;
+      addBtn.onclick = () => addTestToKatalog(q.trim());
+      wrap.appendChild(addBtn);
+    } else {
+      // Kataloğa ekleme yetkisi yok: "Diğer" grubunda serbest metinle devam.
+      const yok = document.createElement("span");
+      yok.className = "anti-yok";
+      yok.textContent = isDiger
+        ? "Katalogda yok — alttaki kutuya yazıp serbest metin olarak ekleyin."
+        : "Katalogda yok — “Diğer” grubunda serbest metinle isteyebilirsiniz.";
+      wrap.appendChild(yok);
+    }
   }
 
   renderPicked();
@@ -4755,8 +4893,46 @@ async function addTestToKatalog(ad) {
     renderAntis("");
     toast(`"${ad}" kataloğa ve seçime eklendi`);
   } catch (e) {
-    toast("Eklenemedi", true);
+    toast(katalogHata(e, "Eklenemedi"), true);
   }
+}
+// Katalog yazma hataları: tekrar ("Bu test zaten var: X") ve yetki.
+function katalogHata(e, varsayilan) {
+  const m = String((e && e.message) || "");
+  if (e && e.code === "23505") return /zaten var/.test(m) ? m : "Bu test zaten var";
+  if (e && (e.code === "42501" || e.status === 403 || /row-level security|yetki/i.test(m))) return /yetki/i.test(m) && !/row-level/i.test(m) ? m : "Katalog düzenleme yetkiniz yok";
+  if (e && (e.code === "P0001" || e.code === "22023") && m) return m;
+  return varsayilan;
+}
+// Tekrar anahtarı — veritabanındaki test_anahtar() ile aynı: Türkçe harfler
+// sade, küçük harf, boşluk / tire / nokta / parantez / eğik çizgi atılır.
+const TA_HARF = { "İ": "i", I: "i", "ı": "i", "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g", "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c", "Â": "a", "â": "a", "Î": "i", "î": "i", "Û": "u", "û": "u", "É": "e", "é": "e" };
+function testAnahtar(s) {
+  return String(s || "").replace(/[İIıŞşĞğÜüÖöÇçÂâÎîÛûÉé]/g, (c) => TA_HARF[c]).toLowerCase().replace(/[\s.()/\\\u2010-\u2015-]/g, "");
+}
+// Arama metni testin bir eş adında geçiyorsa o eş ad (yoksa null).
+function esAdEslesen(t, query) {
+  const l = t.es_adlar || [];
+  for (let i = 0; i < l.length; i++) if (aramaNorm(l[i]).includes(query)) return l[i];
+  return null;
+}
+// (i): testin açıklaması, klonu, kontrolü, eş adları — bilgisi olan testlerde.
+function testBilgiIkonu(t) {
+  if (!t || !(t.aciklama || t.kontrol || (t.es_adlar || []).length)) return "";
+  return `<button type="button" class="test-bilgi" data-test-bilgi="${t.id}" aria-label="${esc(t.ad)} — test bilgisi" aria-haspopup="dialog">i</button>`;
+}
+function testBilgiHTML(t) {
+  const satir = (b, v) => (v ? `<div class="tb-satir"><b>${b}</b><span>${esc(v)}</span></div>` : "");
+  return `<div class="nb-baslik">${esc(t.ad)}</div>${t.aciklama ? `<div class="nb-metin">${esc(t.aciklama)}</div>` : ""}`
+    + satir("Klon", t.klon) + satir("Kontrol", t.kontrol) + satir("Eş adlar", (t.es_adlar || []).join(", "));
+}
+function testBilgiBalonu(el) {
+  const t = KATALOG.find((x) => x.id === el.dataset.testBilgi) || katalogTest(el.dataset.testBilgi);
+  if (!t) return;
+  const b = balonHazirla();
+  b.innerHTML = testBilgiHTML(t);
+  balonGoster(b, el, "test:" + t.id, true);
+  b.setAttribute("aria-label", "Test bilgisi");
 }
 
 function bindPicker(withQuickFill) {
@@ -4817,7 +4993,8 @@ async function bulkPickSelect() {
     const toCreate = [];
     let matchedCount = 0;
     items.forEach((it) => {
-      const found = catalog.find((t) => t.ad.toLowerCase() === it.ad.toLowerCase());
+      const a = testAnahtar(it.ad);
+      const found = catalog.find((t) => testAnahtar(t.ad) === a || (t.es_adlar || []).some((x) => testAnahtar(x) === a));
       if (found) {
         selectedTests.set(found.id, { ad: found.ad, klon: found.klon, grup: found.grup });
         matchedCount++;
@@ -4825,6 +5002,13 @@ async function bulkPickSelect() {
         toCreate.push(it);
       }
     });
+    if (toCreate.length && !canKatalogEkle()) {
+      // Kataloğa ekleme yetkisi yok: bulunamayanlar kutuda kalır.
+      $("#bulkPickText").value = toCreate.map((t) => t.ad).join("\n");
+      renderAntis("");
+      toast(`${matchedCount} test seçildi; ${toCreate.length} satır katalogda yok — “Diğer” grubunda serbest metinle isteyebilirsiniz`, true);
+      return;
+    }
     if (toCreate.length) {
       const created = await Api.bulkCreateTestKatalogEntries(grp, toCreate);
       created.forEach((row) => {
@@ -4837,7 +5021,7 @@ async function bulkPickSelect() {
     renderAntis("");
     toast(`${matchedCount} kataloğa kayıtlıydı, ${toCreate.length} yeni eklendi — hepsi seçime alındı`);
   } catch (e) {
-    toast("Toplu seçim başarısız", true);
+    toast(katalogHata(e, "Toplu seçim başarısız"), true);
   } finally {
     btn.disabled = false;
   }
@@ -4855,7 +5039,7 @@ function collectPickedTestler() {
 // ================================================================
 function showForm(prefill) {
   // Teknisyen sıfırdan istem giremez (RLS de reddeder) — tek yolu "Tekrar İste".
-  if (!canCreateIstem()) { toast("Teknisyen yeni istem giremez — mevcut bir kalem için \"Tekrar İste\"yi kullanın", true); return; }
+  if (!canCreateIstem()) { toast("Yeni istem girme yetkiniz yok — mevcut bir kalem için \"Tekrar İste\"yi kullanın", true); return; }
   navigate("kuyruk");
   grp = "ihc"; prio = "rutin";
   selectedTests = new Map(); customItems = [];
@@ -4872,7 +5056,7 @@ function showForm(prefill) {
       <div class="sepet-bar hidden" id="sepetBar"></div>
       <div class="sepet-duz hidden" id="sepetDuzSerit"></div>
       <div class="m-sec"><p class="m-label">Uzman adına</p>
-        <select class="onbehalf" id="mUzman"><option value="">— Uzman seçin —</option>${UZMANLAR.map((u) => `<option value="${u.id}"${u.id === seciliUzman ? " selected" : ""}>${esc(u.ad_soyad)}</option>`).join("")}</select></div>
+        <select class="onbehalf" id="mUzman"><option value="">${uzmanSecenekleri().length ? "— Uzman seçin —" : "— başkası adına istem yetkiniz yok —"}</option>${uzmanSecenekleri().map((u) => `<option value="${u.id}"${u.id === seciliUzman ? " selected" : ""}>${esc(u.ad_soyad)}</option>`).join("")}</select></div>
       <div class="m-sec"><p class="m-label">Patoloji No</p>
         <div class="patrow"><input id="mPat" placeholder="ör. 11240/26">
           <button type="button" class="scan" id="scanBtn" title="Barkodu okut (istem kağıdındaki etiket)" aria-label="Patoloji No'yu barkoddan oku">${TARA_IKON}</button></div>
@@ -4978,11 +5162,16 @@ const sonUzmanKey = () => "istem_son_uzman:" + (session ? session.id : "");
 function sonUzmanKaydet(id) {
   try { localStorage.setItem(sonUzmanKey(), id); } catch (e) { /* hatırlanmaz */ }
 }
+// "Uzman adına" yetkisi yoksa yalnız kendi adı seçilebilir (uzman değilse
+// alan boş kalır; veritabanı da başkası adına kaydı reddeder).
+const uzmanSecenekleri = () => (yetki("uzman_adina") ? UZMANLAR : UZMANLAR.filter((u) => session && u.id === session.id));
 function varsayilanUzman() {
+  const liste = uzmanSecenekleri();
   let kayitli = null;
   try { kayitli = localStorage.getItem(sonUzmanKey()); } catch (e) { kayitli = null; }
-  if (kayitli) return UZMANLAR.some((u) => u.id === kayitli) ? kayitli : null;
-  return session && UZMANLAR.some((u) => u.id === session.id) ? session.id : null;
+  if (kayitli && liste.some((u) => u.id === kayitli)) return kayitli;
+  if (kayitli && yetki("uzman_adina")) return null;
+  return session && liste.some((u) => u.id === session.id) ? session.id : null;
 }
 
 // İş Kuyruğu / Hizmetler arama kutusu: barkod okutulunca değer kutuya yazılır,
@@ -5118,7 +5307,7 @@ function formdanVaka() {
   const testler = secilenTestler();
   if (!testler.length) { toast("En az bir test seçin", true); return null; }
   const uzmanEl = $("#mUzman");
-  if (!uzmanEl.value) { toast("Uzman adına seçin", true); uzmanEl.focus(); return null; }
+  if (!uzmanEl.value && uzmanSecenekleri().length) { toast("Uzman adına seçin", true); uzmanEl.focus(); return null; }
   const kons_no = formKonsNo();
   if (kons_no === undefined) return null;
   return {
@@ -5218,8 +5407,8 @@ function sepetDuzenle(id) {
   });
   renderAntis("");
   const uz = $("#mUzman");
-  uz.value = UZMANLAR.some((u) => u.id === v.uzman_id) ? v.uzman_id : "";
-  if (!uz.value) toast(`${v.uzman_adi || "Seçilen uzman"} artık listede yok — uzman seçin`, true);
+  uz.value = uzmanSecenekleri().some((u) => u.id === v.uzman_id) ? v.uzman_id : "";
+  if (!uz.value && uzmanSecenekleri().length) toast(`${v.uzman_adi || "Seçilen uzman"} artık listede yok — uzman seçin`, true);
   prio = v.oncelik || "rutin";
   $$("#prios button").forEach((b) => b.classList.toggle("on", b.dataset.p === prio));
   $("#mNot").value = v.not_metni || "";
@@ -5500,7 +5689,7 @@ async function submitForm() {
 
   const uzmanEl = $("#mUzman");
   const uzman_id = uzmanEl && uzmanEl.value ? uzmanEl.value : null;
-  if (!uzman_id) { toast("Uzman adına seçin", true); uzmanEl?.focus(); return; }
+  if (!uzman_id && uzmanSecenekleri().length) { toast("Uzman adına seçin", true); uzmanEl?.focus(); return; }
   const not_metni = $("#mNot").value.trim() || null;
   const kons_no = formKonsNo();
   if (kons_no === undefined) return;
@@ -6581,6 +6770,7 @@ function showKullaniciForm(existing) {
       ${existing
         ? `<div class="m-sec"><p class="m-label">PIN <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— değiştirilemez</span></p><div class="v" style="font-size:13px;color:var(--ink-3)">${existing.auth_user_id ? "Supabase Auth üzerinden yönetiliyor" : "Auth hesabı yok — \"Auth hesabı olmayanları taşı\" ile oluşturulur"}</div></div>`
         : `<div class="m-sec"><p class="m-label">PIN <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— Auth hesabının şifresi olacak</span></p><input class="finput" id="kPin" placeholder="ör. 1234" inputmode="numeric" maxlength="6"></div>`}
+      ${existing ? `<div class="m-sec ky-bolum" id="kYetki" data-id="${existing.id}"></div>` : ""}
     </div>
     <div class="rail-foot">
       ${existing ? `<button class="btn-ghost" id="delKullanici">Sil</button><button class="btn-danger" id="toggleKullaniciAktif">${existing.aktif ? "Pasifleştir" : "Aktifleştir"}</button>` : `<button class="btn-ghost" id="cancelKullanici">İptal</button>`}
@@ -6588,6 +6778,7 @@ function showKullaniciForm(existing) {
     </div>`;
 
   $("#closeKullanici").onclick = showEmpty;
+  if (existing) kullaniciYetkiBolumu(existing);
   if (existing) {
     $("#toggleKullaniciAktif").onclick = async () => {
       try {
@@ -6636,7 +6827,8 @@ function showKullaniciForm(existing) {
       await loadKullanicilar();
       showEmpty();
     } catch (e) {
-      toast(e && e.code === "23505" && /kisaltma/.test(e.message || "") ? "Bu kısaltma başka bir kullanıcıda var" : "Kaydedilemedi", true);
+      toast(e && e.code === "23505" && /kisaltma/.test(e.message || "") ? "Bu kısaltma başka bir kullanıcıda var"
+        : e && /Son aktif yönetici/.test(e.message || "") ? e.message : "Kaydedilemedi", true);
     } finally {
       const btn = $("#saveKullanici"); if (btn) btn.disabled = false;
     }
@@ -6644,67 +6836,848 @@ function showKullaniciForm(existing) {
 }
 
 // ================================================================
-// TEST KATALOĞU (yönetim)
+// YETKİLER (Yönetim, yalnız yönetici) — rol/ekip profiline göre sayfa
+// görünürlüğü ve işlem yetkileri, "Ekibim" grupları, kişi istisnaları.
+// Asıl uygulama veritabanında (yetki_var — RLS / tetikleyici / RPC);
+// buradaki değişiklik anında kaydedilir ve yayın kanalıyla açık ekranlara
+// ulaşır. Yönetici her zaman tam yetkilidir (kendini kilitleyemez).
 // ================================================================
-let tkGrup = null;
-let tkList = [];
+const YETKI_PROFILLER = [["uzman", "Uzman"], ["asistan", "Asistan"], ["teknisyen-immun", "Teknisyen · İmmün"],
+  ["teknisyen-histomol", "Teknisyen · Histokimya-Moleküler"], ["teknisyen-sito", "Teknisyen · Sitoloji"],
+  ["teknisyen-ekipsiz", "Teknisyen (ekibi atanmamış)"], ["kesit", "Kesit ekibi"], ["arsiv", "Arşiv ekibi"], ["sekreter", "Sekreter"]];
+// "İstek Ver" sayfası ile "istem ver" işlemi tek yetkidir (istem_ver).
+const YETKI_SAYFALAR = [["s_kuyruk", "İş Kuyruğu"], ["istem_ver", "İstek Ver"], ["s_hizmetler", "Hizmetler"], ["s_kesit", "Kesit"],
+  ["s_arsiv", "Arşiv"], ["s_katalog", "Test Kataloğu"], ["s_duyurular", "Duyurular"], ["s_istatistik", "İstatistik"]];
+const YETKI_ISLEMLER = [["uzman_adina", "Uzman adına"], ["durum_degistir", "Durum değiştir"], ["teslim_al", "Teslim al"], ["sil", "Sil"],
+  ["duzeltme", "Düzeltme"], ["katalog_duzenle", "Katalog düzenle"], ["duyuru_yayinla", "Duyuru yayınla"], ["duyuru_yonet", "Duyuru yönet"], ["yazdir", "Yazdır"]];
+const YETKI_AD = Object.fromEntries(YETKI_SAYFALAR.map(([k, l]) => [k, k === "istem_ver" ? "İstek Ver" : l + " sayfası"]).concat(YETKI_ISLEMLER));
+const YETKI_IPUCU = {
+  s_kesit: "Kesit ekranı (blok bazlı kesilecekler listesi)",
+  s_arsiv: "Arşiv ekranı (blok çıkarma listesi). Arşiv ekibinde olmayan kişide kapsam satırında “Arşiv” çipi olarak görünür.",
+  istem_ver: "“Yeni İstek” düğmesi ve istem girme (sayfa ile işlem tek yetkidir). “Tekrar İste” bundan bağımsızdır.",
+  uzman_adina: "Başka bir uzman adına istem verme. Yoksa yalnız kendi adına.",
+  durum_degistir: "İşleme Al / Tamamla / Geri Al / Kesildi. Blok çıkarma için bu ya da Arşiv sayfası yeterlidir.",
+  teslim_al: "Kendi istemini (ya da adına isteneni) teslim alma",
+  sil: "Kendi istemindeki tamamlanmamış kalemi silme / iptal etme",
+  duzeltme: "Kendi isteminde patoloji no, blok, uzman, öncelik düzeltme",
+  katalog_duzenle: "Kataloğa test ekleme / düzenleme, birleştirme, liste içe aktarma; İstek Ver formundan kataloğa test ekleme",
+  duyuru_yayinla: "Yeni duyuru yazma",
+  duyuru_yonet: "Başkasının duyurusunu düzenleme / çözüldü işaretleme",
+  yazdir: "Çalışma listesi ve Hizmetler çıktıları",
+};
+// Veritabanındaki yetki_profili(rol, ekip) ile aynı.
+function yetkiProfili(rol, ekip) {
+  if (ekip === "sekreter" || ekip === "arsiv" || ekip === "kesit") return ekip;
+  if (rol === "teknisyen") return "teknisyen-" + (["immun", "histomol", "sito"].includes(ekip) ? ekip : "ekipsiz");
+  return rol === "uzman" ? "uzman" : "asistan";
+}
+const YT_EKIPLER = ["immun", "histomol", "sito", "kesit"];
+let ytVeri = null, ytKisiler = [], ytImza = "";
+
+function renderYetkilerPage() {
+  $("#mainView").innerHTML = `
+    <div class="page-head">
+      <h1>Yetkiler</h1>
+      <div class="sub">Rol ve ekibe göre sayfa görünürlüğü ve işlem yetkileri. Değişiklik anında kaydedilir; açık ekranlar kendiliğinden güncellenir.</div>
+      <div class="spacer"></div>
+    </div>
+    <div class="kk-wrap yt-wrap" id="ytWrap"><p class="kk-acik">Yükleniyor…</p></div>`;
+  ytImza = "";
+  $("#ytWrap").addEventListener("change", ytDegisti);
+  $("#ytWrap").addEventListener("click", ytTiklandi);
+  yetkiSayfasiYukle();
+}
+async function yetkiSayfasiYukle() {
+  const wrap = $("#ytWrap"); if (!wrap) return;
+  if (!YETKI) {
+    wrap.innerHTML = `<p class="kk-acik"><b>Yetki sistemi henüz kurulu değil.</b> Supabase SQL Editor'de <b>yetki_katalog_sema.sql</b> dosyasını çalıştırın, ardından sayfayı yenileyin. O zamana kadar uygulama eski rol kurallarıyla çalışır (teknisyen durum değiştirir, uzman / asistan istem verir, yönetim sayfaları yalnız yöneticide).</p>`;
+    return;
+  }
+  let m, kisiler;
+  try { [m, kisiler] = await Promise.all([Api.getYetkiMatrisi(), Api.getAllKullanicilar()]); }
+  catch (e) { if ($("#ytWrap") && !ytVeri) $("#ytWrap").innerHTML = `<p class="kk-acik">Yetkiler okunamadı.</p>`; return; }
+  const imza = JSON.stringify([m, kisiler.map((u) => [u.id, u.ad_soyad, u.rol, u.ekip, u.is_admin, u.aktif])]);
+  if (imza === ytImza) return;
+  ytImza = imza;
+  ytVeri = {
+    rol: new Set(m.rol.map((x) => x.profil + "|" + x.yetki)),
+    kisi: m.kisi,
+    eg: new Set(m.ekipGruplari.map((x) => x.ekip + "|" + x.grup_kod)),
+  };
+  ytKisiler = kisiler;
+  ytCiz();
+}
+let ytZaman = null;
+function yetkiSayfasiTazele() {
+  clearTimeout(ytZaman);
+  ytZaman = setTimeout(() => { if (currentPage === "yetkiler") yetkiSayfasiYukle(); }, 700);
+}
+function ytCiz() {
+  const wrap = $("#ytWrap"); if (!wrap || !ytVeri) return;
+  const konum = wrap.scrollTop;
+  const aktifler = ytKisiler.filter((u) => u.aktif !== false);
+  const sayi = (p) => aktifler.filter((u) => yetkiProfili(u.rol, u.ekip) === p).length;
+  const kolonlar = YETKI_SAYFALAR.concat(YETKI_ISLEMLER);
+  const basHucre = ([k, l]) => `<th title="${esc(YETKI_IPUCU[k] || l)}"><span>${esc(l)}</span></th>`;
+  const kilit = `<td class="yt-kilit" title="Yönetim sayfaları (Kullanıcılar, Test Grupları, Yedekler, Sistem, Yetkiler) yalnız yöneticide"><span aria-label="Yalnız yönetici">🔒</span></td>`;
+  const gruplar = Object.values(GRUP_BILGI).filter((g) => g.aktif !== false).map((g) => [g.kod, g.ad]);
+  const kisiAd = (id) => ytKisiler.find((u) => u.id === id);
+  const istisnalar = new Map();
+  ytVeri.kisi.forEach((x) => { if (!istisnalar.has(x.kullanici_id)) istisnalar.set(x.kullanici_id, []); istisnalar.get(x.kullanici_id).push(x); });
+  const istisnaSirali = [...istisnalar.entries()].map(([id, l]) => ({ u: kisiAd(id), id, l })).filter((x) => x.u)
+    .sort((a, b) => trSirala(a.u.ad_soyad, b.u.ad_soyad));
+  wrap.innerHTML = `
+    <section class="kk-bolum"><h3>Sayfalar ve işlemler</h3>
+      <p class="kk-not">Her satır bir profil: kişinin rolü ve ekibinden kendiliğinden belirlenir (ekibi Kesit / Arşiv / Sekreter olanlar rolüne bakılmadan o profildedir). Başlıkların üzerine gelince açıklaması görünür.</p>
+      <div class="kk-kaydir"><table class="kk-tablo yt-tablo">
+        <thead><tr><th rowspan="2" class="yt-profil">Profil</th><th colspan="${YETKI_SAYFALAR.length + 1}" class="yt-grup">Sayfalar</th><th colspan="${YETKI_ISLEMLER.length}" class="yt-grup">İşlemler</th></tr>
+          <tr>${YETKI_SAYFALAR.map(basHucre).join("")}<th title="Kullanıcılar, Test Grupları, Yedekler, Sistem, Yetkiler — yalnız yönetici"><span>Yönetim</span></th>${YETKI_ISLEMLER.map(basHucre).join("")}</tr></thead>
+        <tbody>
+          <tr class="yt-yonetici"><td class="yt-profil"><b>Yönetici</b><small>her zaman tam yetkili</small></td>${kolonlar.slice(0, YETKI_SAYFALAR.length).map(() => `<td><input type="checkbox" checked disabled aria-label="Yönetici — her zaman açık"></td>`).join("")}<td><input type="checkbox" checked disabled aria-label="Yönetim — yalnız yönetici"></td>${YETKI_ISLEMLER.map(() => `<td><input type="checkbox" checked disabled aria-label="Yönetici — her zaman açık"></td>`).join("")}</tr>
+          ${YETKI_PROFILLER.map(([p, l]) => `<tr><td class="yt-profil"><b>${esc(l)}</b><small>${sayi(p)} kişi</small></td>${YETKI_SAYFALAR.map(([k, kl]) => `<td><input type="checkbox" data-yt-rol="${p}|${k}" ${ytVeri.rol.has(p + "|" + k) ? "checked" : ""} aria-label="${esc(l)} — ${esc(kl)}"></td>`).join("")}${kilit}${YETKI_ISLEMLER.map(([k, kl]) => `<td><input type="checkbox" data-yt-rol="${p}|${k}" ${ytVeri.rol.has(p + "|" + k) ? "checked" : ""} aria-label="${esc(l)} — ${esc(kl)}"></td>`).join("")}</tr>`).join("")}
+        </tbody></table></div>
+    </section>
+    <section class="kk-bolum"><h3>Ana sayfa grupları</h3>
+      <p class="kk-not">Her ekibin İş Kuyruğu'ndaki <b>Ekibim</b> görünümünde hangi test grupları yer alsın? Yalnız “Ekibim”i etkiler; grup çipleri ve bildirim tercihleri değişmez.</p>
+      <div class="kk-kaydir"><table class="kk-tablo yt-tablo">
+        <thead><tr><th class="yt-profil">Ekip</th>${gruplar.map(([, ad]) => `<th><span>${esc(ad)}</span></th>`).join("")}</tr></thead>
+        <tbody>${YT_EKIPLER.map((e) => `<tr><td class="yt-profil"><b>${esc(EKIP_AD[e] || e)}</b></td>${gruplar.map(([k, ad]) => `<td><input type="checkbox" data-yt-eg="${e}|${esc(k)}" ${ytVeri.eg.has(e + "|" + k) ? "checked" : ""} aria-label="${esc(EKIP_AD[e] || e)} — ${esc(ad)}"></td>`).join("")}</tr>`).join("")}</tbody>
+      </table></div>
+    </section>
+    <section class="kk-bolum"><h3>Kişi istisnaları <span class="count">${istisnaSirali.length}</span></h3>
+      <p class="kk-not">Profilinden farklı yetkisi olan kişiler. <b>Otomatik</b>: kurulumda kişinin eski hakları korunsun diye eklendi. <b>Elle</b>: yönetici ekledi. Yeni istisna eklemek için <button type="button" class="linkbtn" data-yt-kullanicilar>Kullanıcılar</button> sayfasında kişiyi açın.</p>
+      ${istisnaSirali.length ? `<div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Kişi</th><th>Profil</th><th>Yetki</th><th>İstisna</th><th>Kaynak</th><th>Sebep</th><th></th></tr></thead><tbody>
+        ${istisnaSirali.map(({ u, id, l }) => l.sort((a, b) => trSirala(YETKI_AD[a.yetki] || a.yetki, YETKI_AD[b.yetki] || b.yetki)).map((x, i) => `<tr>${i === 0 ? `<td rowspan="${l.length}"><b>${esc(u.ad_soyad)}</b>${u.is_admin ? ` <span class="kk-yol">yönetici — istisna etkisiz</span>` : ""}${u.aktif === false ? ` <span class="kk-pasif">pasif</span>` : ""}</td><td rowspan="${l.length}">${esc((YETKI_PROFILLER.find(([p]) => p === yetkiProfili(u.rol, u.ekip)) || [])[1] || "")}</td>` : ""}
+          <td>${esc(YETKI_AD[x.yetki] || x.yetki)}</td><td><span class="kk-rozet ${x.izin ? "degis" : "uyari"}">${x.izin ? "Verildi" : "Alındı"}</span></td><td><span class="kk-rozet${x.kaynak === "otomatik" ? " atla" : ""}">${x.kaynak === "otomatik" ? "Otomatik" : "Elle"}</span></td><td class="yt-sebep">${esc(x.sebep || "")}</td>
+          <td><button type="button" class="linkbtn" data-yt-kaldir="${id}|${x.yetki}" title="İstisnayı kaldır — kişi profilindeki kurala döner">Kaldır</button></td></tr>`).join("")).join("")}
+        </tbody></table></div>` : `<p class="kk-not">Kişi istisnası yok — herkes profilindeki yetkilerle çalışıyor.</p>`}
+    </section>`;
+  wrap.scrollTop = konum;
+}
+async function ytDegisti(e) {
+  const t = e.target;
+  if (!ytVeri || t.type !== "checkbox") return;
+  const rol = t.dataset.ytRol, eg = t.dataset.ytEg;
+  if (!rol && !eg) return;
+  const [a, b] = (rol || eg).split("|");
+  t.disabled = true;
+  try {
+    if (rol) { await Api.rolYetkiAyarla(a, b, t.checked); ytVeri.rol[t.checked ? "add" : "delete"](rol); }
+    else { await Api.ekipGrupAyarla(a, b, t.checked); ytVeri.eg[t.checked ? "add" : "delete"](eg); }
+    ytImza = "";
+  } catch (x) {
+    t.checked = !t.checked;
+    toast(x && (x.isForbidden || x.code === "42501") ? "Yetkileri yalnız yönetici değiştirebilir" : "Kaydedilemedi", true);
+  } finally { t.disabled = false; }
+}
+async function ytTiklandi(e) {
+  if (e.target.closest("[data-yt-kullanicilar]")) { navigate("kullanicilar"); return; }
+  const k = e.target.closest("[data-yt-kaldir]"); if (!k) return;
+  const [id, kod] = k.dataset.ytKaldir.split("|");
+  k.disabled = true;
+  try { await Api.kisiYetkiAyarla(id, kod, null); ytImza = ""; await yetkiSayfasiYukle(); }
+  catch (x) { toast("Kaldırılamadı", true); k.disabled = false; }
+}
+
+// Kullanıcılar > kişi formu: yetki istisnaları (Role göre / Ver / Al).
+async function kullaniciYetkiBolumu(u) {
+  const el = $("#kYetki"); if (!el) return;
+  if (!YETKI) { el.innerHTML = ""; return; }
+  let m;
+  try { m = await Api.getYetkiMatrisi(); } catch (e) { el.innerHTML = ""; return; }
+  const el2 = $("#kYetki"); if (!el2 || el2.dataset.id !== u.id) return;
+  const profil = yetkiProfili(u.rol, u.ekip);
+  const rol = new Set(m.rol.filter((x) => x.profil === profil).map((x) => x.yetki));
+  const kisi = new Map(m.kisi.filter((x) => x.kullanici_id === u.id).map((x) => [x.yetki, x]));
+  const satir = ([k, l]) => {
+    const x = kisi.get(k), v = x ? (x.izin ? "1" : "0") : "";
+    return `<label class="ky-satir${x ? " istisna" : ""}" title="${esc(YETKI_IPUCU[k] || "")}"><span>${esc(k === "istem_ver" ? "İstek Ver" : l)}${x && x.kaynak === "otomatik" ? ` <small title="${esc(x.sebep || "")}">otomatik</small>` : ""}</span>
+      <select class="finput" data-ky="${k}"><option value="" ${v === "" ? "selected" : ""}>Role göre (${rol.has(k) ? "var" : "yok"})</option><option value="1" ${v === "1" ? "selected" : ""}>Ver</option><option value="0" ${v === "0" ? "selected" : ""}>Al</option></select></label>`;
+  };
+  el2.innerHTML = `<p class="m-label">Yetki istisnaları <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— profil: ${esc((YETKI_PROFILLER.find(([p]) => p === profil) || [])[1] || profil)}; seçim anında kaydedilir</span></p>
+    ${u.is_admin ? `<div class="kt-not">Yönetici her zaman tam yetkilidir — istisnalar yöneticilik kaldırılırsa geçerli olur.</div>` : ""}
+    <div class="ky-baslik">Sayfalar</div>${YETKI_SAYFALAR.map(satir).join("")}
+    <div class="ky-baslik">İşlemler</div>${YETKI_ISLEMLER.map(satir).join("")}`;
+  el2.onchange = async (e) => {
+    const s = e.target.closest("[data-ky]"); if (!s) return;
+    const deger = s.value === "" ? null : s.value === "1";
+    s.disabled = true;
+    try {
+      await Api.kisiYetkiAyarla(u.id, s.dataset.ky, deger);
+      s.closest(".ky-satir").classList.toggle("istisna", deger !== null);
+      toast(deger === null ? "İstisna kaldırıldı — role göre" : deger ? "Yetki verildi" : "Yetki alındı");
+    } catch (x) { toast("Kaydedilemedi", true); kullaniciYetkiBolumu(u); }
+    finally { s.disabled = false; }
+  };
+}
+
+// ================================================================
+// TEST KATALOĞU — herkese açık liste (Test Kataloğu sayfası yetkisi).
+// Düzenleme, birleştirme ve liste içe aktarma "katalog düzenle" yetkisiyle
+// (RLS / RPC'ler de aynı kuralı uygular). Veri: KATALOG — oturumda bir kez
+// çekilir, değişince yayın kanalından tazelenir (katalogCanli).
+// ================================================================
+const TR_SADE = { "İ": "i", "I": "i", "ı": "i", "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g", "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c" };
+const parantezIcsiz = (s) => String(s || "").replace(/\([^)]*\)/g, " ");
+let ktGrup = "", ktAra = "", ktPasif = false;
+let ktSecili = [];   // birleştirme için seçilen en çok iki test
+const ktDuzenler = () => yetki("katalog_duzenle");
+const ktTest = (id) => KATALOG.find((t) => t.id === id) || null;
+const trSirala = (a, b) => String(a).localeCompare(String(b), "tr", { numeric: true, sensitivity: "base" });
 
 function renderTestKatalogPage() {
-  if (!tkGrup || !GROUPS.some(([k]) => k === tkGrup)) tkGrup = (GROUPS[0] && GROUPS[0][0]) || null;
+  const duz = ktDuzenler();
+  ktSecili = [];
   $("#mainView").innerHTML = `
     <div class="page-head">
       <h1>Test Kataloğu</h1>
-      <div class="sub">Antikor/test kataloğu — gruplar "Test Grupları" sayfasından yönetilir.</div>
+      <div class="sub">Laboratuvarda çalışılan testler — klon, kontrol dokusu ve kullanım bilgisi.</div>
       <div class="spacer"></div>
-      <button class="btn-ghost btn-sm" id="kontrolYukleBtn">Kontrol listesi yükle</button>
-      <button class="btn-ghost btn-sm" id="bulkTestBtn">Toplu Ekle</button>
-      <button class="btn-primary btn-sm" id="newTestBtn">+ Yeni Test</button>
+      ${duz && KATALOG_YENI ? `<button class="btn-ghost btn-sm" id="ktTekrarBtn">Olası tekrarlar</button><button class="btn-ghost btn-sm" id="ktIceBtn">Liste içe aktar</button>` : ""}
+      ${duz ? `<button class="btn-primary btn-sm" id="ktYeniBtn">+ Yeni Test</button>` : ""}
     </div>
-    <div style="padding:14px 26px 6px"><div class="groups" id="tkGroups"></div></div>
-    <div class="devlist" id="tkList"></div>`;
-
-  renderTkGroups();
-  $("#newTestBtn").onclick = () => { if (tkGrup) showTestKatalogForm(tkGrup, null); else toast("Önce bir grup seçin/oluşturun", true); };
-  $("#bulkTestBtn").onclick = () => showTestKatalogBulkForm(tkGrup);
-  $("#kontrolYukleBtn").onclick = renderKontrolYukle;
-  loadTkList();
-}
-
-function renderTkGroups() {
-  const wrap = $("#tkGroups"); if (!wrap) return;
-  wrap.innerHTML = GROUPS.map(([k, l]) => `<button class="${k === tkGrup ? "on" : ""}" data-grup="${k}">${esc(l)}</button>`).join("");
-  wrap.querySelectorAll("button").forEach((b) => {
-    b.onclick = () => { tkGrup = b.dataset.grup; renderTkGroups(); loadTkList(); };
+    ${duz && !KATALOG_YENI ? `<div class="kt-uyari">Açıklama, eş ad, geçmiş, birleştirme ve liste içe aktarma için <b>yetki_katalog_sema.sql</b> çalıştırılmalı.</div>` : ""}
+    <div class="kt-arac">
+      <input class="finput kt-ara" id="ktAra" type="search" autocomplete="off" placeholder="Test, eş ad, klon, kontrol ya da açıklamada ara…" value="${esc(ktAra)}" aria-label="Katalogda ara">
+      <label class="ilsk-anahtar"><input type="checkbox" id="ktPasif" ${ktPasif ? "checked" : ""}> Pasifleri göster</label>
+      <span class="kt-say" id="ktSay"></span>
+    </div>
+    <div class="kt-gruplar"><div class="groups" id="ktGruplar"></div></div>
+    <div class="kt-bir hidden" id="ktBirBar"></div>
+    <div class="kt-liste" id="ktListe"></div>`;
+  $("#ktAra").addEventListener("input", (e) => { ktAra = e.target.value; katalogListeCiz(); });
+  $("#ktPasif").addEventListener("change", (e) => { ktPasif = e.target.checked; katalogListeCiz(); });
+  $("#ktGruplar").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    ktGrup = b.dataset.grup; katalogListeCiz();
   });
-}
-
-async function loadTkList() {
-  if (!tkGrup) { tkList = []; renderTkList(); return; }
-  try {
-    tkList = await Api.getTestKatalogByGrup(tkGrup);
-  } catch (e) {
-    toast("Test kataloğu yüklenemedi", true);
-    tkList = [];
+  $("#ktListe").addEventListener("click", (e) => {
+    const sec = e.target.closest("[data-kt-sec]");
+    if (sec) {
+      const id = sec.dataset.ktSec;
+      if (sec.checked) { ktSecili.push(id); if (ktSecili.length > 2) ktSecili.shift(); }
+      else ktSecili = ktSecili.filter((x) => x !== id);
+      $$("#ktListe [data-kt-sec]").forEach((c) => { c.checked = ktSecili.includes(c.dataset.ktSec); });
+      ktBirBarCiz();
+      return;
+    }
+    if (e.target.closest(".kt-sec")) return;
+    const tr = e.target.closest("tr[data-id]");
+    if (tr) ktDetay(tr.dataset.id);
+  });
+  $("#ktBirBar").addEventListener("click", (e) => {
+    if (e.target.closest("[data-kt-temizle]")) { ktSecili = []; katalogListeCiz(); return; }
+    if (e.target.closest("[data-kt-birlestir]") && ktSecili.length === 2) birlestirPenceresi(ktSecili[0], ktSecili[1]);
+  });
+  if (duz) $("#ktYeniBtn").onclick = () => ktForm(null);
+  if (duz && KATALOG_YENI) {
+    $("#ktTekrarBtn").onclick = renderOlasiTekrarlar;
+    $("#ktIceBtn").onclick = renderIceAktar;
   }
-  if (currentPage !== "test-katalogu") return;
-  renderTkList();
+  katalogListeCiz();
 }
 
-function renderTkList() {
-  const wrap = $("#tkList"); if (!wrap) return;
-  if (!tkList.length) {
-    wrap.innerHTML = `<div class="empty"><div class="t">Bu grupta test yok</div><div class="d">"+ Yeni Test" ile ekleyin.</div></div>`;
+function ktSuzulmus() {
+  const q = aramaNorm(ktAra);
+  return KATALOG.filter((t) => (ktPasif || (t.aktif !== false && !t.birlesti_id))
+    && (!ktGrup || t.grup === ktGrup)
+    && (!q || [t.ad, t.klon, t.kontrol, t.aciklama].concat(t.es_adlar || []).some((x) => x && aramaNorm(x).includes(q))))
+    .sort((a, b) => trSirala(a.ad, b.ad) || trSirala(a.klon || "", b.klon || ""));
+}
+function ktDurumHTML(t) {
+  if (t.birlesti_id) return `<span class="status pasif">Birleştirildi</span>`;
+  return `<span class="status ${t.aktif !== false ? "aktif" : "pasif"}">${t.aktif !== false ? "Aktif" : "Pasif"}</span>`;
+}
+function katalogListeCiz() {
+  const wrap = $("#ktListe"); if (!wrap) return;
+  const duz = ktDuzenler() && KATALOG_YENI;
+  const kodlar = [...new Set(KATALOG.filter((t) => ktPasif || (t.aktif !== false && !t.birlesti_id)).map((t) => t.grup))];
+  const sirali = GROUPS.map(([k]) => k).filter((k) => kodlar.includes(k)).concat(kodlar.filter((k) => !GROUPS.some(([g]) => g === k)));
+  if (ktGrup && !sirali.includes(ktGrup)) ktGrup = "";
+  $("#ktGruplar").innerHTML = `<button type="button" class="${ktGrup ? "" : "on"}" data-grup="">Tümü</button>`
+    + sirali.map((k) => `<button type="button" class="${k === ktGrup ? "on" : ""}" data-grup="${esc(k)}">${esc(TIP[k] || k)}</button>`).join("");
+  ktSecili = ktSecili.filter((id) => { const t = ktTest(id); return t && !t.birlesti_id; });
+  const l = ktSuzulmus();
+  $("#ktSay").textContent = `${l.length} test`;
+  if (!l.length) {
+    wrap.innerHTML = `<div class="empty"><div class="t">${KATALOG.length ? "Aramaya uyan test yok" : "Katalog boş"}</div><div class="d">${ktAra ? "Farklı bir yazımla ya da eş adıyla deneyin." : ""}</div></div>`;
+    ktBirBarCiz();
     return;
   }
-  wrap.innerHTML = tkList.map((t) => `
-    <div class="devrow" data-id="${t.id}">
-      <div><div class="nm">${esc(t.ad)}</div>${t.klon || t.kontrol ? `<div class="tip">${[t.klon ? `Klon ${esc(t.klon)}` : "", t.kontrol ? `<span class="kontrol">K: ${esc(t.kontrol)}</span>` : ""].filter(Boolean).join(" · ")}</div>` : ""}</div>
-      <div class="grow"></div>
-      <span class="status ${t.aktif ? "aktif" : "pasif"}">${t.aktif ? "Aktif" : "Pasif"}</span>
-    </div>`).join("");
-  wrap.querySelectorAll(".devrow").forEach((row) => {
-    row.onclick = () => showTestKatalogForm(tkGrup, tkList.find((t) => t.id === row.dataset.id));
+  wrap.innerHTML = `<table class="kt-tablo"><thead><tr>${duz ? `<th class="kt-sec" title="Birleştirmek için iki test seçin"></th>` : ""}<th>Test</th><th class="kt-g">Grup</th><th>Klon</th><th>Kontrol</th><th>Açıklama</th><th>Durum</th></tr></thead><tbody>`
+    + l.map((t) => `<tr data-id="${t.id}" class="${t.aktif === false || t.birlesti_id ? "pasif" : ""}" tabindex="0">
+        ${duz ? `<td class="kt-sec"><input type="checkbox" data-kt-sec="${t.id}" ${ktSecili.includes(t.id) ? "checked" : ""} ${t.birlesti_id ? "disabled" : ""} aria-label="${esc(t.ad)} — birleştirmek için seç"></td>` : ""}
+        <td class="kt-ad"><b>${esc(t.ad)}</b>${(t.es_adlar || []).length ? `<div class="kt-es">= ${esc(t.es_adlar.join(", "))}</div>` : ""}</td>
+        <td class="kt-g">${esc(TIP[t.grup] || t.grup)}</td>
+        <td class="kt-klon">${esc(t.klon || "")}</td>
+        <td>${esc(t.kontrol || "")}</td>
+        <td class="kt-acik">${esc(t.aciklama || "")}</td>
+        <td>${ktDurumHTML(t)}</td></tr>`).join("")
+    + `</tbody></table>`;
+  ktBirBarCiz();
+}
+function ktBirBarCiz() {
+  const bar = $("#ktBirBar"); if (!bar) return;
+  bar.classList.toggle("hidden", !ktSecili.length);
+  if (!ktSecili.length) return;
+  const adlar = ktSecili.map((id) => (ktTest(id) || {}).ad).filter(Boolean);
+  bar.innerHTML = `<span><b>${adlar.map(esc).join("</b> + <b>")}</b>${ktSecili.length < 2 ? " — birleştirmek için bir test daha seçin" : ""}</span>
+    <span class="grow"></span>
+    <button type="button" class="btn-ghost btn-sm" data-kt-temizle>Seçimi temizle</button>
+    <button type="button" class="btn-primary btn-sm" data-kt-birlestir ${ktSecili.length === 2 ? "" : "disabled"}>Birleştir…</button>`;
+}
+
+// ---- Test bilgisi (herkes) + geçmiş ----
+const KT_ALAN = { eklendi: "Eklendi", ad: "Ad", klon: "Klon", kontrol: "Kontrol", aciklama: "Açıklama", es_adlar: "Eş adlar", aktif: "Durum", grup: "Grup", birlestirme: "Birleştirme" };
+function ktLogDeger(alan, v) {
+  if (v === null || v === undefined || v === "") return "boş";
+  if (alan === "aktif") return v === "true" || v === true ? "Aktif" : "Pasif";
+  if (alan === "grup") return TIP[v] || v;
+  if (alan === "es_adlar") return String(v).replace(/^\{|\}$/g, "").replace(/"/g, "").split(",").filter(Boolean).join(", ") || "boş";
+  return String(v);
+}
+function ktLogSatir(x) {
+  const kim = x.kim ? ` · ${esc(x.kim)}` : "";
+  const zaman = `<span class="kt-gz">${x.created_at ? kisaTarih(x.created_at) : ""}${kim}</span>`;
+  if (x.alan === "eklendi") return `<li><b>Eklendi</b> ${esc(x.yeni || "")}${zaman}</li>`;
+  if (x.alan === "birlestirme") return `<li><b>Birleştirme</b> “${esc(x.eski || "")}” → “${esc(x.yeni || "")}”${zaman}</li>`;
+  return `<li><b>${esc(KT_ALAN[x.alan] || x.alan)}</b> <span class="kt-eski">${esc(ktLogDeger(x.alan, x.eski))}</span> → ${esc(ktLogDeger(x.alan, x.yeni))}${zaman}</li>`;
+}
+async function ktGecmisYukle(id) {
+  const el = $("#ktGecmis"); if (!el) return;
+  if (!KATALOG_YENI) { el.textContent = "Geçmiş kaydı için yetki_katalog_sema.sql çalıştırılmalı."; return; }
+  let l;
+  try { l = await Api.katalogLog(id); } catch (e) { el.textContent = "Geçmiş okunamadı."; return; }
+  const el2 = $("#ktGecmis");
+  if (!el2 || el2.dataset.id !== id) return;
+  el2.innerHTML = (l || []).length ? `<ul>${l.map(ktLogSatir).join("")}</ul>` : "Kayıtlı değişiklik yok.";
+}
+function ktDetay(id) {
+  const t = ktTest(id); if (!t) return;
+  const duz = ktDuzenler();
+  const satir = (b, v) => `<div class="m-sec"><p class="m-label">${b}</p><div class="kt-v${v ? "" : " bos"}">${v ? esc(v) : "—"}</div></div>`;
+  const kalan = t.birlesti_id ? ktTest(t.birlesti_id) : null;
+  $("#rail").innerHTML = `
+    <div class="rail-head"><h2>Test Bilgisi</h2><button class="rx" id="ktKapat" aria-label="Kapat">×</button></div>
+    <div class="rail-body">
+      <div class="m-sec"><div class="kt-baslik">${esc(t.ad)} ${ktDurumHTML(t)}</div><div class="kt-grupad">${esc(TIP[t.grup] || t.grup)}</div>
+        ${t.birlesti_id ? `<div class="kt-not">Bu test “${esc(kalan ? kalan.ad : "başka bir test")}” ile birleştirildi; adı onun eş adıdır.</div>` : ""}</div>
+      ${satir("Açıklama / kullanım", t.aciklama)}
+      ${satir("Klon", t.klon)}
+      ${satir("Kontrol", t.kontrol)}
+      ${satir("Eş adlar", (t.es_adlar || []).join(", "))}
+      <div class="m-sec"><p class="m-label">Geçmiş</p><div class="kt-gecmis" id="ktGecmis" data-id="${t.id}">Yükleniyor…</div></div>
+    </div>
+    <div class="rail-foot">
+      ${duz && !t.birlesti_id
+        ? `<button class="btn-danger" id="ktAktifBtn">${t.aktif !== false ? "Pasife al" : "Aktife al"}</button><button class="btn-primary" id="ktDuzBtn">Düzenle</button>`
+        : `<button class="btn-ghost" id="ktKapat2">Kapat</button>`}
+    </div>`;
+  $("#ktKapat").onclick = showEmpty;
+  if ($("#ktKapat2")) $("#ktKapat2").onclick = showEmpty;
+  if ($("#ktDuzBtn")) $("#ktDuzBtn").onclick = () => ktForm(t);
+  if ($("#ktAktifBtn")) $("#ktAktifBtn").onclick = async () => {
+    const yeni = t.aktif === false;
+    $("#ktAktifBtn").disabled = true;
+    try {
+      if (KATALOG_YENI) await Api.katalogAktif(t.id, yeni); else await Api.setTestKatalogAktif(t.id, yeni);
+      toast(yeni ? "Test aktife alındı" : "Test pasife alındı — yeni istemlerde görünmez, eski kayıtlar korunur");
+      await katalogYukle();
+      katalogListeCiz();
+      ktDetay(t.id);
+    } catch (e) {
+      toast(katalogHata(e, "Güncellenemedi"), true);
+      const b = $("#ktAktifBtn"); if (b) b.disabled = false;
+    }
+  };
+  ktGecmisYukle(t.id);
+}
+
+// ---- Ekle / düzenle (katalog düzenle yetkisi) ----
+function ktForm(existing) {
+  if (!ktDuzenler()) return;
+  const ops = `<span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">`;
+  const grup = existing ? existing.grup : (ktGrup || (GROUPS[0] && GROUPS[0][0]) || "");
+  $("#rail").innerHTML = `
+    <div class="rail-head"><h2>${existing ? "Testi Düzenle" : "Yeni Test"}</h2><button class="rx" id="ktFKapat" aria-label="Kapat">×</button></div>
+    <div class="rail-body">
+      <div class="m-sec"><p class="m-label">Grup</p>${existing
+        ? `<div class="v" style="font-size:13px">${esc(TIP[grup] || grup)}</div>`
+        : `<select class="finput" id="tkGrupSec">${GROUPS.map(([k, l]) => `<option value="${esc(k)}" ${k === grup ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`}</div>
+      <div class="m-sec"><p class="m-label">Ad ${ops}— farklı klon ayrı test ise parantezle: “Ki-67 (MIB-1)”</span></p><input class="finput" id="tkAd" value="${existing ? esc(existing.ad) : ""}" placeholder="ör. ER"></div>
+      <div class="m-sec"><p class="m-label">Klon ${ops}— opsiyonel</span></p><input class="finput" id="tkKlon" value="${existing && existing.klon ? esc(existing.klon) : ""}" placeholder="ör. SP1"></div>
+      <div class="m-sec"><p class="m-label">Kontrol ${ops}— opsiyonel, iş listesinde test adının altında görünür</span></p><input class="finput" id="tkKontrol" maxlength="120" value="${existing && existing.kontrol ? esc(existing.kontrol) : ""}" placeholder="ör. Tonsil"></div>
+      ${KATALOG_YENI ? `
+      <div class="m-sec"><p class="m-label">Açıklama / kullanım ${ops}— opsiyonel; katalogda ve İstek Ver'deki (i) balonunda görünür</span></p><textarea class="finput" id="tkAciklama" rows="3" maxlength="1000" placeholder="ör. Meme karsinomunda hormon reseptörü değerlendirmesi">${existing ? esc(existing.aciklama || "") : ""}</textarea></div>
+      <div class="m-sec"><p class="m-label">Eş adlar ${ops}— her satıra bir ad; aramada ve tekrar kontrolünde kullanılır</span></p><textarea class="finput" id="tkEsAd" rows="3" placeholder="ör. Östrojen reseptörü">${existing ? esc((existing.es_adlar || []).join("\n")) : ""}</textarea></div>` : ""}
+      ${existing ? `<div class="m-sec"><p class="m-label">Sıra ${ops}— İstek Ver'deki varsayılan sıra</span></p><input class="finput" id="tkSira" type="number" value="${existing.sira ?? 0}"></div>` : ""}
+    </div>
+    <div class="rail-foot">
+      <button class="btn-ghost" id="ktFIptal">İptal</button>
+      <button class="btn-primary" id="saveTk">Kaydet</button>
+    </div>`;
+  const kapat = () => (existing ? ktDetay(existing.id) : showEmpty());
+  $("#ktFKapat").onclick = showEmpty;
+  $("#ktFIptal").onclick = kapat;
+  $("#saveTk").onclick = async () => {
+    const ad = $("#tkAd").value.trim().replace(/\s+/g, " ");
+    if (!ad) { toast("Ad girin", true); return; }
+    const g = existing ? existing.grup : $("#tkGrupSec").value;
+    if (!g) { toast("Grup seçin", true); return; }
+    const klon = $("#tkKlon").value.trim();
+    const kontrol = $("#tkKontrol").value.trim().replace(/\s+/g, " ");
+    const sira = existing ? Number($("#tkSira").value) || 0 : undefined;
+    $("#saveTk").disabled = true;
+    try {
+      let id = existing && existing.id;
+      if (KATALOG_YENI) {
+        const es_adlar = $("#tkEsAd").value.split("\n").map((x) => x.trim().replace(/\s+/g, " ")).filter(Boolean);
+        const r = await Api.katalogKaydet({ id, grup: g, ad, klon, kontrol, aciklama: $("#tkAciklama").value.trim(), es_adlar, sira });
+        id = id || (r && r.id);
+      } else if (existing) await Api.updateTestKatalogEntry(existing.id, { ad, klon, kontrol, sira });
+      else await Api.createTestKatalogEntry({ grup: g, ad, klon, kontrol, sira: 0 });
+      toast(existing ? "Test güncellendi" : "Test eklendi");
+      await katalogYukle();
+      if (currentPage !== "test-katalogu") return;
+      katalogListeCiz();
+      if (id && ktTest(id)) ktDetay(id); else showEmpty();
+    } catch (e) {
+      toast(katalogHata(e, "Kaydedilemedi"), true);
+    } finally {
+      const btn = $("#saveTk"); if (btn) btn.disabled = false;
+    }
+  };
+}
+
+// "İsim, Klon" satırlarını ayrıştırır — klon opsiyonel (virgül yoksa boş),
+// boş satırlar yok sayılır. (İstek Ver > toplu seçim)
+function parseBulkLines(text) {
+  return text.split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const idx = line.indexOf(",");
+      const ad = (idx === -1 ? line : line.slice(0, idx)).trim();
+      const klon = idx === -1 ? "" : line.slice(idx + 1).trim();
+      return { ad, klon };
+    })
+    .filter((it) => it.ad);
+}
+
+// ================================================================
+// BİRLEŞTİRME — iki test → biri kalır. Önizleme (kaç istem kalemi / şablon /
+// set taşınacak) ve işlem tek RPC: test_birlestir (tek transaction).
+// ================================================================
+const BIR_TABLO = { istem_kalemleri: "istem kalemi", sablon_kalemleri: "şablon kalemi", istek_seti_kalemleri: "istek seti kalemi", duyurular: "duyuru" };
+function birlestirPenceresi(aId, bId, bitince) {
+  const a = ktTest(aId), b = ktTest(bId);
+  if (!a || !b) return;
+  if (a.grup !== b.grup) { toast("Yalnız aynı gruptaki testler birleştirilebilir", true); return; }
+  let kalan = a.aktif === false && b.aktif !== false ? b.id : a.id;
+  let sira = 0;
+  const ov = document.createElement("div");
+  ov.className = "onay-ov";
+  const etiket = (t) => `<b>${esc(t.ad)}</b>${t.klon ? ` <span class="kk-klon">${esc(t.klon)}</span>` : ""}${t.aktif === false ? ` <span class="kk-pasif">pasif</span>` : ""}`;
+  ov.innerHTML = `<div class="onay-kutu bir-kutu" role="dialog" aria-modal="true" aria-labelledby="birBaslik">
+      <h3 id="birBaslik">Testleri birleştir</h3>
+      <p class="onay-aciklama">Hangi test <b>kalacak</b>? Diğeri pasife alınır, adı kalanın eş adı olur; tüm istem kalemleri, şablonlar ve setler kalan teste taşınır.</p>
+      <div class="bir-sec">${[a, b].map((t) => `<label><input type="radio" name="birKalan" value="${t.id}" ${t.id === kalan ? "checked" : ""}> ${etiket(t)}</label>`).join("")}</div>
+      <div class="bir-onizleme" id="birOnizleme" aria-live="polite">Önizleme hazırlanıyor…</div>
+      <div class="onay-btns"><button type="button" class="btn-ghost" data-bir="0">Vazgeç</button><button type="button" class="btn-primary" data-bir="1" disabled>Birleştir</button></div>
+    </div>`;
+  const kapat = () => { document.removeEventListener("keydown", tus, true); ov.remove(); };
+  const tus = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); kapat(); } };
+  const onizle = async () => {
+    const benim = ++sira;
+    const el = ov.querySelector("#birOnizleme"), btn = ov.querySelector('[data-bir="1"]');
+    btn.disabled = true;
+    el.textContent = "Önizleme hazırlanıyor…";
+    const giden = kalan === a.id ? b.id : a.id;
+    try {
+      const o = await Api.testBirlestir(kalan, giden, true);
+      if (benim !== sira) return;
+      const say = Object.entries(o.sayilar || {}).filter(([, n]) => n > 0).map(([t, n]) => `<li><b>${n}</b> ${esc(BIR_TABLO[t] || t)}</li>`);
+      const dol = Object.entries(o.doldurulacak || {}).map(([k, v]) => `${esc(KT_ALAN[k] || k)}: ${esc(v)}`);
+      el.innerHTML = `<div class="bir-ok">“${esc(o.giden.ad)}” → “${esc(o.kalan.ad)}”</div>
+        ${say.length ? `<p>Kalan teste taşınacak:</p><ul>${say.join("")}</ul>` : `<p>Taşınacak kayıt yok (giden test hiç kullanılmamış).</p>`}
+        ${(o.eklenecek_es_adlar || []).length ? `<p>Eklenecek eş adlar: <b>${esc(o.eklenecek_es_adlar.join(", "))}</b></p>` : ""}
+        ${dol.length ? `<p>Kalanda boş olup gidenden doldurulacak: ${dol.join(" · ")}</p>` : ""}
+        <p class="bir-not">Giden test silinmez; pasife alınır ve “birleştirildi” olarak işaretlenir. İşlem geçmişe yazılır.</p>`;
+      btn.disabled = false;
+    } catch (e) {
+      if (benim !== sira) return;
+      el.innerHTML = `<p class="bir-hata">${esc(katalogHata(e, "Önizleme alınamadı"))}</p>`;
+    }
+  };
+  ov.addEventListener("change", (e) => { if (e.target.name === "birKalan") { kalan = e.target.value; onizle(); } });
+  ov.addEventListener("click", async (e) => {
+    if (e.target === ov) { kapat(); return; }
+    const b2 = e.target.closest("[data-bir]"); if (!b2) return;
+    if (b2.dataset.bir === "0") { kapat(); return; }
+    b2.disabled = true;
+    const giden = kalan === a.id ? b.id : a.id;
+    try {
+      const o = await Api.testBirlestir(kalan, giden, false);
+      kapat();
+      toast(`“${o.giden.ad}”, “${o.kalan.ad}” ile birleştirildi`);
+      ktSecili = [];
+      await katalogYukle();
+      if (bitince) bitince(); else if (currentPage === "test-katalogu") { katalogListeCiz(); showEmpty(); }
+    } catch (x) {
+      toast(katalogHata(x, "Birleştirilemedi"), true);
+      b2.disabled = false;
+    }
   });
+  document.addEventListener("keydown", tus, true);
+  document.body.appendChild(ov);
+  onizle();
+}
+
+// ---- Olası tekrarlar: aynı gruptaki benzer adlar (istemci tarafında) ----
+function tekFark(a, b) { // düzenleme uzaklığı ≤ 1 mi
+  if (a === b) return true;
+  const la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0;
+  while (i < la && i < lb && a[i] === b[i]) i++;
+  if (la === lb) return a.slice(i + 1) === b.slice(i + 1);
+  return la > lb ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+}
+const rakamlar = (s) => s.replace(/\D+/g, " ").trim();
+// İki ad benzer mi? Dönüş: neden metni ya da null. Rakamı farklı olanlar
+// (CD10 / CD20, Bcl-2 / Bcl-6) benzer sayılmaz.
+function adBenzerligi(ad1, ad2) {
+  const k1 = testAnahtar(ad1), k2 = testAnahtar(ad2);
+  if (!k1 || !k2) return null;
+  if (k1 === k2) return "aynı ad";
+  const p1 = testAnahtar(parantezIcsiz(ad1)), p2 = testAnahtar(parantezIcsiz(ad2));
+  if (p1 && p1 === p2) return "parantez dışında aynı";
+  if (Math.min(k1.length, k2.length) >= 5 && rakamlar(k1) === rakamlar(k2) && tekFark(k1, k2)) return "benzer yazım";
+  return null;
+}
+function testBenzerligi(a, b) {
+  const adlarA = [a.ad].concat(a.es_adlar || []), adlarB = [b.ad].concat(b.es_adlar || []);
+  let zayif = null;
+  for (const x of adlarA) for (const y of adlarB) {
+    const n = adBenzerligi(x, y);
+    if (n === "aynı ad") return x === a.ad && y === b.ad ? "aynı ad" : "eş adla aynı";
+    if (n && !zayif) zayif = n;
+  }
+  return zayif;
+}
+const yoksayKey = "istem_tekrar_yoksay";
+function yoksayOku() { try { return new Set(JSON.parse(localStorage.getItem(yoksayKey) || "[]")); } catch (e) { return new Set(); } }
+function olasiTekrarlar() {
+  const yoksay = yoksayOku();
+  const l = KATALOG.filter((t) => !t.birlesti_id);
+  const cift = [];
+  const grup = new Map();
+  l.forEach((t) => { if (!grup.has(t.grup)) grup.set(t.grup, []); grup.get(t.grup).push(t); });
+  grup.forEach((ts) => {
+    for (let i = 0; i < ts.length; i++) for (let j = i + 1; j < ts.length; j++) {
+      const neden = testBenzerligi(ts[i], ts[j]);
+      if (!neden) continue;
+      const anahtar = [ts[i].id, ts[j].id].sort().join("|");
+      if (yoksay.has(anahtar)) continue;
+      cift.push({ a: ts[i], b: ts[j], neden, anahtar });
+    }
+  });
+  const oncelik = { "aynı ad": 0, "eş adla aynı": 1, "parantez dışında aynı": 2, "benzer yazım": 3 };
+  return cift.sort((x, y) => oncelik[x.neden] - oncelik[y.neden] || trSirala(x.a.ad, y.a.ad));
+}
+function renderOlasiTekrarlar() {
+  if (!ktDuzenler()) return;
+  showEmpty();
+  const l = olasiTekrarlar();
+  const hucre = (t) => `<b>${esc(t.ad)}</b>${t.klon ? ` <span class="kk-klon">${esc(t.klon)}</span>` : ""}${t.aktif === false ? ` <span class="kk-pasif">pasif</span>` : ""}${(t.es_adlar || []).length ? `<div class="kt-es">= ${esc(t.es_adlar.join(", "))}</div>` : ""}`;
+  $("#mainView").innerHTML = `
+    <div class="page-head">
+      <button class="btn-ghost btn-sm" id="otGeri">← Test Kataloğu</button>
+      <h1>Olası tekrarlar</h1>
+      <div class="spacer"></div>
+    </div>
+    <div class="kk-wrap">
+      <p class="kk-acik">Aynı grupta adı aynı ya da çok benzer olan testler. Aynı test iseler <b>Birleştir</b> ile tek kayda indirin (istem kalemleri, şablonlar ve setler taşınır). Gerçekten farklı testlerse (ör. farklı klon) <b>Farklı</b> deyin; bu tarayıcıda bir daha sorulmaz.</p>
+      ${l.length ? `<div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Grup</th><th>Test</th><th>Test</th><th>Neden</th><th></th></tr></thead><tbody>
+        ${l.map((c) => `<tr data-cift="${c.anahtar}"><td>${esc(TIP[c.a.grup] || c.a.grup)}</td><td>${hucre(c.a)}</td><td>${hucre(c.b)}</td><td><span class="kk-rozet${c.neden === "benzer yazım" || c.neden === "parantez dışında aynı" ? "" : " uyari"}">${c.neden}</span></td>
+          <td class="ot-aks"><button type="button" class="btn-ghost btn-sm" data-ot-farkli>Farklı</button><button type="button" class="btn-primary btn-sm" data-ot-bir>Birleştir…</button></td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty"><div class="t">Olası tekrar bulunamadı</div><div class="d">Katalogda adı çakışan ya da çok benzeyen test yok.</div></div>`}
+    </div>`;
+  $("#otGeri").onclick = renderTestKatalogPage;
+  $("#mainView").querySelector(".kk-wrap").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-cift]"); if (!tr) return;
+    const c = l.find((x) => x.anahtar === tr.dataset.cift); if (!c) return;
+    if (e.target.closest("[data-ot-farkli]")) {
+      const s = yoksayOku(); s.add(c.anahtar);
+      try { localStorage.setItem(yoksayKey, JSON.stringify([...s])); } catch (x) { /* yalnız bu oturum */ }
+      tr.remove();
+    } else if (e.target.closest("[data-ot-bir]")) {
+      birlestirPenceresi(c.a.id, c.b.id, () => { if (currentPage === "test-katalogu") renderOlasiTekrarlar(); });
+    }
+  });
+}
+
+// ================================================================
+// LİSTE İÇE AKTAR — Excel / CSV dosyası ya da yapıştırılan metin.
+// Sütunlar: ad (zorunlu), grup, klon, kontrol, açıklama. Önizlemede dört
+// grup: eşleşen (fark) · yeni · olası tekrar / eş ad (aynı mı farklı mı
+// kullanıcı seçer) · katalogda olup listede olmayan (yalnız bilgi).
+// Onaylanınca tek işlem: katalog_ice_aktar. (Eski "Toplu Ekle" ve
+// "Kontrol listesi yükle" bunun içindedir.)
+// ================================================================
+const IA_ALANLAR = [["ad", "Ad"], ["grup", "Grup"], ["klon", "Klon"], ["kontrol", "Kontrol"], ["aciklama", "Açıklama"], ["", "Yoksay"]];
+let iaMetin = "", iaTablo = [], iaBaslikVar = false, iaEsleme = [], iaGrup = "", iaDuyuru = false;
+let iaSatirlar = [], iaYok = [];
+
+function renderIceAktar() {
+  if (!ktDuzenler()) return;
+  showEmpty();
+  if (!iaGrup || !GROUPS.some(([k]) => k === iaGrup)) iaGrup = ktGrup || (Object.values(GRUP_BILGI).find((g) => g.ekip === "immun") || {}).kod || (GROUPS[0] && GROUPS[0][0]) || "";
+  $("#mainView").innerHTML = `
+    <div class="page-head">
+      <button class="btn-ghost btn-sm" id="iaGeri">← Test Kataloğu</button>
+      <h1>Liste içe aktar</h1>
+      <div class="spacer"></div>
+    </div>
+    <div class="kk-wrap" id="iaWrap"></div>`;
+  $("#iaGeri").onclick = renderTestKatalogPage;
+  iaGirisGoster();
+}
+function iaGirisGoster() {
+  $("#iaWrap").innerHTML = `
+    <p class="kk-acik">Bir Excel / CSV dosyası seçin ya da Excel'den kopyaladığınız satırları yapıştırın. Sütunlar: <b>ad</b> (zorunlu), grup, klon, kontrol, açıklama — başlık satırı varsa sütunlar kendiliğinden eşlenir, yoksa önizlemede siz seçersiniz. Kontrolü <b>X</b> olanlar boş sayılır. Hiçbir şey önizlemeyi onaylamadan kaydedilmez; listedeki boş hücreler katalogdaki değeri silmez.</p>
+    <div class="ia-ust">
+      <label class="ia-alan">Grup yazılmamış satırlar için grup
+        <select class="finput" id="iaGrupSec">${GROUPS.map(([k, l]) => `<option value="${esc(k)}" ${k === iaGrup ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <label class="ia-alan">Dosya (.xlsx, .xls, .csv)
+        <input class="finput" type="file" id="iaDosya" accept=".xlsx,.xls,.csv,.tsv,.txt"></label>
+    </div>
+    <textarea id="iaMetin" class="kk-metin" spellcheck="false" placeholder="Ad&#9;Grup&#9;Klon&#9;Kontrol&#9;Açıklama&#10;Bcl-2&#9;İHK&#9;124&#9;Tonsil&#9;Foliküler lenfoma ayırıcı tanısı&#10;CD20&#9;&#9;L26&#9;Tonsil&#9;">${esc(iaMetin)}</textarea>
+    <div class="kk-aks"><button class="btn-primary" id="iaOnizle">Önizle</button></div>`;
+  $("#iaGrupSec").onchange = (e) => { iaGrup = e.target.value; };
+  $("#iaDosya").onchange = async (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    try {
+      if (/\.(xlsx|xls)$/i.test(f.name)) {
+        if (!window.XLSX) throw new Error("xlsx");
+        const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const m = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+        iaBasla(m.map((r) => r.map((c) => String(c ?? ""))));
+      } else {
+        iaMetin = await f.text();
+        iaBasla(iaMetniBol(iaMetin));
+      }
+    } catch (x) {
+      toast("Dosya okunamadı — satırları kopyalayıp yapıştırmayı deneyin", true);
+    }
+  };
+  $("#iaOnizle").onclick = () => { iaMetin = $("#iaMetin").value; iaBasla(iaMetniBol(iaMetin)); };
+}
+// Yapıştırılan metin → hücre tablosu. Ayraç: TAB; yoksa ";" ; o da yoksa ",".
+function iaMetniBol(metin) {
+  const satirlar = String(metin || "").replace(/\r/g, "").split("\n").filter((l) => l.trim());
+  if (!satirlar.length) return [];
+  const ayrac = satirlar.some((l) => l.includes("\t")) ? "\t" : satirlar.some((l) => l.includes(";")) ? ";" : ",";
+  return satirlar.map((l) => l.split(ayrac).map((c) => c.trim().replace(/^"(.*)"$/, "$1")));
+}
+function iaBaslikAlani(h) {
+  const k = aramaNorm(h);
+  if (!k) return null;
+  if (/grup|group|kategori/.test(k)) return "grup";
+  if (/klon|clone/.test(k)) return "klon";
+  if (/kontrol|control/.test(k)) return "kontrol";
+  if (/aciklama|kullanim|not|description/.test(k)) return "aciklama";
+  if (/^(ad|adi|isim|test|testadi|antikor|antikoradi|name|boya)$/.test(k) || /antikor|testad/.test(k)) return "ad";
+  return null;
+}
+function iaBasla(tablo) {
+  iaTablo = (tablo || []).map((r) => r.map((c) => String(c || "").trim().replace(/\s+/g, " "))).filter((r) => r.some(Boolean));
+  if (!iaTablo.length) { toast("Listede satır yok", true); return; }
+  const genislik = Math.max(...iaTablo.map((r) => r.length));
+  const bas = iaTablo[0].map(iaBaslikAlani);
+  iaBaslikVar = bas.includes("ad") || bas.filter(Boolean).length >= 2;
+  const varsayilan = ["ad", "grup", "klon", "kontrol", "aciklama"];
+  iaEsleme = [];
+  for (let i = 0; i < genislik; i++) {
+    const a = iaBaslikVar ? bas[i] || "" : varsayilan[i] || "";
+    iaEsleme.push(a && !iaEsleme.includes(a) ? a : "");
+  }
+  if (iaBaslikVar && !iaEsleme.includes("ad")) iaEsleme[0] = "ad";
+  iaSinifla();
+  renderIaOnizleme();
+}
+function iaGrupCoz(v) {
+  if (!v) return iaGrup;
+  const k = aramaNorm(v);
+  const g = Object.values(GRUP_BILGI).find((x) => aramaNorm(x.kod) === k || aramaNorm(x.ad) === k)
+    || GROUPS.map(([kod, ad]) => ({ kod, ad })).find((x) => aramaNorm(x.kod) === k || aramaNorm(x.ad) === k);
+  return g ? g.kod : null;
+}
+// Satırları katalogla karşılaştırır. Önceki kullanıcı seçimleri (karar /
+// aday / dahil) aynı satır + aynı adda korunur.
+function iaSinifla() {
+  const onceki = new Map(iaSatirlar.map((s) => [s.no + "|" + s.ad, s]));
+  const kol = (alan) => iaEsleme.indexOf(alan);
+  const cAd = kol("ad"), cGrup = kol("grup"), cKlon = kol("klon"), cKontrol = kol("kontrol"), cAcik = kol("aciklama");
+  const havuz = KATALOG.filter((t) => !t.birlesti_id);
+  const grupTestleri = new Map();
+  havuz.forEach((t) => { if (!grupTestleri.has(t.grup)) grupTestleri.set(t.grup, []); grupTestleri.get(t.grup).push(t); });
+  const gorulen = new Set(), eslesenler = new Set(), gruplar = new Set();
+  iaSatirlar = iaTablo.slice(iaBaslikVar ? 1 : 0).map((r, i) => {
+    const al = (c) => (c >= 0 ? r[c] || "" : "");
+    const s = { no: i + (iaBaslikVar ? 2 : 1), ad: al(cAd), klon: al(cKlon), kontrol: al(cKontrol), aciklama: al(cAcik), tur: "", hata: "", adaylar: [], aday: "", karar: "", dahil: true, farklar: [] };
+    if (/^x$/i.test(s.kontrol)) s.kontrol = "";
+    if (!s.ad) { s.tur = "hata"; s.hata = "ad boş"; return s; }
+    s.grup = iaGrupCoz(al(cGrup));
+    if (!s.grup) { s.tur = "hata"; s.hata = `grup tanınmadı: “${al(cGrup)}”`; return s; }
+    gruplar.add(s.grup);
+    const a = testAnahtar(s.ad);
+    if (!a) { s.tur = "hata"; s.hata = "ad geçersiz"; return s; }
+    if (gorulen.has(s.grup + "|" + a)) { s.tur = "hata"; s.hata = "listede tekrar ediyor"; return s; }
+    gorulen.add(s.grup + "|" + a);
+    const ts = grupTestleri.get(s.grup) || [];
+    let tam = ts.filter((t) => testAnahtar(t.ad) === a || (t.es_adlar || []).some((x) => testAnahtar(x) === a));
+    if (tam.length > 1 && tam.some((t) => t.aktif !== false)) tam = tam.filter((t) => t.aktif !== false);
+    const es = onceki.get(s.no + "|" + s.ad);
+    if (tam.length) {
+      const t = tam[0];
+      s.tur = "eslesen"; s.test = t; eslesenler.add(t.id);
+      [["klon", cKlon], ["kontrol", cKontrol], ["aciklama", cAcik]].forEach(([alan, c]) => {
+        if (c >= 0 && s[alan] && s[alan] !== (t[alan] || "")) s.farklar.push(alan);
+      });
+      if (es && es.tur === "eslesen") s.dahil = es.dahil;
+      return s;
+    }
+    s.adaylar = ts.map((t) => ({ t, neden: testBenzerligi({ ad: s.ad, es_adlar: [] }, t) })).filter((x) => x.neden);
+    if (s.adaylar.length) {
+      s.tur = "olasi"; s.aday = s.adaylar[0].t.id;
+      if (es && es.tur === "olasi") { s.karar = es.karar; if (s.adaylar.some((x) => x.t.id === es.aday)) s.aday = es.aday; }
+      return s;
+    }
+    s.tur = "yeni";
+    if (es && es.tur === "yeni") s.dahil = es.dahil;
+    return s;
+  });
+  iaSatirlar.forEach((s) => { if (s.tur === "olasi" && s.karar === "ayni") eslesenler.add(s.aday); });
+  iaYok = havuz.filter((t) => t.aktif !== false && gruplar.has(t.grup) && !eslesenler.has(t.id)).sort((x, y) => trSirala(x.ad, y.ad));
+}
+function iaIslemler() {
+  const ops = [];
+  iaSatirlar.forEach((s) => {
+    if (s.tur === "eslesen" && s.dahil && s.farklar.length) {
+      const o = { islem: "guncelle", id: s.test.id };
+      s.farklar.forEach((a) => { o[a] = s[a]; });
+      ops.push(o);
+    } else if ((s.tur === "yeni" && s.dahil) || (s.tur === "olasi" && s.karar === "farkli")) {
+      ops.push({ islem: "ekle", grup: s.grup, ad: s.ad, klon: s.klon, kontrol: s.kontrol, aciklama: s.aciklama });
+    } else if (s.tur === "olasi" && s.karar === "ayni") {
+      ops.push({ islem: "es_ad", id: s.aday, es_ad: s.ad });
+    }
+  });
+  return ops;
+}
+function renderIaOnizleme() {
+  const wrap = $("#iaWrap"); if (!wrap) return;
+  const konum = wrap.scrollTop;
+  const tur = (t) => iaSatirlar.filter((s) => s.tur === t);
+  const eslesen = tur("eslesen"), degisen = eslesen.filter((s) => s.farklar.length), yeni = tur("yeni"), olasi = tur("olasi"), hata = tur("hata");
+  const kararsiz = olasi.filter((s) => !s.karar).length;
+  const ops = iaIslemler();
+  const say = { ekle: ops.filter((o) => o.islem === "ekle").length, guncelle: ops.filter((o) => o.islem === "guncelle").length, es: ops.filter((o) => o.islem === "es_ad").length };
+  const ornek = iaTablo.slice(iaBaslikVar ? 1 : 0, (iaBaslikVar ? 1 : 0) + 3);
+  const kontrolHucre = (v) => (v ? esc(v) : `<span class="kk-bos">boş</span>`);
+  const testEtiket = (t) => `<b>${esc(t.ad)}</b>${t.klon ? ` <span class="kk-klon">${esc(t.klon)}</span>` : ""}${t.aktif === false ? ` <span class="kk-pasif">pasif</span>` : ""}`;
+  const grupAd = (g) => esc(TIP[g] || g);
+  wrap.innerHTML = `
+    <div class="kk-bar">
+      <div class="kk-ozet">
+        <span><b>${iaSatirlar.length}</b> satır</span>
+        <span class="${say.ekle ? "degis" : ""}"><b>${say.ekle}</b> eklenecek</span>
+        <span class="${say.guncelle ? "degis" : ""}"><b>${say.guncelle}</b> güncellenecek</span>
+        <span class="${say.es ? "degis" : ""}"><b>${say.es}</b> eş ad</span>
+        ${kararsiz ? `<span class="uyari"><b>${kararsiz}</b> karar bekliyor</span>` : ""}
+        ${hata.length ? `<span class="uyari"><b>${hata.length}</b> atlanacak</span>` : ""}
+      </div>
+      <div class="kk-bar-aks">
+        <label class="ilsk-anahtar" title="Açıkken eklenen yeni testler için tek bir özet duyuru yayınlanır ve bildirim gider. İlk büyük yüklemede kapalı bırakın."><input type="checkbox" id="iaDuyuru" ${iaDuyuru ? "checked" : ""}> Duyuru oluştur</label>
+        <button class="btn-ghost" id="iaIptal">Geri</button>
+        <button class="btn-primary" id="iaUygula" ${ops.length ? "" : "disabled"}>Uygula (${ops.length})</button>
+      </div>
+    </div>
+    <details class="kk-bolum ia-esleme" ${iaEsleme.includes("ad") ? "" : "open"}><summary>Sütun eşlemesi</summary>
+      <label class="ilsk-anahtar"><input type="checkbox" id="iaBaslik" ${iaBaslikVar ? "checked" : ""}> İlk satır başlık</label>
+      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr>${iaEsleme.map((a, i) => `<th><select class="kk-sec ia-kol" data-ia-kol="${i}">${IA_ALANLAR.map(([k, l]) => `<option value="${k}" ${k === a ? "selected" : ""}>${l}</option>`).join("")}</select></th>`).join("")}</tr></thead>
+        <tbody>${ornek.map((r) => `<tr>${iaEsleme.map((_, i) => `<td>${esc(r[i] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+    </details>
+    ${olasi.length ? `<section class="kk-bolum"><h3>Olası tekrar / eş ad <span class="count">${olasi.length}</span></h3>
+      <p class="kk-not">Listedeki ad katalogdaki bir teste çok benziyor. <b>Aynı</b> derseniz ad o testin eş adı olarak eklenir; <b>Farklı</b> derseniz yeni test olarak eklenir. Seçilmeyenler atlanır.</p>
+      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th class="kk-no">#</th><th>Listedeki ad</th><th>Grup</th><th>Katalogdaki test</th><th>Karar</th></tr></thead><tbody>
+      ${olasi.map((s) => `<tr data-ia-no="${s.no}"><td class="kk-no">${s.no}</td><td><b>${esc(s.ad)}</b>${s.klon ? ` <span class="kk-klon">${esc(s.klon)}</span>` : ""}</td><td>${grupAd(s.grup)}</td>
+        <td>${s.adaylar.length > 1
+          ? `<select class="kk-sec" data-ia-aday>${s.adaylar.map((x) => `<option value="${x.t.id}" ${x.t.id === s.aday ? "selected" : ""}>${esc(x.t.ad)}${x.t.klon ? ` (${esc(x.t.klon)})` : ""} — ${x.neden}</option>`).join("")}</select>`
+          : `${testEtiket(s.adaylar[0].t)} <span class="kk-yol">${s.adaylar[0].neden}</span>`}</td>
+        <td class="ia-karar"><label><input type="radio" name="iaK${s.no}" value="ayni" ${s.karar === "ayni" ? "checked" : ""}> Aynı (eş ad)</label><label><input type="radio" name="iaK${s.no}" value="farkli" ${s.karar === "farkli" ? "checked" : ""}> Farklı (yeni test)</label><label><input type="radio" name="iaK${s.no}" value="" ${s.karar ? "" : "checked"}> Atla</label></td></tr>`).join("")}
+      </tbody></table></div></section>` : ""}
+    ${yeni.length ? `<section class="kk-bolum"><h3>Yeni eklenecek <span class="count">${yeni.length}</span></h3>
+      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th class="kk-no"><input type="checkbox" data-ia-hepsi="yeni" ${yeni.every((s) => s.dahil) ? "checked" : ""} aria-label="Tümünü seç"></th><th>Ad</th><th>Grup</th><th>Klon</th><th>Kontrol</th><th>Açıklama</th></tr></thead><tbody>
+      ${yeni.map((s) => `<tr data-ia-no="${s.no}"><td class="kk-no"><input type="checkbox" data-ia-dahil ${s.dahil ? "checked" : ""} aria-label="Ekle"></td><td><b>${esc(s.ad)}</b></td><td>${grupAd(s.grup)}</td><td class="kk-klon">${esc(s.klon)}</td><td>${esc(s.kontrol)}</td><td>${esc(s.aciklama)}</td></tr>`).join("")}
+      </tbody></table></div></section>` : ""}
+    ${eslesen.length ? `<section class="kk-bolum"><h3>Eşleşen <span class="count">${eslesen.length}</span></h3>
+      <p class="kk-not">${degisen.length ? `${degisen.length} testte fark var — işaretli olanlar listedeki değerle güncellenir.` : ""} ${eslesen.length - degisen.length ? `${eslesen.length - degisen.length} test katalogla aynı (değişiklik yok).` : ""}</p>
+      ${degisen.length ? `<div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th class="kk-no"><input type="checkbox" data-ia-hepsi="eslesen" ${degisen.every((s) => s.dahil) ? "checked" : ""} aria-label="Tümünü seç"></th><th>Test</th><th>Grup</th><th>Alan</th><th>Katalogda</th><th>Listede</th></tr></thead><tbody>
+      ${degisen.map((s) => s.farklar.map((a, i) => `<tr data-ia-no="${s.no}">${i === 0 ? `<td class="kk-no" rowspan="${s.farklar.length}"><input type="checkbox" data-ia-dahil ${s.dahil ? "checked" : ""} aria-label="Güncelle"></td><td rowspan="${s.farklar.length}">${testEtiket(s.test)}${testAnahtar(s.test.ad) !== testAnahtar(s.ad) ? ` <span class="kk-yol">eş ad: ${esc(s.ad)}</span>` : ""}</td><td rowspan="${s.farklar.length}">${grupAd(s.grup)}</td>` : ""}<td>${KT_ALAN[a]}</td><td class="kk-eski">${kontrolHucre(s.test[a])}</td><td><span class="kk-rozet degis">${esc(s[a])}</span></td></tr>`).join("")).join("")}
+      </tbody></table></div>` : ""}</section>` : ""}
+    ${hata.length ? `<section class="kk-bolum"><h3>Atlanacak satırlar <span class="count">${hata.length}</span></h3>
+      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th class="kk-no">#</th><th>Ad</th><th>Neden</th></tr></thead><tbody>
+      ${hata.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad) || `<span class="kk-bos">boş</span>`}</td><td><span class="kk-rozet uyari">${esc(s.hata)}</span></td></tr>`).join("")}
+      </tbody></table></div></section>` : ""}
+    ${iaYok.length ? `<details class="kk-bolum"><summary>Katalogda olup listede olmayan <span class="count">${iaYok.length}</span></summary>
+      <p class="kk-not">Yalnız bilgi — bu testlere dokunulmaz.</p>
+      <div class="ia-yok">${iaYok.map((t) => `<span>${esc(t.ad)}${t.klon ? ` <i>${esc(t.klon)}</i>` : ""} <small>${grupAd(t.grup)}</small></span>`).join("")}</div></details>` : ""}`;
+  wrap.scrollTop = konum;
+  const satirOf = (el) => { const tr = el.closest("[data-ia-no]"); return tr ? iaSatirlar.find((s) => String(s.no) === tr.dataset.iaNo) : null; };
+  wrap.onchange = (e) => {
+    const t = e.target;
+    if (t.id === "iaDuyuru") { iaDuyuru = t.checked; return; }
+    if (t.id === "iaBaslik") { iaBaslikVar = t.checked; iaSinifla(); renderIaOnizleme(); return; }
+    if (t.matches("[data-ia-kol]")) {
+      const i = Number(t.dataset.iaKol);
+      if (t.value) iaEsleme = iaEsleme.map((a) => (a === t.value ? "" : a));
+      iaEsleme[i] = t.value;
+      iaSinifla(); renderIaOnizleme(); return;
+    }
+    if (t.matches("[data-ia-hepsi]")) { iaSatirlar.forEach((s) => { if (s.tur === t.dataset.iaHepsi) s.dahil = t.checked; }); renderIaOnizleme(); return; }
+    const s = satirOf(t); if (!s) return;
+    if (t.matches("[data-ia-dahil]")) s.dahil = t.checked;
+    else if (t.matches("[data-ia-aday]")) s.aday = t.value;
+    else if (t.type === "radio") s.karar = t.value;
+    if (t.type === "radio" || t.matches("[data-ia-aday]")) iaSinifla();
+    renderIaOnizleme();
+  };
+  $("#iaIptal").onclick = iaGirisGoster;
+  $("#iaUygula").onclick = async () => {
+    const islemler = iaIslemler();
+    if (!islemler.length) return;
+    if (!iaEsleme.includes("ad")) { toast("Ad sütununu seçin", true); return; }
+    const kalan = iaSatirlar.filter((s) => s.tur === "olasi" && !s.karar).length;
+    if (!(await onayPenceresi({
+      baslik: "Liste kataloğa uygulansın mı?",
+      aciklama: (kalan ? `${kalan} olası tekrar için karar verilmedi — bunlar atlanacak. ` : "") + (iaDuyuru && say.ekle ? "Yeni testler için duyuru yayınlanacak ve bildirim gidecek." : "Duyuru oluşturulmayacak."),
+      liste: [`${say.ekle} yeni test`, `${say.guncelle} test güncellenecek`, `${say.es} eş ad eklenecek`], tekSutun: true, onayMetni: "Uygula",
+    }))) return;
+    const btn = $("#iaUygula"); if (btn) btn.disabled = true;
+    try {
+      const r = await Api.katalogIceAktar(islemler, iaDuyuru && say.ekle > 0);
+      toast(`${r.eklenen || 0} test eklendi, ${r.guncellenen || 0} güncellendi, ${r.es_ad || 0} eş ad eklendi`);
+      iaMetin = ""; iaTablo = []; iaSatirlar = []; iaYok = []; iaDuyuru = false;
+      await katalogYukle();
+      if (currentPage === "test-katalogu") renderTestKatalogPage();
+    } catch (e) {
+      toast(katalogHata(e, "İçe aktarılamadı"), true);
+      const b = $("#iaUygula"); if (b) b.disabled = false;
+    }
+  };
 }
 
 // ================================================================
@@ -6816,421 +7789,6 @@ function showTestGrubuForm(existing) {
       toast(existing ? "Kaydedilemedi" : "Oluşturulamadı (kod zaten var olabilir)", true);
     } finally {
       const btn = $("#saveGrup"); if (btn) btn.disabled = false;
-    }
-  };
-}
-
-function showTestKatalogForm(grup, existing) {
-  const rail = $("#rail");
-  rail.innerHTML = `
-    <div class="rail-head"><h2>${existing ? "Testi Düzenle" : "Yeni Test"}</h2><button class="rx" id="closeTk">×</button></div>
-    <div class="rail-body">
-      <div class="m-sec"><p class="m-label">Grup</p><div class="v" style="font-size:13px">${esc(TIP[grup] || grup)}</div></div>
-      <div class="m-sec"><p class="m-label">Ad</p><input class="finput" id="tkAd" value="${existing ? esc(existing.ad) : ""}" placeholder="ör. ER"></div>
-      <div class="m-sec"><p class="m-label">Klon <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— opsiyonel</span></p><input class="finput" id="tkKlon" value="${existing && existing.klon ? esc(existing.klon) : ""}" placeholder="ör. SP1"></div>
-      <div class="m-sec"><p class="m-label">Kontrol <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— opsiyonel, iş listesinde test adının altında görünür</span></p><input class="finput" id="tkKontrol" maxlength="200" value="${existing && existing.kontrol ? esc(existing.kontrol) : ""}" placeholder="ör. Tonsil"></div>
-      <div class="m-sec"><p class="m-label">Sıra</p><input class="finput" id="tkSira" type="number" value="${existing ? existing.sira : 0}"></div>
-    </div>
-    <div class="rail-foot">
-      ${existing ? `<button class="btn-ghost" id="delTk">Sil</button><button class="btn-danger" id="toggleTkAktif">${existing.aktif ? "Pasifleştir" : "Aktifleştir"}</button>` : `<button class="btn-ghost" id="cancelTk">İptal</button>`}
-      <button class="btn-primary" id="saveTk">Kaydet</button>
-    </div>`;
-
-  $("#closeTk").onclick = showEmpty;
-  if (existing) {
-    $("#toggleTkAktif").onclick = async () => {
-      try {
-        await Api.setTestKatalogAktif(existing.id, !existing.aktif);
-        toast(existing.aktif ? "Pasifleştirildi" : "Aktifleştirildi");
-        CAT = await Api.getTestKatalog();
-        await loadTkList();
-        showEmpty();
-      } catch (e) { toast("Güncellenemedi", true); }
-    };
-    $("#delTk").onclick = () => confirmAndDelete(existing.ad, () => Api.deleteTestKatalogEntry(existing.id), async () => {
-      toast("Test silindi");
-      CAT = await Api.getTestKatalog();
-      await loadTkList();
-      showEmpty();
-    });
-  } else {
-    $("#cancelTk").onclick = showEmpty;
-  }
-
-  $("#saveTk").onclick = async () => {
-    const ad = $("#tkAd").value.trim();
-    if (!ad) { toast("Ad girin", true); return; }
-    const klon = $("#tkKlon").value.trim();
-    const kontrol = $("#tkKontrol").value.trim().replace(/\s+/g, " ");
-    const sira = Number($("#tkSira").value) || 0;
-    $("#saveTk").disabled = true;
-    try {
-      if (existing) await Api.updateTestKatalogEntry(existing.id, { ad, klon, kontrol, sira });
-      else await Api.createTestKatalogEntry({ grup, ad, klon, kontrol, sira });
-      toast(existing ? "Test güncellendi" : "Test eklendi");
-      CAT = await Api.getTestKatalog();
-      await loadTkList();
-      showEmpty();
-    } catch (e) {
-      toast("Kaydedilemedi", true);
-    } finally {
-      const btn = $("#saveTk"); if (btn) btn.disabled = false;
-    }
-  };
-}
-
-// "İsim, Klon" satırlarını ayrıştırır — klon opsiyonel (virgül yoksa boş),
-// boş satırlar yok sayılır.
-function parseBulkLines(text) {
-  return text.split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const idx = line.indexOf(",");
-      const ad = (idx === -1 ? line : line.slice(0, idx)).trim();
-      const klon = idx === -1 ? "" : line.slice(idx + 1).trim();
-      return { ad, klon };
-    })
-    .filter((it) => it.ad);
-}
-
-function showTestKatalogBulkForm(defaultGrup) {
-  const rail = $("#rail");
-  rail.innerHTML = `
-    <div class="rail-head"><h2>Toplu Ekle</h2><button class="rx" id="closeBulkTk">×</button></div>
-    <div class="rail-body">
-      <div class="m-sec"><p class="m-label">Grup</p>
-        <select class="finput" id="bulkGrup">${GROUPS.map(([k, l]) => `<option value="${k}" ${k === defaultGrup ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>
-      <div class="m-sec"><p class="m-label">Testler <span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">— her satır: İsim, Klon (klon opsiyonel)</span></p>
-        <textarea id="bulkText" style="min-height:220px" placeholder="ER, SP1&#10;PR, BSB-2&#10;Ki-67"></textarea></div>
-    </div>
-    <div class="rail-foot"><button class="btn-ghost" id="cancelBulkTk">İptal</button><button class="btn-primary" id="saveBulkTk">Ekle</button></div>`;
-
-  $("#closeBulkTk").onclick = showEmpty;
-  $("#cancelBulkTk").onclick = showEmpty;
-  $("#saveBulkTk").onclick = async () => {
-    const grup = $("#bulkGrup").value;
-    const items = parseBulkLines($("#bulkText").value);
-    if (!items.length) { toast("Eklenecek satır yok", true); return; }
-    $("#saveBulkTk").disabled = true;
-    try {
-      const existing = await Api.getTestKatalogByGrup(grup);
-      const existingNames = new Set(existing.map((t) => t.ad.trim().toLowerCase()));
-      const seen = new Set();
-      const toInsert = [];
-      let skipped = 0;
-      items.forEach((it) => {
-        const key = it.ad.toLowerCase();
-        if (existingNames.has(key) || seen.has(key)) { skipped++; return; }
-        seen.add(key);
-        toInsert.push(it);
-      });
-      if (toInsert.length) await Api.bulkCreateTestKatalogEntries(grup, toInsert);
-      toast(`${toInsert.length} eklendi, ${skipped} zaten vardı`);
-      CAT = await Api.getTestKatalog();
-      if (grup === tkGrup) await loadTkList();
-      showEmpty();
-    } catch (e) {
-      toast("Toplu ekleme başarısız", true);
-    } finally {
-      const btn = $("#saveBulkTk"); if (btn) btn.disabled = false;
-    }
-  };
-}
-
-// ================================================================
-// KONTROL LİSTESİ YÜKLE (Test Kataloğu, yönetici)
-// Excel'den yapıştırılan "Antikor <TAB> Kontrol" satırları katalogla
-// eşleştirilir; önizleme onaylanınca tek işlemde yazılır
-// (katalog_kontrol_yukle). Eşleşmeyenler kataloğa EKLENMEZ.
-// ================================================================
-const TR_SADE = { "İ": "i", "I": "i", "ı": "i", "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g", "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c" };
-// Eşleştirme anahtarı: Türkçe harfler sadeleşir, aksanlar atılır, küçük harf;
-// boşluk, tire (- – —), nokta ve parantez yok sayılır. "/" korunur.
-//   "Bcl-2" = "BCL2" · "CK 5/6" = "CK5/6" · "PAX-8" = "Pax8"
-function antikorAnahtar(s) {
-  return String(s || "").replace(/[İIıŞşĞğÜüÖöÇç]/g, (c) => TR_SADE[c])
-    .normalize("NFD").replace(/[̀-ͯ]/g, "")
-    .toLowerCase().replace(/[\s\-‐-―.()]/g, "");
-}
-const parantezIcsiz = (s) => String(s || "").replace(/\([^)]*\)/g, " ");
-
-// Satırlar: { no, ad, kontrol, tabYok }. Başlık (ilk satırda "antikor" ya da
-// "kontrol") atlanır; kontrol "X" ise boş. TAB'sız satır uyarıya düşer
-// (kontrolü boş sayıp mevcut değeri silmesin diye).
-function kontrolListesiAyristir(metin) {
-  const satirlar = String(metin || "").replace(/\r/g, "").split("\n")
-    .map((l, i) => ({ no: i + 1, l })).filter((x) => x.l.trim());
-  if (satirlar.length && /antikor|kontrol/.test(antikorAnahtar(satirlar[0].l))) satirlar.shift();
-  return satirlar.map(({ no, l }) => {
-    const parca = l.split("\t");
-    const ad = parca[0].trim().replace(/\s+/g, " ");
-    let kontrol = (parca[1] || "").trim().replace(/\s+/g, " ");
-    if (/^x$/i.test(kontrol)) kontrol = "";
-    return { no, ad, kontrol, tabYok: parca.length < 2 };
-  }).filter((s) => s.ad);
-}
-
-// Eşleştirme İmmün ekibinin gruplarındaki testlerle (aktif + pasif). Aynı
-// anahtara birden çok test düşerse aktif olan seçilir; yine birden çoksa
-// "belirsiz" (elle seçilir). Tam eşleşme yoksa parantez içi atılarak bir
-// tur daha denenir ("Ki-67 (MIB-1)" → "Ki-67") — önizlemede işaretli.
-function kontrolEslestir(liste, havuz) {
-  let gruplar = Object.values(GRUP_BILGI).filter((g) => g.ekip === "immun").map((g) => g.kod);
-  if (!gruplar.length) gruplar = ["ihc"];
-  const dizin = new Map();
-  havuz.filter((t) => gruplar.includes(t.grup)).forEach((t) => {
-    const k = antikorAnahtar(t.ad);
-    if (!dizin.has(k)) dizin.set(k, []);
-    dizin.get(k).push(t);
-  });
-  const bul = (k) => {
-    let c = dizin.get(k) || [];
-    if (c.length > 1 && c.some((t) => t.aktif)) c = c.filter((t) => t.aktif);
-    return c;
-  };
-  return liste.map((s) => {
-    if (s.tabYok) return { ...s, yol: "tabyok", adaylar: [], secim: "" };
-    const k = antikorAnahtar(s.ad);
-    let adaylar = bul(k), yol = "tam";
-    if (!adaylar.length) {
-      const k2 = antikorAnahtar(parantezIcsiz(s.ad));
-      if (k2 && k2 !== k) { adaylar = bul(k2); yol = "parantez"; }
-    }
-    if (!adaylar.length) yol = "yok";
-    else if (adaylar.length > 1) yol = "belirsiz";
-    return { ...s, yol, adaylar, secim: adaylar.length === 1 ? adaylar[0].id : "" };
-  });
-}
-
-let kkMetin = "";
-let kkHavuz = [];    // katalogdaki tüm testler: {id, grup, ad, klon, kontrol, aktif}
-let kkSatirlar = []; // ayrıştırılmış + eşleştirilmiş liste satırları
-
-function renderKontrolYukle() {
-  showEmpty();
-  $("#mainView").innerHTML = `
-    <div class="page-head">
-      <button class="btn-ghost btn-sm" id="kkGeri">← Test Kataloğu</button>
-      <h1>Kontrol listesi yükle</h1>
-      <div class="spacer"></div>
-    </div>
-    <div class="kk-wrap" id="kkWrap"></div>`;
-  $("#kkGeri").onclick = renderTestKatalogPage;
-  kkGirisGoster();
-}
-
-function kkGirisGoster() {
-  $("#kkWrap").innerHTML = `
-    <p class="kk-acik">Excel'de iki sütunu (Antikor, Kontrol) seçip kopyalayın ve aşağıya yapıştırın. Başlık satırı varsa atlanır; kontrolü <b>X</b> olanlar boş kabul edilir. Antikor adları katalogla büyük/küçük harf, boşluk, tire, nokta ve parantez farkı gözetilmeden eşleştirilir ("Bcl-2" = "BCL2"). Önizlemeden önce hiçbir şey kaydedilmez.</p>
-    <textarea id="kkMetin" class="kk-metin" spellcheck="false" placeholder="Antikor&#9;Kullanılacak Kontrol&#10;Bcl-2&#9;Tonsil&#10;CD20&#9;Tonsil&#10;HMB-45&#9;X">${esc(kkMetin)}</textarea>
-    <div class="kk-aks"><button class="btn-primary" id="kkOnizle">Önizle</button></div>`;
-  $("#kkOnizle").onclick = kkOnizle;
-}
-
-async function kkOnizle() {
-  kkMetin = $("#kkMetin").value;
-  const liste = kontrolListesiAyristir(kkMetin);
-  if (!liste.length) { toast("Yapıştırılmış satır yok", true); return; }
-  const btn = $("#kkOnizle");
-  btn.disabled = true;
-  try {
-    kkHavuz = await Api.getKatalogTumu();
-  } catch (e) {
-    toast("Katalog okunamadı", true);
-    btn.disabled = false;
-    return;
-  }
-  kkSatirlar = kontrolEslestir(liste, kkHavuz);
-  kkElle = false;
-  renderKkOnizleme(false);
-}
-
-// Seçimlere göre güncel durum. Aynı teste birden çok satır bağlıysa HEPSİ
-// "çakışma" — kullanıcı hangisinin kullanılacağını seçene ya da birini
-// atlayana kadar hiçbiri kaydedilmez. Çakışmaya düşen satır, çözülünce de
-// Çakışma bölümünde kalır (cakismaTest) ki seçim görünür olsun.
-function kkDurum() {
-  const byId = new Map(kkHavuz.map((t) => [t.id, t]));
-  const testSatirlari = new Map();
-  kkSatirlar.forEach((s) => {
-    if (!s.secim || s.yol === "tabyok") return;
-    if (!testSatirlari.has(s.secim)) testSatirlari.set(s.secim, []);
-    testSatirlari.get(s.secim).push(s);
-  });
-  const d = { byId, eslesen: [], degisecek: [], ayni: [], eslesmeyen: [], cakisma: [], tabYok: [] };
-  kkSatirlar.forEach((s) => {
-    if (s.yol === "tabyok") { d.tabYok.push(s); return; }
-    if (!s.secim) { d.eslesmeyen.push(s); return; }
-    if (testSatirlari.get(s.secim).length > 1) {
-      if (!s.cakismaTest) s.cakismaTest = s.secim;
-      d.cakisma.push(s);
-      return;
-    }
-    d.eslesen.push(s);
-    const t = byId.get(s.secim);
-    ((t.kontrol || "") === s.kontrol ? d.ayni : d.degisecek).push(s);
-  });
-  return d;
-}
-
-function kkTestEtiketi(t) {
-  return `${esc(t.ad)}${t.klon ? ` <small class="kk-klon">${esc(t.klon)}</small>` : ""}${t.aktif ? "" : ` <small class="kk-pasif">pasif</small>`}`;
-}
-const kkKontrolHucre = (v) => (v ? esc(v) : `<span class="kk-bos">boş</span>`);
-// "CD68 (KP1)" ↔ katalogda klonu KP1 olan CD68: çakışmada ipucu.
-function kkKlonUyumu(s, t) {
-  const m = /\(([^)]*)\)/.exec(s.ad);
-  return Boolean(m && t && t.klon && antikorAnahtar(m[1]) === antikorAnahtar(t.klon));
-}
-
-function kkSecenekler(s) {
-  const grupAd = Object.fromEntries(GROUPS);
-  const sirali = kkHavuz.slice().sort((a, b) => a.ad.localeCompare(b.ad, "tr"));
-  const gruplar = new Map();
-  sirali.forEach((t) => { if (!gruplar.has(t.grup)) gruplar.set(t.grup, []); gruplar.get(t.grup).push(t); });
-  const opt = (t) => `<option value="${t.id}">${esc(t.ad)}${t.klon ? ` (${esc(t.klon)})` : ""}${t.aktif ? "" : " — pasif"}</option>`;
-  return `<option value="">— Atla —</option>`
-    + (s.adaylar.length > 1 ? `<optgroup label="Adaylar">${s.adaylar.map(opt).join("")}</optgroup>` : "")
-    + [...gruplar].map(([g, list]) => `<optgroup label="${esc(grupAd[g] || TIP[g] || g)}">${list.map(opt).join("")}</optgroup>`).join("");
-}
-
-const KK_YOL = { tam: "doğrudan eşleşti", yok: "eşleşmedi", belirsiz: "birden çok aday", parantez: "parantez dışı eşleşti" };
-let kkElle = false; // önizlemede elle seçim yapıldı mı (İptal'de sorulur)
-
-function renderKkOnizleme(konumuKoru = true) {
-  const wrap = $("#kkWrap");
-  const y = konumuKoru ? wrap.scrollTop : 0;
-  const d = kkDurum();
-  const cakismali = kkSatirlar.filter((s) => s.cakismaTest);
-  const elle = kkSatirlar.filter((s) => !s.cakismaTest && (s.yol === "yok" || s.yol === "belirsiz" || s.yol === "parantez"));
-  const tamDegisecek = d.degisecek.filter((s) => s.yol === "tam" && !s.cakismaTest);
-  const tamAyni = d.ayni.filter((s) => s.yol === "tam" && !s.cakismaTest);
-  // Katalogda hiç karşılığı olmayan (ve elle bağlanmamış) satırlar — Toplu Ekle için.
-  const yoklar = d.eslesmeyen.filter((s) => s.yol === "yok");
-  // Çakışma grupları (ilk bağlandıkları teste göre); çözülmemiş = o teste hâlâ >1 satır bağlı.
-  const cGruplar = new Map();
-  cakismali.forEach((s) => { if (!cGruplar.has(s.cakismaTest)) cGruplar.set(s.cakismaTest, []); cGruplar.get(s.cakismaTest).push(s); });
-  const cozulmemis = [...cGruplar].filter(([tid]) => d.cakisma.some((s) => s.secim === tid));
-  const sonuc = (s) => {
-    if (!s.secim) return `<span class="kk-rozet atla">atlanacak</span>`;
-    if (d.cakisma.includes(s)) return `<span class="kk-rozet uyari">seçim bekliyor</span>`;
-    return d.degisecek.includes(s) ? `<span class="kk-rozet degis">değişecek</span>` : `<span class="kk-rozet">aynı</span>`;
-  };
-  const secici = (s) => `<select class="finput kk-sec" data-kk="${kkSatirlar.indexOf(s)}">${kkSecenekler(s)}</select>`;
-  const n = d.degisecek.length;
-
-  wrap.innerHTML = `
-    <div class="kk-bar">
-      <div class="kk-ozet">
-        <span><b>${kkSatirlar.length}</b> satır</span>
-        <span><b>${d.eslesen.length}</b> eşleşen</span>
-        <span class="degis"><b>${n}</b> değişecek</span>
-        <span><b>${d.ayni.length}</b> aynı kalacak</span>
-        <span class="${d.eslesmeyen.length ? "uyari" : ""}"><b>${d.eslesmeyen.length}</b> eşleşmeyen</span>
-        ${cozulmemis.length ? `<button type="button" class="kk-cip uyari" id="kkCakismaCip" title="Çakışma bölümüne git"><b>${cozulmemis.length}</b> çakışma — seçim bekliyor</button>` : ""}
-        ${d.tabYok.length ? `<span class="uyari"><b>${d.tabYok.length}</b> okunamayan</span>` : ""}
-      </div>
-      <div class="kk-bar-ikincil">
-        <button class="btn-ghost btn-sm" id="kkDuzenle">← Listeyi düzenle</button>
-        ${yoklar.length ? `<button class="btn-ghost btn-sm" id="kkKopyala" title="Katalogda hiç bulunmayanları 'Toplu Ekle'ye yapıştırmak için">Katalogda olmayanları kopyala (${yoklar.length})</button>` : ""}
-      </div>
-      <div class="kk-bar-aks">
-        <button class="btn-ghost" id="kkIptal">İptal</button>
-        <button class="btn-primary" id="kkUygula" ${n ? "" : "disabled"}>${n ? `${n} kontrolü kaydet` : "Kaydedilecek değişiklik yok"}</button>
-      </div>
-    </div>
-    ${cGruplar.size ? `<div class="kk-bolum" id="kkCakisma"><h3>Çakışma <span class="count">${cGruplar.size}</span></h3>
-      <p class="kk-not">Aynı teste birden çok satır bağlandı. Hangisinin kullanılacağını seçin ("Bunu kullan" diğerlerini atlar) ya da satırları başka teste bağlayın / atlayın. Çözülmeden kaydedilmez.</p>
-      ${[...cGruplar].map(([tid, satirlar]) => {
-        const t = d.byId.get(tid);
-        const bekliyor = d.cakisma.some((s) => s.secim === tid);
-        return `<div class="kk-cgrup${bekliyor ? " bekliyor" : ""}">
-          <div class="kk-cbas">${kkTestEtiketi(t)}<span class="kk-cmevcut">mevcut kontrol: ${kkKontrolHucre(t.kontrol)}</span>${bekliyor ? `<span class="kk-rozet uyari">seçim bekliyor</span>` : `<span class="kk-rozet">çözüldü</span>`}</div>
-          <div class="kk-kaydir"><table class="kk-tablo kk-ctablo"><tbody>${satirlar.map((s) => `<tr>
-            <td class="kk-no">${s.no}</td>
-            <td><b>${esc(s.ad)}</b>${kkKlonUyumu(s, t) ? `<div class="kk-yol">klon katalogla aynı</div>` : ""}</td>
-            <td>${kkKontrolHucre(s.kontrol)}</td>
-            <td><button class="btn-ghost btn-sm" data-kk-kullan="${kkSatirlar.indexOf(s)}" ${s.secim === tid && !bekliyor ? "disabled" : ""}>Bunu kullan</button></td>
-            <td>${secici(s)}</td>
-            <td>${sonuc(s)}</td></tr>`).join("")}</tbody></table></div>
-        </div>`;
-      }).join("")}</div>` : ""}
-    ${elle.length ? `<div class="kk-bolum"><h3>Elle bakılacak <span class="count">${elle.length}</span></h3>
-      <p class="kk-not">Eşleşmeyen, birden çok adayı olan ya da parantez dışı eşleşen satırlar. Katalogdaki bir teste bağlayın ya da "Atla"da bırakın — eşleşmeyenler kataloğa eklenmez.</p>
-      <div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Kontrol</th><th>Katalogdaki test</th><th>Mevcut kontrol</th><th></th></tr></thead><tbody>
-      ${elle.map((s) => {
-        const t = s.secim && d.byId.get(s.secim);
-        return `<tr><td class="kk-no">${s.no}</td><td><b>${esc(s.ad)}</b><div class="kk-yol">${KK_YOL[s.yol]}</div></td><td>${kkKontrolHucre(s.kontrol)}</td>
-          <td>${secici(s)}</td><td>${t ? kkKontrolHucre(t.kontrol) : ""}</td><td>${sonuc(s)}</td></tr>`;
-      }).join("")}
-      </tbody></table></div></div>` : ""}
-    ${d.tabYok.length ? `<div class="kk-bolum"><h3>Okunamayan satırlar <span class="count">${d.tabYok.length}</span></h3>
-      <p class="kk-not">Kontrol sütunu yok (TAB ile ayrılmamış) — atlandı. Excel'de iki sütunu birlikte seçip kopyalayın.</p>
-      <div class="kk-kaydir"><table class="kk-tablo"><tbody>${d.tabYok.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
-    <div class="kk-bolum"><h3>Değişecek <span class="count">${tamDegisecek.length}</span></h3>
-      ${tamDegisecek.length ? `<div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Satır</th><th>Antikor (liste)</th><th>Katalogdaki test</th><th>Mevcut kontrol</th><th>Yeni kontrol</th></tr></thead><tbody>
-      ${tamDegisecek.map((s) => { const t = d.byId.get(s.secim); return `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(t)}</td><td class="kk-eski">${kkKontrolHucre(t.kontrol)}</td><td><b>${kkKontrolHucre(s.kontrol)}</b></td></tr>`; }).join("")}
-      </tbody></table></div>` : `<p class="kk-not">Doğrudan eşleşenlerde değişecek kontrol yok.</p>`}</div>
-    ${tamAyni.length ? `<details class="kk-bolum"><summary>Aynı kalacak <span class="count">${tamAyni.length}</span></summary>
-      <div class="kk-kaydir"><table class="kk-tablo"><tbody>${tamAyni.map((s) => `<tr><td class="kk-no">${s.no}</td><td>${esc(s.ad)}</td><td>${kkTestEtiketi(d.byId.get(s.secim))}</td><td>${kkKontrolHucre(s.kontrol)}</td></tr>`).join("")}</tbody></table></div></details>` : ""}`;
-  wrap.scrollTop = y;
-
-  $$("#kkWrap [data-kk]").forEach((sel) => {
-    const s = kkSatirlar[Number(sel.dataset.kk)];
-    sel.value = s.secim || "";
-    sel.onchange = () => { s.secim = sel.value; kkElle = true; renderKkOnizleme(); };
-  });
-  // "Bunu kullan": bu satır gruptaki teste bağlanır, o teste bağlı diğerleri atlanır.
-  $$("#kkWrap [data-kk-kullan]").forEach((b) => {
-    b.onclick = () => {
-      const s = kkSatirlar[Number(b.dataset.kkKullan)];
-      const tid = s.cakismaTest;
-      kkSatirlar.forEach((x) => { if (x !== s && x.secim === tid) x.secim = ""; });
-      s.secim = tid;
-      kkElle = true;
-      renderKkOnizleme();
-    };
-  });
-  const cakismayaGit = () => {
-    const el = $("#kkCakisma"); if (!el) return;
-    el.scrollIntoView({ block: "start" });
-    el.classList.remove("vurgu"); void el.offsetWidth; el.classList.add("vurgu");
-  };
-  $("#kkCakismaCip")?.addEventListener("click", cakismayaGit);
-  $("#kkDuzenle").onclick = () => { kkGirisGoster(); $("#kkWrap").scrollTop = 0; };
-  $("#kkIptal").onclick = () => {
-    if (kkElle && !confirm("Önizlemedeki seçimler kaybolacak, hiçbir şey kaydedilmeyecek. Çıkılsın mı?")) return;
-    kkMetin = ""; kkSatirlar = []; kkElle = false;
-    renderTestKatalogPage();
-  };
-  $("#kkKopyala")?.addEventListener("click", () => {
-    const metin = yoklar.map((s) => s.ad).join("\n");
-    panoyaKopyala(metin, `${yoklar.length} ad kopyalandı — Toplu Ekle'ye yapıştırabilirsiniz`, () => {
-      // Pano izni yoksa: liste seçili bir kutuda — elle kopyalanır.
-      $("#kkKopyaKutu")?.remove();
-      $("#kkKopyaNot")?.remove();
-      $(".kk-bar").insertAdjacentHTML("afterend", `<p class="kk-not" id="kkKopyaNot" style="margin-top:12px">Panoya yazılamadı — listeyi buradan kopyalayın (Ctrl+C):</p><textarea id="kkKopyaKutu" class="kk-metin" style="min-height:120px" readonly>${esc(metin)}</textarea>`);
-      $("#kkKopyaKutu").select();
-    });
-  });
-  $("#kkUygula").onclick = async () => {
-    if (cozulmemis.length) {
-      toast(`${cozulmemis.length} çakışma çözülmeden kaydedilemez — hangi satırın kullanılacağını seçin ya da birini atlayın`, true);
-      cakismayaGit();
-      return;
-    }
-    const liste = d.degisecek.map((s) => ({ id: s.secim, kontrol: s.kontrol || null }));
-    if (!confirm(`${liste.length} testin kontrolü kaydedilecek. Devam edilsin mi?`)) return;
-    $("#kkUygula").disabled = true;
-    try {
-      const r = await Api.katalogKontrolYukle(liste);
-      toast(`${r.guncellenen} testin kontrolü güncellendi`);
-      kkMetin = ""; kkSatirlar = []; kkElle = false;
-      renderTestKatalogPage();
-    } catch (e) {
-      toast(e && e.code === "42501" ? "Kontrol listesini yalnız yönetici yükleyebilir" : "Kaydedilemedi", true);
-      const b = $("#kkUygula"); if (b) b.disabled = false;
     }
   };
 }

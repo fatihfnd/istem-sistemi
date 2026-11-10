@@ -1355,3 +1355,117 @@ tbody tr.onc-acil > td:first-child{box-shadow:inset 4px 0 0 var(--amber-i)}
 .ss-deger.ss-kotu{color:var(--red-i, #b42318)}
 .sistem-not{margin:-2px 0 8px 160px;font-size:12px;color:var(--ink-3)}
 @media (max-width:640px){ .sistem-satir{flex-direction:column;gap:2px} .sistem-not{margin-left:0} }
+
+/* ---------------- Yetkiler: yetkisi olmayana gizlenenler ---------------- */
+.yzd-yok #qYazdir, .yzd-yok #bulkYazdirBtn, .yzd-yok #hizYazdirBtn, .yzd-yok #hizBulkYazdirBtn, .yzd-yok .yzbox{display:none !important}
+.dyy-yok [data-dy-yeni]{display:none !important}
+
+/* ---------------- Test seçici: (i) bilgi, eş ad, "katalogda yok" ---------------- */
+.test-bilgi{flex:none;width:17px;height:17px;border-radius:50%;border:1px solid var(--line-strong, var(--line));background:var(--paper);color:var(--ink-2);font:italic 700 11px/1 Georgia, serif;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.test-bilgi:hover, .test-bilgi:focus-visible{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.anti small.anti-es{font-family:var(--sans);font-style:italic}
+.anti-yok{display:block;width:100%;font-size:12.5px;color:var(--ink-2);background:var(--paper);border:1px dashed var(--line);border-radius:9px;padding:8px 10px;line-height:1.4}
+.not-balon .tb-satir{display:flex;gap:8px;margin-top:5px;font-size:12.5px}
+.not-balon .tb-satir b{flex:none;min-width:58px;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);padding-top:2px}
+.not-balon .tb-satir span{overflow-wrap:anywhere}
+
+/* ---------------- Test Kataloğu ---------------- */
+.kt-uyari{margin:0 26px 8px;padding:8px 12px;border-radius:8px;background:var(--amber-b, #fef3c7);color:var(--amber-i, #b45309);font-size:12.5px}
+.kt-arac{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:4px 26px 10px}
+.kt-arac .kt-ara{flex:1 1 280px;max-width:520px}
+.kt-arac .ilsk-anahtar{margin-left:0;padding-left:0}
+.kt-say{font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kt-gruplar{padding:0 26px 10px}
+.kt-bir{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 26px 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:10px;background:var(--accent-soft);font-size:13px}
+.kt-bir .grow{flex:1}
+.kt-bir.hidden{display:none}
+.kt-liste{flex:1;min-height:0;overflow:auto;padding:0 26px 26px}
+.kt-tablo{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);border:1px solid var(--line-2);border-radius:10px}
+.kt-tablo th{position:sticky;top:0;z-index:1;background:var(--card);text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.kt-tablo td{padding:8px 10px;border-bottom:1px solid var(--line-2);vertical-align:top;overflow-wrap:anywhere}
+.kt-tablo tbody tr{cursor:pointer}
+.kt-tablo tbody tr:hover, .kt-tablo tbody tr:focus-visible{background:var(--accent-soft);outline:0}
+.kt-tablo tr.pasif td{color:var(--ink-3)}
+.kt-tablo .kt-sec{width:1%;cursor:default}
+.kt-tablo .kt-ad{min-width:130px}
+.kt-tablo .kt-klon{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.kt-tablo .kt-acik{min-width:180px;max-width:420px;color:var(--ink-2)}
+.kt-tablo .kt-g{white-space:nowrap}
+.kt-es{font-size:11.5px;color:var(--ink-3);font-style:italic;margin-top:1px}
+.kt-tablo .status, .kt-baslik .status{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap}
+.kt-tablo .status.aktif, .kt-baslik .status.aktif{background:var(--green-b);color:var(--green-i)}
+.kt-tablo .status.pasif, .kt-baslik .status.pasif{background:var(--line-2);color:var(--ink-3)}
+.kt-baslik{font-size:18px;font-weight:700;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.kt-grupad{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.kt-v{font-size:13.5px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.kt-v.bos{color:var(--ink-3)}
+.kt-not{margin-top:8px;font-size:12.5px;color:var(--ink-2);background:var(--paper);border:1px solid var(--line-2);border-radius:8px;padding:7px 10px}
+.kt-gecmis{font-size:12.5px;color:var(--ink-2)}
+.kt-gecmis ul{list-style:none;margin:0;padding:0}
+.kt-gecmis li{padding:6px 0;border-bottom:1px solid var(--line-2);overflow-wrap:anywhere}
+.kt-gecmis li:last-child{border-bottom:0}
+.kt-gecmis .kt-eski{color:var(--ink-3);text-decoration:line-through}
+.kt-gecmis .kt-gz{display:block;font-size:11px;color:var(--ink-3);margin-top:1px}
+textarea.finput{resize:vertical;line-height:1.4}
+.ot-aks{white-space:nowrap;text-align:right}
+.ot-aks button{margin-left:6px}
+
+/* Birleştirme penceresi */
+.bir-kutu{width:min(520px, 100%);gap:12px}
+.bir-sec{display:flex;flex-direction:column;gap:6px}
+.bir-sec label{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;cursor:pointer;font-size:13.5px}
+.bir-sec label:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.bir-onizleme{font-size:13px;line-height:1.45;border:1px solid var(--line-2);border-radius:9px;background:var(--paper);padding:10px 12px;min-height:64px;overflow-y:auto}
+.bir-onizleme p{margin:6px 0 2px}
+.bir-onizleme ul{margin:2px 0 4px;padding-left:18px}
+.bir-ok{font-weight:700}
+.bir-not{color:var(--ink-3);font-size:12px}
+.bir-hata{color:var(--red-i, #b91c1c);font-weight:600}
+
+/* Liste içe aktar */
+.ia-ust{display:flex;flex-wrap:wrap;gap:12px 18px;margin:0 0 12px}
+.ia-alan{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);flex:1 1 240px;max-width:360px}
+.ia-alan .finput{text-transform:none;letter-spacing:0;font-weight:400}
+.ia-esleme .ilsk-anahtar{margin:0 0 8px;padding-left:0}
+.ia-esleme select.ia-kol{min-width:110px}
+.ia-karar{white-space:nowrap}
+.ia-karar label{display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:12.5px;cursor:pointer}
+.ia-yok{display:flex;flex-wrap:wrap;gap:6px}
+.ia-yok span{font-size:12.5px;border:1px solid var(--line-2);background:var(--card);border-radius:7px;padding:3px 8px}
+.ia-yok i{font-family:var(--mono);font-style:normal;color:var(--ink-3);font-size:11.5px}
+.ia-yok small{color:var(--ink-3)}
+.kk-bar-aks .ilsk-anahtar{margin-left:0}
+
+/* ---------------- Yetkiler ---------------- */
+.yt-tablo{width:auto;min-width:100%}
+.yt-tablo th{white-space:normal;vertical-align:bottom;text-align:center;min-width:64px;max-width:92px;line-height:1.2}
+.yt-tablo th.yt-grup{border-left:1px solid var(--line);font-size:11px;color:var(--ink-2)}
+.yt-tablo th.yt-profil, .yt-tablo td.yt-profil{position:sticky;left:0;z-index:1;background:var(--card);text-align:left;min-width:190px;max-width:none;white-space:nowrap;border-right:1px solid var(--line)}
+.yt-tablo td{text-align:center}
+.yt-tablo td.yt-profil small{display:block;font-size:11px;color:var(--ink-3);font-weight:400}
+.yt-tablo input[type="checkbox"]{width:17px;height:17px;cursor:pointer;accent-color:var(--accent)}
+.yt-tablo input[disabled]{cursor:default}
+.yt-tablo tr.yt-yonetici td{background:var(--paper)}
+.yt-tablo .yt-kilit{color:var(--ink-3);font-size:12px}
+.yt-sebep{font-size:12px;color:var(--ink-2);max-width:340px}
+.ky-bolum{border-top:1px solid var(--line-2);padding-top:14px}
+.ky-baslik{font-size:11px;font-weight:700;color:var(--ink-3);margin:10px 0 4px}
+.ky-satir{display:flex;align-items:center;gap:10px;padding:3px 0;font-size:13px}
+.ky-satir > span{flex:1;min-width:0}
+.ky-satir small{font-size:10.5px;color:var(--amber-i, #b45309);border:1px dashed currentColor;border-radius:5px;padding:0 4px}
+.ky-satir .finput{width:150px;flex:none;padding:5px 8px;font-size:12.5px}
+.ky-satir.istisna .finput{border-color:var(--accent);background:var(--accent-soft)}
+@media (max-width:900px){
+  .kt-arac, .kt-gruplar{padding-left:16px;padding-right:16px}
+  .kt-liste{overflow:visible;padding:0 16px 26px}
+  .kt-bir, .kt-uyari{margin-left:16px;margin-right:16px}
+  .kt-tablo .kt-g{display:none}
+  .kt-tablo thead{display:none}
+  .kt-tablo, .kt-tablo tbody{display:block}
+  .kt-tablo tr{display:flex;flex-wrap:wrap;gap:2px 10px;padding:9px 10px;border-bottom:1px solid var(--line-2)}
+  .kt-tablo td{border:0;padding:0}
+  .kt-tablo .kt-sec{width:auto}
+  .kt-tablo .kt-ad{flex:1 1 60%}
+  .kt-tablo .kt-acik{flex:1 1 100%;max-width:none}
+  .kt-tablo td:empty{display:none}
+}
