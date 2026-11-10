@@ -1438,9 +1438,11 @@ textarea.finput{resize:vertical;line-height:1.4}
 
 /* ---------------- Yetkiler ---------------- */
 .yt-tablo{width:auto;min-width:100%}
-.yt-tablo th{white-space:normal;vertical-align:bottom;text-align:center;min-width:64px;max-width:92px;line-height:1.2}
+.yt-wrap > *{max-width:none}
+.yt-tablo th{white-space:normal;vertical-align:bottom;text-align:center;min-width:52px;max-width:86px;line-height:1.2;padding:7px 4px}
+.yt-tablo td{padding:6px 4px}
 .yt-tablo th.yt-grup{border-left:1px solid var(--line);font-size:11px;color:var(--ink-2)}
-.yt-tablo th.yt-profil, .yt-tablo td.yt-profil{position:sticky;left:0;z-index:1;background:var(--card);text-align:left;min-width:190px;max-width:none;white-space:nowrap;border-right:1px solid var(--line)}
+.yt-tablo th.yt-profil, .yt-tablo td.yt-profil{position:sticky;left:0;z-index:1;background:var(--card);text-align:left;min-width:170px;max-width:none;white-space:nowrap;border-right:1px solid var(--line);padding:6px 9px}
 .yt-tablo td{text-align:center}
 .yt-tablo td.yt-profil small{display:block;font-size:11px;color:var(--ink-3);font-weight:400}
 .yt-tablo input[type="checkbox"]{width:17px;height:17px;cursor:pointer;accent-color:var(--accent)}
