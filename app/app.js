@@ -2761,8 +2761,7 @@ function arsivListesiYazdir(mod = "gorunen") {
 // yazdırma başlarken düşer, 15 sn "Yazdırılmadı — geri al" sunulur.
 // ================================================================
 const YZ_IKON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>`;
-function yazdirMenuHTML(seciliVar) {
-  if (!yetki("yazdir")) return "";
+function yazdirMenuHTML(seciliVar) { // "yazdır" yetkisi yoksa CSS gizler (body.yzd-yok)
   return `<div class="exportbox yzbox">
     <button class="btn-ghost btn-sm yzbtn" type="button">${YAZDIR_IKON} Yazdır ▾</button>
     <div class="thfilter" style="right:auto;left:0">
@@ -4957,7 +4956,8 @@ function bindPicker(withQuickFill) {
     const input = $("#antiSearch");
     if (!input.value.trim()) return;
     const first = $("#antis .anti, #antis .anti-add");
-    if (first) first.click();
+    if (!first) return; // katalogda yok + ekleme yetkisi yok: yazılan kalsın
+    first.click();
     input.value = "";
     renderAntis("");
     input.focus();
@@ -7058,6 +7058,7 @@ function renderTestKatalogPage() {
       if (sec.checked) { ktSecili.push(id); if (ktSecili.length > 2) ktSecili.shift(); }
       else ktSecili = ktSecili.filter((x) => x !== id);
       $$("#ktListe [data-kt-sec]").forEach((c) => { c.checked = ktSecili.includes(c.dataset.ktSec); });
+      if ($("#rail .rail-head")) showEmpty(); // dar ekranda sağ panel birleştirme çubuğunu örtmesin
       ktBirBarCiz();
       return;
     }
@@ -7605,7 +7606,7 @@ function renderIaOnizleme() {
         <button class="btn-primary" id="iaUygula" ${ops.length ? "" : "disabled"}>Uygula (${ops.length})</button>
       </div>
     </div>
-    <details class="kk-bolum ia-esleme" ${iaEsleme.includes("ad") ? "" : "open"}><summary>Sütun eşlemesi</summary>
+    <details class="kk-bolum ia-esleme" ${iaEsleme.includes("ad") && iaBaslikVar ? "" : "open"}><summary>Sütun eşlemesi</summary>
       <label class="ilsk-anahtar"><input type="checkbox" id="iaBaslik" ${iaBaslikVar ? "checked" : ""}> İlk satır başlık</label>
       <div class="kk-kaydir"><table class="kk-tablo"><thead><tr>${iaEsleme.map((a, i) => `<th><select class="kk-sec ia-kol" data-ia-kol="${i}">${IA_ALANLAR.map(([k, l]) => `<option value="${k}" ${k === a ? "selected" : ""}>${l}</option>`).join("")}</select></th>`).join("")}</tr></thead>
         <tbody>${ornek.map((r) => `<tr>${iaEsleme.map((_, i) => `<td>${esc(r[i] || "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
