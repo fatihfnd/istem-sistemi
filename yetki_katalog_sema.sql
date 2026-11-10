@@ -726,14 +726,14 @@ begin
   end loop;
 
   update test_katalog k
-     set klon = case when x.j ? 'klon' then nullif(btrim(coalesce(x.j->>'klon', '')), '') else k.klon end,
-         kontrol = case when x.j ? 'kontrol' then nullif(btrim(coalesce(x.j->>'kontrol', '')), '') else k.kontrol end,
-         aciklama = case when x.j ? 'aciklama' then nullif(btrim(coalesce(x.j->>'aciklama', '')), '') else k.aciklama end
-    from (select e.j, (e.j->>'id')::uuid as id from jsonb_array_elements(p_islemler) as e(j) where e.j->>'islem' = 'guncelle') x
-   where k.id = x.id
-     and ((x.j ? 'klon' and k.klon is distinct from nullif(btrim(coalesce(x.j->>'klon', '')), ''))
-       or (x.j ? 'kontrol' and k.kontrol is distinct from nullif(btrim(coalesce(x.j->>'kontrol', '')), ''))
-       or (x.j ? 'aciklama' and k.aciklama is distinct from nullif(btrim(coalesce(x.j->>'aciklama', '')), '')));
+     set klon = case when gu.j ? 'klon' then nullif(btrim(coalesce(gu.j->>'klon', '')), '') else k.klon end,
+         kontrol = case when gu.j ? 'kontrol' then nullif(btrim(coalesce(gu.j->>'kontrol', '')), '') else k.kontrol end,
+         aciklama = case when gu.j ? 'aciklama' then nullif(btrim(coalesce(gu.j->>'aciklama', '')), '') else k.aciklama end
+    from (select e.j, (e.j->>'id')::uuid as id from jsonb_array_elements(p_islemler) as e(j) where e.j->>'islem' = 'guncelle') gu
+   where k.id = gu.id
+     and ((gu.j ? 'klon' and k.klon is distinct from nullif(btrim(coalesce(gu.j->>'klon', '')), ''))
+       or (gu.j ? 'kontrol' and k.kontrol is distinct from nullif(btrim(coalesce(gu.j->>'kontrol', '')), ''))
+       or (gu.j ? 'aciklama' and k.aciklama is distinct from nullif(btrim(coalesce(gu.j->>'aciklama', '')), '')));
   get diagnostics n_gunc = row_count;
 
   insert into test_katalog (grup, ad, klon, kontrol, aciklama, es_adlar, sira)
