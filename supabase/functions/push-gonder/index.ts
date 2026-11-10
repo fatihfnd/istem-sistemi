@@ -8,7 +8,7 @@
 //  {"istem_id": "...", "toplu_id": "..."}
 //                         toplu gönderim (toplu_sema.sql) → gönderim başına TEK bildirim:
 //                         "FD · 4 vaka, 12 test (toplu)" (istem_id = gönderimin ilk istemi)
-//  {"duyuru_id": "...", "olay": "kritik" | "cozuldu"}
+//  {"duyuru_id": "...", "olay": "kritik" | "cozuldu" | "yeni_test"}
 //                         duyuru tetikleyicisi (duyuru_sema.sql, service_role):
 //                         kritik → aboneliği olan TÜM aktif kullanıcılar (yazan hariç,
 //                         grup tercihinden bağımsız): "Kritik duyuru" / "CD3 · çalışmıyor";
@@ -319,6 +319,15 @@ async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
     const { data: aktifler } = await db.from("kullanicilar").select("id").in("id", [...kisiler]).eq("aktif", true);
     adaylar = (aktifler ?? []).map((u: { id: string }) => u.id);
     yuk = { title: "Duyuru çözüldü", body: `${testAd || d.baslik} duyurusu çözüldü`, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
+  } else if (olay === "yeni_test") {
+    // Kataloğa yeni test (yetki_katalog_sema.sql): aboneliği olan herkese,
+    // ekleyen hariç, normal öncelikte. Toplu eklemede tek özet duyuru gelir.
+    const aktifMi = !d.cozuldu_at && (!d.bitis_at || new Date(d.bitis_at).getTime() > Date.now());
+    if (!aktifMi) return bos;
+    const { data: herkes, error: e2 } = await db.from("kullanicilar").select("id").eq("aktif", true);
+    if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
+    adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== d.yazan_id);
+    yuk = { title: "Test kataloğu", body: d.baslik, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
   } else {
     return { ...bos, hatalar: [`bilinmeyen olay: ${olay}`] };
   }
