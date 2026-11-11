@@ -1344,6 +1344,30 @@
       if (!kisiler) await kisileriYukle().catch(() => {});
       return data.map((n) => { const u = kisi(n.yazan_id); return { id: n.id, istem_id: n.istem_id, yazan_id: n.yazan_id, yazan: u ? u.ad : null, kisaltma: u ? u.kisaltma : null, zaman: n.created_at, metin: n.metin }; });
     },
+    // Yazdırma anında: basılacak kalemlerin istem notları (istem başına, eskiden
+    // yeniye) + kalite notları (kalem başına). Liste yalnız son notu taşır.
+    // Tek istek (istem_kuyruk_v'nin notlar + kalite_notu sütunları); çok uzun
+    // listelerde adres sınırı için 150'şerlik paralel parçalar.
+    async yazdirmaNotlari(kalemIds) {
+      const ids = [...new Set((kalemIds || []).filter(Boolean))];
+      const istem = new Map(), kalite = new Map();
+      const parcalar = [];
+      for (let i = 0; i < ids.length; i += 150) parcalar.push(ids.slice(i, i + 150));
+      const sonuc = await Promise.all(parcalar.map((p) => client.from("istem_kuyruk_v").select("kalem_id,istem_id,notlar,kalite_notu").in("kalem_id", p)));
+      sonuc.forEach(({ data, error }) => {
+        if (error) throw error;
+        (data || []).forEach((r) => {
+          if (!istem.has(r.istem_id)) {
+            istem.set(r.istem_id, (Array.isArray(r.notlar) ? r.notlar : []).slice().reverse()
+              .filter((n) => n && String(n.metin || "").trim())
+              .map((n) => ({ kisaltma: n.kisaltma || null, yazan: n.yazan || null, metin: String(n.metin).trim() })));
+          }
+          const k = String(r.kalite_notu || "").trim();
+          if (k) kalite.set(r.kalem_id, k);
+        });
+      });
+      return { istem, kalite };
+    },
     // Tek duyuru (canlı olayda: kritik / çözüldü bildirimi için).
     async getDuyuru(id) {
       const { data, error } = await client.from("duyuru_v").select("*").eq("id", id).maybeSingle();

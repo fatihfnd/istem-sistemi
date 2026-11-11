@@ -2824,11 +2824,13 @@ const notListesiHTML = (list) => list.map((n) => `<div class="not-item"><div cla
 
 // Kesit ekranında Yazdır: blok listesi (seçilen bloklar; seçim yoksa görünenler),
 // arşiv sırasıyla — patoloji no (yıl, numara), sonra blok.
-function kesitListesiYazdir(mod = "gorunen") {
+async function kesitListesiYazdir(mod = "gorunen") {
   let bloklar = bloklariSec(gorunenBloklar(), mod, "calisma");
   if (!bloklar.length) { toast(YAZDIR_BOS[mod] || YAZDIR_BOS.gorunen, true); return; }
   bloklar = blokYazdirSirala(bloklar);
   const kalemSayisi = bloklar.reduce((n, b) => n + blokKalemleri(b).length, 0);
+  const notlar = await yazdirNotlariGetir(bloklar.flatMap((b) => blokKalemleri(b).map((r) => r.kalem_id)));
+  const gorulenIstem = new Set();
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Kesit Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${bloklar.length} blok · ${kalemSayisi} kalem · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
@@ -2837,7 +2839,16 @@ function kesitListesiYazdir(mod = "gorunen") {
       <tbody>${bloklar.map((b, i) => {
         const items = blokKalemleri(b);
         const onc = items.some((r) => r.oncelik === "stat") ? PRIO_CIKTI.stat : blokAcilMi(b) ? PRIO_CIKTI.acil : "";
-        const cls = [onc ? "acil" : "", i > 0 && bloklar[i - 1].pat !== b.pat ? "vaka-bas" : ""].filter(Boolean).join(" ");
+        // İstem notu: istemin ilk göründüğü blok satırının altında bir kez;
+        // kalite notları ilgili blokta, test adıyla.
+        let notSatiri = "";
+        if (notlar) {
+          const istemNot = [];
+          items.forEach((r) => { if (!gorulenIstem.has(r.istem_id)) { gorulenIstem.add(r.istem_id); istemNot.push(...(notlar.istem.get(r.istem_id) || [])); } });
+          const kalite = items.filter((r) => notlar.kalite.has(r.kalem_id)).map((r) => `${r.test_adi}: ${notlar.kalite.get(r.kalem_id)}`).join(" · ");
+          notSatiri = yazdirNotSatiri(6, istemNot, kalite);
+        }
+        const cls = [onc ? "acil" : "", i > 0 && bloklar[i - 1].pat !== b.pat ? "vaka-bas" : "", notSatiri ? "notlu" : ""].filter(Boolean).join(" ");
         return `<tr${cls ? ` class="${cls}"` : ""}>
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(b.pat)}${konsNot(blokKons(blokKalemleri(b)))}${duzNot(blokDuzKalem(blokKalemleri(b), "patoloji_no"), "patoloji_no")}</td>
@@ -2845,7 +2856,7 @@ function kesitListesiYazdir(mod = "gorunen") {
           <td>${esc(kesitOzeti(items))}${blokIliskilileri(b, items).length ? `<div class="yl-ilsk">ilişkili: ${esc(iliskiliOzet(blokIliskilileri(b, items)))}</div>` : ""}</td>
           <td>${onc}</td>
           <td>${esc(formatDT(enEski(items)))}</td>
-        </tr>`;
+        </tr>${notSatiri}`;
       }).join("")}</tbody>
     </table>`;
   yazdirmayiBaslat({ baglam: "calisma", kalemIdler: bloklar.flatMap((b) => blokKalemleri(b).map((r) => r.kalem_id)), patlar: bloklar.map((b) => b.pat) });
@@ -2984,6 +2995,31 @@ function arsivListesiYazdir(mod = "gorunen") {
 // yazdırma başlarken düşer, 15 sn "Yazdırılmadı — geri al" sunulur.
 // ================================================================
 const YZ_IKON = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>`;
+// ---- Çıktıda notlar (Çalışma Listesi + Kesit Listesi) ----
+// Tercih bu tarayıcıda; varsayılan açık. Notlar yazdırma anında TEK istekte
+// çekilir (liste yalnız son notu taşır); alınamazsa çıktı notsuz basılır.
+const YZ_NOT_KEY = "istem_yazdir_notlar";
+function yazdirNotTercih() { try { return localStorage.getItem(YZ_NOT_KEY) !== "0"; } catch (e) { return true; } }
+async function yazdirNotlariGetir(kalemIdler) {
+  if (!yazdirNotTercih() || typeof Api.yazdirmaNotlari !== "function" || !kalemIdler.length) return null;
+  try {
+    const r = await Api.yazdirmaNotlari(kalemIdler);
+    return r && r.istem instanceof Map ? r : null;
+  } catch (e) {
+    toast("Notlar alınamadı — liste notsuz basılıyor", true);
+    return null;
+  }
+}
+// "HD: Derin kesit istenir · ÖEP: Dekal blok" — yazar kısaltması + metin, tarih yok.
+const yazdirNotMetni = (l) => l.map((n) => `${n.kisaltma || (n.yazan ? initials(n.yazan) : "")}${n.kisaltma || n.yazan ? ": " : ""}${oncelikNotMetni(n.metin)}`).join(" · ");
+// Satırın altındaki tam genişlikte not satırı (yoksa boş).
+function yazdirNotSatiri(sutun, istemNotlari, kaliteMetni) {
+  const parca = [];
+  if (istemNotlari && istemNotlari.length) parca.push(`<div class="yl-not">Not: ${esc(yazdirNotMetni(istemNotlari))}</div>`);
+  if (kaliteMetni) parca.push(`<div class="yl-not">Kalite notu: ${esc(kaliteMetni)}</div>`);
+  return parca.length ? `<tr class="yl-not-satir"><td class="yl-kutu"></td><td colspan="${sutun - 1}">${parca.join("")}</td></tr>` : "";
+}
+
 function yazdirMenuHTML(seciliVar) { // "yazdır" yetkisi yoksa CSS gizler (body.yzd-yok)
   return `<div class="exportbox yzbox">
     <button class="btn-ghost btn-sm yzbtn" type="button">${YAZDIR_IKON} Yazdır ▾</button>
@@ -2992,6 +3028,7 @@ function yazdirMenuHTML(seciliVar) { // "yazdır" yetkisi yoksa CSS gizler (body
       ${seciliVar ? `<button class="thopt" type="button" data-yz="secili">Seçilileri yazdır</button>` : ""}
       <button class="thopt" type="button" data-yz="gorunen">Görünenleri yazdır</button>
       <div class="yz-ayrac" role="separator"></div>
+      ${seciliVar ? `<label class="yz-not" data-yz-not-kap><input type="checkbox" data-yz-not> Notları yazdır</label><div class="yz-ayrac" role="separator" data-yz-not-kap></div>` : ""}
       <div class="yz-baslik">Sıralama</div>
       ${YZ_SIRALAR.map(([k, l]) => `<button class="thopt yz-sira" type="button" data-yz-sira="${k}" aria-pressed="false"><span class="yz-nokta" aria-hidden="true"></span>${l}</button>`).join("")}
     </div>
@@ -3009,9 +3046,20 @@ function bindYazdirMenu(boxSel, onPick) {
     e.stopPropagation();
     const secili = panel.querySelector('[data-yz="secili"]');
     if (secili) secili.disabled = bulkSelected.size === 0;
+    // "Notları yazdır" yalnız Çalışma Listesi ve Kesit Listesi'nde (arşivde yok)
+    panel.querySelectorAll("[data-yz-not-kap]").forEach((x) => x.classList.toggle("hidden", arsivEkraniMi()));
+    const notKutu = panel.querySelector("[data-yz-not]");
+    if (notKutu) notKutu.checked = yazdirNotTercih();
     siraIsaretle();
     panel.classList.toggle("open");
   });
+  const notKap = panel.querySelector("label[data-yz-not-kap]");
+  if (notKap) {
+    notKap.addEventListener("click", (e) => e.stopPropagation()); // menü kapanmasın
+    notKap.querySelector("input").addEventListener("change", (e) => {
+      try { localStorage.setItem(YZ_NOT_KEY, e.target.checked ? "1" : "0"); } catch (err) { /* bu oturumda */ }
+    });
+  }
   // Sıralama seçimi menüyü kapatmaz; tarayıcıda hatırlanır.
   panel.querySelectorAll("[data-yz-sira]").forEach((b) => b.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -9117,7 +9165,7 @@ function yazdirSecim(mod) {
 }
 const YAZDIR_BOS = { yazdirilmamis: "Yazdırılmamış kayıt yok — hepsi daha önce yazdırılmış", secili: "Seçili kayıt yok", gorunen: "Yazdırılacak kayıt yok" };
 
-function calismaListesiYazdir(mod = "gorunen") {
+async function calismaListesiYazdir(mod = "gorunen") {
   const gorunen = getVisibleRows();
   const ana = mod === "secili" ? rows.filter((r) => bulkSelected.has(r.kalem_id))
     : mod === "yazdirilmamis" ? gorunen.filter((r) => !yazdirildiMi(r, "calisma")) : gorunen;
@@ -9131,13 +9179,22 @@ function calismaListesiYazdir(mod = "gorunen") {
   const vakaSayisi = new Set(list.map((r) => r.patoloji_no)).size;
   const ilskSayisi = list.filter((r) => r.__iliskili).length;
   const ONC = PRIO_CIKTI;
+  const notlar = await yazdirNotlariGetir(list.map((r) => r.kalem_id));
+  const gorulenIstem = new Set();
   $("#yazdirAlani").innerHTML = `
     <div class="yl-bas"><div class="yl-baslik">Çalışma Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${list.length - ilskSayisi} kalem${ilskSayisi ? ` + ${ilskSayisi} ilişkili` : ""} · ${vakaSayisi} vaka · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
     <table class="yl-tablo">
       <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th class="yl-testsut">Test / Boya</th><th>Öncelik</th><th>Uzman Adına</th><th>İsteyen</th></tr></thead>
       <tbody>${list.map((r, i) => {
-        const cls = [ONC[r.oncelik] && !r.__iliskili ? "acil" : "", r.__iliskili ? "ilsk" : "", i > 0 && list[i - 1].patoloji_no !== r.patoloji_no ? "vaka-bas" : ""].filter(Boolean).join(" ");
+        // İstem notu istemin ilk satırının altında bir kez; kalite notu kendi satırının altında.
+        let notSatiri = "";
+        if (notlar) {
+          const ilk = !gorulenIstem.has(r.istem_id);
+          gorulenIstem.add(r.istem_id);
+          notSatiri = yazdirNotSatiri(7, ilk ? notlar.istem.get(r.istem_id) : null, notlar.kalite.get(r.kalem_id));
+        }
+        const cls = [ONC[r.oncelik] && !r.__iliskili ? "acil" : "", r.__iliskili ? "ilsk" : "", i > 0 && list[i - 1].patoloji_no !== r.patoloji_no ? "vaka-bas" : "", notSatiri ? "notlu" : ""].filter(Boolean).join(" ");
         return `<tr${cls ? ` class="${cls}"` : ""}>
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(r.patoloji_no)}${konsNot(r.kons_no)}${duzNot(r, "patoloji_no")}</td>
@@ -9146,7 +9203,7 @@ function calismaListesiYazdir(mod = "gorunen") {
           <td>${ONC[r.oncelik] || ""}${duzNot(r, "oncelik")}</td>
           <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}${duzNot(r, "uzman")}</td>
           <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>
-        </tr>`;
+        </tr>${notSatiri}`;
       }).join("")}</tbody>
     </table>`;
   yazdirmayiBaslat({ baglam: "calisma", kalemIdler: ana.map((r) => r.kalem_id), patlar: list.map((r) => r.patoloji_no) });

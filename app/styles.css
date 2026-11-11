@@ -970,6 +970,12 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
      yalnız kontrol bütün halde alt satıra kayar. */
   .yl-test{white-space:nowrap}
   .yl-tablo th.yl-testsut{width:38%}
+  /* İstem / kalite notları: satırın altında tam genişlikte, küçük italik */
+  .yl-tablo tr.notlu td{border-bottom:none;padding-bottom:2pt}
+  .yl-tablo tr.yl-not-satir{break-before:avoid;page-break-before:avoid}
+  .yl-tablo tr.yl-not-satir td{padding:0 6pt 6pt;font-size:9pt;font-style:italic;font-weight:400;color:#222;border-top:none}
+  .yl-not{overflow-wrap:anywhere}
+  .yl-not + .yl-not{margin-top:1pt}
   .yl-kontrol{display:inline-block;margin-left:2pt;font-size:8.5pt;font-weight:400;font-style:normal;color:#555;white-space:nowrap}
 }
 
@@ -1624,3 +1630,6 @@ th.sayi .ist-sira{text-align:right}
 }
 .ts-hepsi{border-color:var(--accent);color:var(--accent);font-weight:620}
 .ts-hepsi:hover{background:var(--accent);color:var(--on-accent)}
+.yz-not{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
+.yz-not input{width:16px;height:16px;accent-color:var(--accent)}
+.yz-not.hidden, .yz-ayrac.hidden{display:none}
