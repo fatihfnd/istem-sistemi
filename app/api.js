@@ -1530,6 +1530,21 @@
       }
     },
 
+    // Toplu teslim — tek istek (teslim_al_toplu, istatistik_teslim_sema.sql).
+    // Uygun olmayanlar sunucuda atlanır. Fonksiyon yoksa tek tek teslimAl.
+    // Dönen: { teslim, atlanan, hata }
+    async teslimAlToplu(kalemIds) {
+      const ids = [...new Set(kalemIds)].filter(Boolean);
+      if (!ids.length) return { teslim: 0, atlanan: 0, hata: 0 };
+      const { data, error } = await client.rpc("teslim_al_toplu", { p_kalem_ids: ids });
+      if (!error) return { teslim: data.teslim || 0, atlanan: data.atlanan || 0, hata: 0 };
+      if (!fonksiyonYok(error)) throw error;
+      const r = await Promise.allSettled(ids.map((id) => this.teslimAl(id)));
+      const ok = r.filter((x) => x.status === "fulfilled").length;
+      const atlanan = r.filter((x) => x.status === "rejected" && x.reason && x.reason.uygunDegil).length;
+      return { teslim: ok, atlanan, hata: ids.length - ok - atlanan };
+    },
+
     // ---------------- Sistem ayarları (okuma herkes, yazma yönetici) ----------------
     // Dönen: { anahtar: deger }. Tablo yoksa (SQL çalışmadıysa) boş nesne.
     async getAyarlar() {
@@ -1768,6 +1783,19 @@
     // periyot: "week" | "month". Hesap sunucuda (bkz. istatistik()).
     async istatistik(bas, bit, periyot) {
       const { data, error } = await client.rpc("istatistik", { p_bas: bas, p_bit: bit, p_periyot: periyot });
+      if (error) throw error;
+      return data;
+    },
+    // Kalem odaklı istatistik (istatistik_teslim_sema.sql) — tüm bölümler tek
+    // çağrıda, sunucuda toplanmış. Fonksiyon yoksa null (sayfa eski görünüme düşer).
+    async istatistikV2(bas, bit, periyot) {
+      const { data, error } = await client.rpc("istatistik_v2", { p_bas: bas, p_bit: bit, p_periyot: periyot });
+      if (error) { if (fonksiyonYok(error)) return null; throw error; }
+      return data;
+    },
+    // tur: "test" (anahtar = test anahtarı) | "isteyen" | "uzman" (anahtar = kullanıcı id, "" = boş)
+    async istatistikDetay(bas, bit, periyot, tur, anahtar) {
+      const { data, error } = await client.rpc("istatistik_detay", { p_bas: bas, p_bit: bit, p_periyot: periyot, p_tur: tur, p_anahtar: anahtar || "" });
       if (error) throw error;
       return data;
     },

@@ -173,7 +173,6 @@ $$;
 -- 4) istatistik() — imza aynı (özet e-postası). Değişen: yetki
 --    (istatistik_yetkili) ve teslim_bekleyen (Teslim al kuralı, < N gün);
 --    eklenen: teslim_kayit_yok. Diğer her şey teslim_sema.sql'deki gibi.
---    (yetki_katalog_sema eki: if not (public.yetki_var('s_istatistik') or current_user in — artık istatistik_yetkili())
 -- ------------------------------------------------------------
 create or replace function public.istatistik(p_bas date, p_bit date, p_periyot text default 'week') returns jsonb
 language plpgsql stable security invoker set search_path = public as $$
@@ -185,6 +184,9 @@ declare
   tsy jsonb;
   sonuc jsonb;
 begin
+  -- Yetki istatistik_yetkili()'de. (yetki_katalog_sema.sql'in eski bağlama
+  -- satırı — "if not (public.yetki_var('s_istatistik') or current_user in" —
+  -- bu yorumdadır; o dosya yeniden çalışınca "zaten bağlı" der.)
   if not public.istatistik_yetkili() then
     raise exception 'İstatistikleri görme yetkiniz yok' using errcode = '42501';
   end if;

@@ -260,6 +260,37 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 - **Birleştir:** listede iki testi işaretleyin (ya da Olası tekrarlar'dan) → kalacak olanı seçin → önizleme: kaç istem kalemi / şablon kalemi / istek seti kalemi / duyuru taşınacak, hangi eş adlar eklenecek, hangi boş alanlar dolacak → onay. Tek işlemde (`test_birlestir`): testi kullanan tüm kayıtlar kalan teste taşınır, gidenin adı ve eş adları kalanın eş adı olur, kalanda boş olan klon / kontrol / açıklama gidenden dolar, giden pasife alınır ve "birleştirildi" işaretlenir, geçmişe yazılır. Yalnız aynı gruptaki testler birleştirilir.
 - **Liste içe aktar** (eski "Toplu Ekle" ve "Kontrol listesi yükle" bunun içindedir): .xlsx / .csv dosyası ya da Excel'den yapıştırılan satırlar. Sütunlar: ad (zorunlu), grup, klon, kontrol, açıklama — başlık satırından kendiliğinden eşlenir, önizlemede elle değiştirilebilir; grup yazılmamış satırlar seçilen varsayılan gruba gider; kontrol "X" boş sayılır. Önizleme dört grup: **eşleşen** (fark varsa alan alan eski → yeni; işaretliler güncellenir, listedeki boş hücre katalogdaki değeri silmez) · **yeni eklenecek** · **olası tekrar / eş ad** ("Aynı" → listedeki ad o testin eş adı olur; "Farklı" → yeni test; seçilmeyen atlanır) · **katalogda olup listede olmayan** (yalnız bilgi). "Duyuru oluştur" kutusu varsayılan **kapalı** (ilk büyük yükleme sessiz). Onaylanınca tek işlem (`katalog_ice_aktar`).
 
+## 1u) Kalem odaklı İstatistikler, teslim takibi ve teslim kolaylığı (`istatistik_teslim_sema.sql`)
+**Sıra: önce uygulama (Netlify), sonra SQL.** `yetki_katalog_sema.sql`'den sonra SQL Editor'de çalıştırın (idempotent; tek seferde ya da 2 parça). SQL çalışana kadar İstatistikler sayfası eski görünümüyle açılır, toplu teslim tek tek isteğe düşer. Edge Function değişmez. Son sonuç tablosu bu haftanın kartlarını **eski kural / yeni kural** yan yana ve `tamamlandi_at` doldurma sonucunu gösterir.
+
+**Tamamlanma zamanı — `updated_at` kullanılmaz**
+- Tamamlanma zamanı yalnız `istem_kalemleri.tamamlandi_at` ve durum geçmişindeki (`istem_log`) "tamamlandi" kaydıdır. Boş `tamamlandi_at`'ler log'dan doldurulur; log da yoksa boş kalır.
+- Süre ve dönem hesaplarına yalnız log'da "tamamlandi" kaydı olan kalemler girer (eski `kons_eski_sema.sql` doldurması log yoksa `updated_at` kullanmıştı).
+- **Hata düzeltmesi:** "Tamamlanma → teslim" kartındaki bekleyen sayısı (eskiden log yoksa `updated_at`'e bakıyordu) artık "Teslim al" düğmesinin kuralıyla birebir: Tamamlandı, `tamamlandi_at ≥ teslim_takip_baslangic`, teslim alınmamış. `istatistik()` (özet e-postası) de aynı kurala döndü; imzası aynı.
+
+**Teslim takibi**
+- Yeni ayar `teslim_kayit_yok_gun` = 7 (Görünüm ayarları > Sistem ayarları, yönetici). Tamamlanalı bu kadar gün geçmiş, teslim alınmamış kalemler "Teslim bekliyor"a sayılmaz; ayrı **"Teslim kaydı yok (7+ gün)"** olarak gösterilir, yine teslim alınabilir.
+- **Teslim alma oranı** = aralıkta tamamlananların teslim alınan / (teslim alınan + teslim kaydı yok). Henüz 7 günü dolmamış bekleyenler sayılmaz. Kişi bazında: "İsteyen" görünümünde istemi girene, "Uzman" görünümünde adına istenen uzmana — her kalem bir görünümde yalnız bir kişiye sayılır.
+
+**İstatistikler sayfası** (yetki: "İstatistik" sayfa yetkisi; yetki sistemi yoksa yönetici). Ana ölçü **kalem**; tüm hesap sunucuda (`istatistik_v2`, ayrıntılar `istatistik_detay`), istemciye ham satır gelmez. Tarih aralığı (Bu hafta / Bu ay / Son 3 ay / Özel) tüm bölümlere uygulanır; açık iş yaşlanması bugünün durumudur. Her tablo başlığa tıklayınca sıralanır ve **Excel'e aktar** ile indirilir.
+- Kartlar: Kalem, İstem, Vaka (benzersiz patoloji no), Vaka başına test, Tamamlanan, Ort./medyan tamamlanma, Şu an açık; önceki eşit döneme göre % değişim. Teslim: tamamlanma → teslim, teslim alma oranı, Teslim bekliyor, Teslim kaydı yok — sayım kuralı kart altında.
+- Test bazında: kalem, vaka, değişim, ort./medyan süre, tekrar; grup filtresi, arama, en çok istenen 15 test grafiği; teste dokununca dönem seyri ve en çok isteyenler.
+- Kişi bazında: İsteyen / Uzman (adına) geçişi, kalem, istem, teslim alma oranı; kişiye dokununca en çok istediği testler. Dar ekranda kısaltma, tam ad ipucunda.
+- İş yükü: aralıkta kim kaç kalemi İşleme aldı / tamamladı; ekip toplamı.
+- Süreler: gruba ya da önceliğe göre bekleme (istem → işleme alma), işlem (işleme alma → tamamlama), tamamlama → teslim; ortalama, medyan, %90.
+- Açık iş yaşlanması (0–1 / 1–3 / 3–7 / 7–14 / 14+ gün, grup bazında) ve yoğunluk haritası (haftanın günü × saat).
+- Haftalık/aylık döküm: tüm gruplar veritabanından (FISH, Moleküler, Diğer dahil); geniş ekranda kaydırmasız, dar ekranda ilk sütun sabit.
+
+**Teslim almayı kolaylaştırma** ("Teslim al" yetkisi olanlar; teknisyende yok)
+- İş Kuyruğu'nda **"Teslim alınacaklar (N)"** şeridi (kendi istediğiniz ya da adınıza istenen; 7+ günlükler ayrıca) ve menüde İş Kuyruğu rozeti — gecikme eşiğini geçen varsa turuncu.
+- Şeride dokununca vaka bazında panel: **"Bu vakanın hepsini teslim aldım"**, çoklu seçim ve **Seçilenleri teslim al** (tek istekte: `teslim_al_toplu`; uygun olmayanlar atlanır ve sayılır). Patoloji no yazın ya da DataMatrix okutun → o vakanın teslim bekleyenleri.
+- Gecikmiş kalem varsa günde bir kez nazik hatırlatma (bu tarayıcıda, kullanıcı başına); telefona bildirim gitmez.
+- Benim İsteklerim > Teslim bekleyen: "Son 7 gün" ve "Teslim kaydı yok (7+ gün)" alt sekmeleri.
+
+**Düğmeler**
+- İstemi düzeltirken alt çubukta yalnız **Vazgeç** ve **Değişiklikleri kaydet** (durum düğmeleri — "Tamamla" — form kapanınca geri gelir). "Tamamla" yalnız kalemi Tamamlandı'ya alan işlemdedir.
+- Simge düğmelere metin: **✎ Düzenle**, **↻ Yenile**, satırlardaki **Geri Al**, notlarda **Sil** (çok dar ekranda yalnız metin).
+
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):
 ```
