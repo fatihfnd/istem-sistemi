@@ -966,7 +966,11 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
 }
 
 @media print{
-  .yl-kontrol{font-style:italic;font-size:9pt;font-weight:400;margin-top:1pt}
+  /* Test satırı: "CD20 (L26) · K: Tonsil" — test adı + klon bölünmez; sığmazsa
+     yalnız kontrol bütün halde alt satıra kayar. */
+  .yl-test{white-space:nowrap}
+  .yl-tablo th.yl-testsut{width:38%}
+  .yl-kontrol{display:inline-block;margin-left:2pt;font-size:8.5pt;font-weight:400;font-style:normal;color:#555;white-space:nowrap}
 }
 
 /* ---------------- "Yazıyor…" (Presence) ---------------- */

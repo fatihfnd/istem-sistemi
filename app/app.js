@@ -3094,6 +3094,12 @@ function duzRozet(r, alan) {
 }
 const duzEski = (r, alan) => { const d = duzBilgi(r, alan); return d ? `<div class="duz-eski">${esc(duzDeger(alan, d.eski))}</div>` : ""; };
 // Çıktıda: "(düzeltildi: eski 17730/26)"
+// Çıktıda test: "CD20 (L26) · K: Tonsil" — tek satır. Test adı + klon
+// bölünmez (yl-test); satır sığmazsa yalnız kontrol kısmı alt satıra kayar
+// (yl-kontrol bütün halde sarılır). Kontrol yoksa "· K:" hiç yazılmaz.
+// Yalnız yazdırma — ekrandaki listeler kendi gösterimini kullanır.
+const yazdirTestHTML = (r) => `<span class="yl-test">${esc(r.test_adi)}${r.klon ? ` <span class="yl-klon">(${esc(r.klon)})</span>` : ""}</span>`
+  + (r.kontrol ? ` <span class="yl-kontrol">· K: ${esc(r.kontrol)}</span>` : "");
 const duzNot = (r, alan) => { const d = duzBilgi(r, alan); return d ? `<div class="yl-duz">(düzeltildi: eski ${esc(duzDeger(alan, d.eski))})</div>` : ""; };
 // Blok satırları (kesit / arşiv): bloğun düzeltilmiş ilk kalemi
 const blokDuzKalem = (items, alan) => items.find((r) => duzBilgi(r, alan)) || null;
@@ -9129,14 +9135,14 @@ function calismaListesiYazdir(mod = "gorunen") {
     <div class="yl-bas"><div class="yl-baslik">Çalışma Listesi</div><div>${esc(formatDateFull(new Date().toISOString()))}</div></div>
     <div class="yl-alt">${list.length - ilskSayisi} kalem${ilskSayisi ? ` + ${ilskSayisi} ilişkili` : ""} · ${vakaSayisi} vaka · Hazırlayan: ${esc(kisaAd(session.ad_soyad, session.kisaltma))}</div>
     <table class="yl-tablo">
-      <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th>Test / Boya</th><th>Öncelik</th><th>Uzman Adına</th><th>İsteyen</th></tr></thead>
+      <thead><tr><th class="yl-kutu"></th><th>Patoloji No</th><th>Blok</th><th class="yl-testsut">Test / Boya</th><th>Öncelik</th><th>Uzman Adına</th><th>İsteyen</th></tr></thead>
       <tbody>${list.map((r, i) => {
         const cls = [ONC[r.oncelik] && !r.__iliskili ? "acil" : "", r.__iliskili ? "ilsk" : "", i > 0 && list[i - 1].patoloji_no !== r.patoloji_no ? "vaka-bas" : ""].filter(Boolean).join(" ");
         return `<tr${cls ? ` class="${cls}"` : ""}>
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(r.patoloji_no)}${konsNot(r.kons_no)}${duzNot(r, "patoloji_no")}</td>
           <td class="yl-id">${esc(r.blok_no || "—")}${duzNot(r, "blok_no")}</td>
-          <td>${esc(r.test_adi)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${r.kontrol ? `<div class="yl-kontrol">K: ${esc(r.kontrol)}</div>` : ""}${yazdirDuyuruHTML(r)}${duzNot(r, "test")}</td>
+          <td>${yazdirTestHTML(r)}${r.__iliskili ? ` <span class="yl-ilsk">(ilişkili · ${esc(grupKisa(r.grup))})</span>` : ""}${yazdirDuyuruHTML(r)}${duzNot(r, "test")}</td>
           <td>${ONC[r.oncelik] || ""}${duzNot(r, "oncelik")}</td>
           <td>${esc(kisaAd(r.uzman_adi, r.uzman_kisaltma))}${duzNot(r, "uzman")}</td>
           <td>${esc(kisaAd(r.isteyen_adi, r.isteyen_kisaltma))}</td>
