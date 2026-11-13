@@ -59,7 +59,7 @@ export interface Ozet {
 const SUTUN_ISTEM = ["Patoloji No", "Kons. No", "İsteyen", "Uzman Adına", "Öncelik", "Not", "Tarih", "Kalem Sayısı", "Tekrar", "Fatura Durumu", "Fatura Giren", "Fatura Zamanı"];
 // Sütun adları KUYRUK_EXPORT_COLS (app.js) ile aynı etiketler ("Teslim Alan",
 // "Teslim Zamanı" Durum'dan hemen sonra).
-const SUTUN_KALEM = ["Patoloji No", "Kons. No", "Blok", "Test", "Klon", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Teslim Alan", "Teslim Zamanı", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
+const SUTUN_KALEM = ["Patoloji No", "Kons. No", "Blok", "Test", "Klon", "Kromojen", "Tip", "İsteyen", "Uzman Adına", "Tarih", "Öncelik", "Durum", "Teslim Alan", "Teslim Zamanı", "Tekrar", "Not", "Kalite Notu", "Cihaz", "Tekrar Kaynağı", "Son Güncelleme", "Düzeltildi"];
 const SUTUN_DUZ = ["Zaman", "Patoloji No (güncel)", "Alan", "Eski", "Yeni", "Kalem", "Düzelten"];
 
 // "Düzeltildi" sütunu — uygulamadaki duzeltmeOzeti ile aynı biçim:
@@ -133,6 +133,7 @@ export function okunabilirSayfalar(v: YedekVerisi) {
     "Blok": r.blok_no ?? "",
     "Test": r.test_adi ?? "",
     "Klon": r.klon ?? "",
+    "Kromojen": r.kromojen === "kirmizi" ? "Kırmızı" : r.kromojen === "dab" ? "DAB" : "",
     "Tip": tip.get(r.grup) ?? "Diğer",
     "İsteyen": r.isteyen_adi ?? "",
     "Uzman Adına": r.uzman_adi ?? "",

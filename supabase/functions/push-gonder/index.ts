@@ -14,6 +14,11 @@
 //                         grup tercihinden bağımsız): "Kritik duyuru" / "CD3 · çalışmıyor";
 //                         cozuldu → o testi son 7 günde istemiş kişiler (çözen hariç):
 //                         "CD3 duyurusu çözüldü"
+//                         stok_geldi (katalog_stok_kromojen_sema.sql) → herkese "✓ X tekrar
+//                         mevcut"; o testin BEKLEYEN kalemi olan isteyenlere "— bekleyen N kaleminiz var"
+//  {"talep_id": "...", "olay": "katalog_talep" | "katalog_talep_sonuc"}
+//                         kataloğa ekleme talebi → katalog düzenleme yetkililerine;
+//                         sonuç (eklendi / var / reddedildi) → talep edene
 //  {"islem": "anahtar"}   kurulum (service_role) → VAPID anahtarı yoksa üretip Vault'a
 //                         yazar (istem_vapid_private / istem_vapid_public); özel anahtar
 //                         HİÇBİR yere dönmez/loglanmaz
@@ -328,6 +333,34 @@ async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
     if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
     adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== d.yazan_id);
     yuk = { title: "Test kataloğu", body: d.baslik, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
+  } else if (olay === "stok_geldi") {
+    // Stok geldi: herkese (geri getiren hariç) bilgi; o testin bekleyen kalemi
+    // olan isteyenlere metin + bekleyen sayısı (tek bildirim, çift gelmez).
+    const { data: herkes, error: e2 } = await db.from("kullanicilar").select("id").eq("aktif", true);
+    if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
+    adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== d.yazan_id);
+    yuk = { title: "Test tekrar mevcut", body: d.baslik, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
+    if (d.test_id) {
+      const { data: bekleyen } = await db.from("istem_kalemleri").select("istem_id").eq("test_id", d.test_id).eq("durum", "bekleyen");
+      const istemIdler = [...new Set((bekleyen ?? []).map((k: { istem_id: string }) => k.istem_id))];
+      const sayi = new Map<string, number>();
+      if (istemIdler.length) {
+        const { data: ist } = await db.from("istemler").select("id,istem_yapan_id").in("id", istemIdler);
+        const yapan = new Map<string, string>((ist ?? []).map((i: { id: string; istem_yapan_id: string }) => [i.id, i.istem_yapan_id] as [string, string]));
+        (bekleyen ?? []).forEach((k: { istem_id: string }) => { const u = yapan.get(k.istem_id); if (u) sayi.set(u, (sayi.get(u) ?? 0) + 1); });
+      }
+      if (sayi.size) {
+        const { data: abonelikler, error: e4 } = await db.from("push_abonelikleri").select("id,kullanici_id,endpoint,keys").in("kullanici_id", adaylar);
+        if (e4) throw new Error(`abonelikler okunamadı: ${e4.message}`);
+        if (!abonelikler?.length) return bos;
+        const vapid = await anahtarlariOku(db);
+        if (!vapid) throw new Error("VAPID anahtarı yok — kurulum adımı ({\"islem\":\"anahtar\"}) yapılmamış");
+        return await topluGonder(db, vapid, abonelikler.map((ab: Abonelik & { kullanici_id: string }) => {
+          const n = sayi.get(ab.kullanici_id);
+          return { ab, acil: false, yuk: n ? { ...yuk, body: `${d.baslik} — bekleyen ${n} kaleminiz var` } : yuk };
+        }));
+      }
+    }
   } else {
     return { ...bos, hatalar: [`bilinmeyen olay: ${olay}`] };
   }
@@ -339,6 +372,49 @@ async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
   const vapid = await anahtarlariOku(db);
   if (!vapid) throw new Error("VAPID anahtarı yok — kurulum adımı ({\"islem\":\"anahtar\"}) yapılmamış");
   return await topluGonder(db, vapid, abonelikler.map((ab: Abonelik) => ({ ab, acil, yuk })));
+}
+
+// Kataloğa ekleme talebi (katalog_stok_kromojen_sema.sql).
+// katalog_talep: katalog düzenleme yetkililerine (talep eden hariç);
+// katalog_talep_sonuc: talep edene (eklendi / var / reddedildi).
+async function talepBildir(db: Db, talepId: string, olay: string) {
+  const bos = { gonderilen: 0, silinen: 0, hatalar: [] as string[] };
+  const { data: t, error: e1 } = await db.from("katalog_talepleri")
+    .select("id,ad,notu,durum,cevap,talep_eden_id,sonuc_test_id").eq("id", talepId).maybeSingle();
+  if (e1) throw new Error(`talep okunamadı: ${e1.message}`);
+  if (!t) return { ...bos, hatalar: ["talep bulunamadı"] };
+  let adaylar: string[] = [];
+  let yuk: Record<string, unknown>;
+  if (olay === "katalog_talep") {
+    const { data: yetkili, error: e2 } = await db.rpc("katalog_duzenleyenler");
+    if (e2) throw new Error(`yetkililer okunamadı: ${e2.message}`);
+    adaylar = ((yetkili ?? []) as unknown[]).map((x) => (typeof x === "string" ? x : (x as Record<string, string>).katalog_duzenleyenler))
+      .filter((id) => id && id !== t.talep_eden_id);
+    const { data: kim } = await db.from("kullanicilar").select("ad_soyad,kisaltma").eq("id", t.talep_eden_id).maybeSingle();
+    const k = kim?.kisaltma || kim?.ad_soyad || "Bir kullanıcı";
+    yuk = { title: "Kataloğa ekleme talebi", body: `${k}: “${t.ad}”${t.notu ? ` — ${t.notu}` : ""}`, tag: `talep-${t.id}`, url: "./", talep_id: t.id };
+  } else if (olay === "katalog_talep_sonuc") {
+    if (!t.talep_eden_id || t.durum === "bekliyor") return bos;
+    adaylar = [t.talep_eden_id];
+    let test = "";
+    if (t.sonuc_test_id) {
+      const { data: tk } = await db.from("test_katalog").select("ad").eq("id", t.sonuc_test_id).maybeSingle();
+      test = tk?.ad || "";
+    }
+    const body = t.durum === "eklendi" ? `“${t.ad}” kataloğa eklendi${test && test !== t.ad ? ` (${test})` : ""}`
+      : t.durum === "var" ? `“${t.ad}” katalogda var: ${test}${t.cevap ? ` — ${t.cevap}` : ""}`
+      : `“${t.ad}” talebi kabul edilmedi${t.cevap ? ` — ${t.cevap}` : ""}`;
+    yuk = { title: "Katalog talebiniz", body, tag: `talep-${t.id}`, url: "./", talep_id: t.id };
+  } else {
+    return { ...bos, hatalar: [`bilinmeyen olay: ${olay}`] };
+  }
+  if (!adaylar.length) return bos;
+  const { data: abonelikler, error: e4 } = await db.from("push_abonelikleri").select("id,kullanici_id,endpoint,keys").in("kullanici_id", adaylar);
+  if (e4) throw new Error(`abonelikler okunamadı: ${e4.message}`);
+  if (!abonelikler?.length) return bos;
+  const vapid = await anahtarlariOku(db);
+  if (!vapid) throw new Error("VAPID anahtarı yok — kurulum adımı ({\"islem\":\"anahtar\"}) yapılmamış");
+  return await topluGonder(db, vapid, abonelikler.map((ab: Abonelik) => ({ ab, acil: false, yuk })));
 }
 
 // JWT'nin "role" iddiası — imzayı ağ geçidi ("Verify JWT") zaten doğruladı.
@@ -399,6 +475,14 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, ...r });
     }
 
+    // ---- trigger: kataloğa ekleme talebi / sonucu ----
+    if (govde.talep_id) {
+      if (!servisMi) return json({ ok: false, hata: "yetkisiz" }, 403);
+      const r = await talepBildir(db, String(govde.talep_id), String(govde.olay || ""));
+      if (r.hatalar.length) console.error("[push-gonder] talep", govde.talep_id, govde.olay, r.hatalar);
+      return json({ ok: true, ...r });
+    }
+
     // ---- trigger: yeni istem ----
     if (govde.istem_id) {
       if (!servisMi) return json({ ok: false, hata: "yetkisiz" }, 403);
@@ -410,7 +494,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, ...r });
     }
 
-    return json({ ok: false, hata: "Geçersiz istek: istem_id, duyuru_id ya da islem (anahtar | test) gerekli" }, 400);
+    return json({ ok: false, hata: "Geçersiz istek: istem_id, duyuru_id, talep_id ya da islem (anahtar | test) gerekli" }, 400);
   } catch (e) {
     console.error("[push-gonder]", e);
     if (govde.istem_id) {
