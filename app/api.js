@@ -135,6 +135,7 @@
   // istem_ozellikler(): hangi parçalar kurulu ({ getir, canli_yayin, ... }).
   // Oturumda bir kez okunur; fonksiyon yoksa {} (eski sorgular, tablo dinleme).
   let ozellik = null, ozellikIstegi = null;
+  let katalogV3Durum = null;  // katalog_stok_kromojen_sema.sql kurulu mu (oturumda bir kez)
   async function ozellikYokla() {
     if (ozellik) return ozellik;
     if (!ozellikIstegi) {
@@ -552,21 +553,30 @@
           if (data.length < 1000) return satirlar;
         }
       };
-      let liste, yeni = true;
-      try { liste = await oku("id,grup,ad,klon,kontrol,aciklama,es_adlar,aktif,sira,birlesti_id"); }
-      catch (e) {
-        if (!(e && (e.code === "42703" || /aciklama|es_adlar|birlesti_id/.test(String(e.message || ""))))) throw e;
-        yeni = false;
-        liste = (await oku("id,grup,ad,klon,kontrol,aktif,sira")).map((t) => ({ ...t, aciklama: null, es_adlar: [], birlesti_id: null }));
+      let liste, yeni = true, stoklu = true;
+      const kolonYok = (e) => e && (e.code === "42703" || /column .* does not exist/i.test(String(e.message || "")));
+      try { liste = await oku("id,grup,ad,klon,kontrol,aciklama,es_adlar,aktif,sira,birlesti_id,stok,stok_yok_baslangic,stok_aciklama,stok_duyuru_id"); }
+      catch (e0) {
+        if (!kolonYok(e0)) throw e0;
+        stoklu = false;
+        try { liste = await oku("id,grup,ad,klon,kontrol,aciklama,es_adlar,aktif,sira,birlesti_id"); }
+        catch (e) {
+          if (!(e && (e.code === "42703" || /aciklama|es_adlar|birlesti_id/.test(String(e.message || ""))))) throw e;
+          yeni = false;
+          liste = (await oku("id,grup,ad,klon,kontrol,aktif,sira")).map((t) => ({ ...t, aciklama: null, es_adlar: [], birlesti_id: null }));
+        }
       }
-      liste = liste.map((t) => ({ ...t, klon: t.klon || "", kontrol: t.kontrol || "", aciklama: t.aciklama || "", es_adlar: t.es_adlar || [] }));
+      liste = liste.map((t) => ({ ...t, klon: t.klon || "", kontrol: t.kontrol || "", aciklama: t.aciklama || "", es_adlar: t.es_adlar || [],
+        stok: t.stok || "var", stok_yok_baslangic: t.stok_yok_baslangic || null, stok_aciklama: t.stok_aciklama || "", stok_duyuru_id: t.stok_duyuru_id || null }));
       liste.yeniAlanlar = yeni;
+      liste.stokAlanlari = stoklu;
       return liste;
     },
     // Ekle (id yok) / düzenle. Tekrar kontrolü veritabanında (23505: "Bu test zaten var: X").
-    async katalogKaydet({ id, grup, ad, klon, kontrol, aciklama, es_adlar, sira, aktif }) {
+    async katalogKaydet({ id, grup, ad, klon, kontrol, aciklama, es_adlar, sira, aktif, grupDegistir }) {
       const v = { ad, klon: klon || null, kontrol: kontrol || null, aciklama: aciklama || null, es_adlar: es_adlar || [] };
       if (aktif !== undefined) v.aktif = aktif;
+      if (id && grupDegistir && grup) v.grup = grup;  // grup değişimi: kalemler veritabanında taşınır
       if (sira !== undefined && sira !== null && sira !== "") v.sira = Number(sira) || 0;
       if (id) {
         const { data, error } = await client.from("test_katalog").update(v).eq("id", id).select("id");
@@ -596,8 +606,87 @@
       return (data || []).map((x) => ({ ...x, kim: (kisi(x.degistiren_id) || {}).ad || null }));
     },
     // Birleştirme: onizleme true → yalnız sayılar; false → tek işlemde taşır.
-    async testBirlestir(kalanId, gidenId, onizleme = true) {
-      const { data, error } = await client.rpc("test_birlestir", { p_kalan: kalanId, p_giden: gidenId, p_onizleme: onizleme });
+    // grup: kalacak testin grubu (null → kalanın grubu). Eski veritabanında
+    // (3 parametreli sürüm) grup gönderilmez.
+    async testBirlestir(kalanId, gidenId, onizleme = true, grup = null) {
+      const args = { p_kalan: kalanId, p_giden: gidenId, p_onizleme: onizleme };
+      if (grup) args.p_grup = grup;
+      const { data, error } = await client.rpc("test_birlestir", args);
+      if (error) throw error;
+      return data;
+    },
+
+    // ---------------- Yalnız katalog / stok / kromojen (katalog_stok_kromojen_sema.sql) ----------------
+    // katalog_talepleri tablosu varsa SQL çalışmıştır → serbest metin kalkar,
+    // "Kataloğa eklenmesini iste" çıkar; kırmızı kromojen ve stok açılır.
+    // Tablo yoksa (deploy SQL'den önce) uygulama bugünkü gibi çalışır.
+    async katalogV3() {
+      if (katalogV3Durum !== null) return katalogV3Durum;
+      const { error } = await client.from("katalog_talepleri").select("id").limit(1);
+      if (!error) katalogV3Durum = true;
+      else if (error.code === "PGRST205" || error.code === "42P01" || /could not find the table|does not exist/i.test(String(error.message || ""))) katalogV3Durum = false;
+      else return false;  // geçici hata: bu sefer kapalı say, sonra yeniden dene
+      return katalogV3Durum;
+    },
+    async katalogTalepEkle({ ad, notu, grup, talep_eden_id: ben }) {
+      const { data, error } = await client.from("katalog_talepleri")
+        .insert({ ad: String(ad).trim(), notu: notu ? String(notu).trim() : null, grup: grup || null, talep_eden_id: ben })
+        .select("id").single();
+      if (error) throw error;
+      return data;
+    },
+    // Yetkili: tüm talepler; diğerleri: kendi talepleri (RLS).
+    async katalogTalepleri() {
+      const { data, error } = await client.from("katalog_talepleri")
+        .select("id,ad,notu,grup,talep_eden_id,durum,sonuc_test_id,cevap,karar_veren_id,created_at,karar_at")
+        .order("created_at", { ascending: false }).limit(300);
+      if (error) throw error;
+      if (!kisiler) await kisileriYukle().catch(() => {});
+      return (data || []).map((t) => ({ ...t, isteyen: kisi(t.talep_eden_id) || null, karar_veren: kisi(t.karar_veren_id) || null }));
+    },
+    async katalogTalepKarar(talepId, karar, testId = null, cevap = null) {
+      const { data, error } = await client.rpc("katalog_talep_karar", { p_talep: talepId, p_karar: karar, p_test: testId, p_cevap: cevap });
+      if (error) throw error;
+      return data;
+    },
+    async eskiSerbestListesi() {
+      const { data, error } = await client.rpc("eski_serbest_listesi");
+      if (error) throw error;
+      return data || [];
+    },
+    // eslesmeler: [{anahtar, test_id}] → {istem, sablon, set}
+    async eskiSerbestBagla(eslesmeler) {
+      const { data, error } = await client.rpc("eski_serbest_bagla", { p_eslesmeler: eslesmeler });
+      if (error) throw error;
+      return data;
+    },
+    async kromojenDuzelt(kalemId, kromojen) {
+      const { data, error } = await client.rpc("kalem_kromojen_duzelt", { p_kalem: kalemId, p_kromojen: kromojen });
+      if (error) throw error;
+      return data;
+    },
+    // yok true → "Tükendi" (kritik duyuru); false → "Geldi".
+    async katalogStok(testId, yok, aciklama = null) {
+      const { data, error } = await client.rpc("katalog_stok", { p_test: testId, p_yok: Boolean(yok), p_aciklama: aciklama || null });
+      if (error) throw error;
+      return data;
+    },
+    // onizleme true → {silinebilir, kullanim}; false → siler (kullanılmamışsa).
+    async testSil(testId, onizleme = true) {
+      const { data, error } = await client.rpc("test_sil", { p_test: testId, p_onizleme: onizleme });
+      if (error) throw error;
+      return data;
+    },
+    async silinenTestler() {
+      const { data, error } = await client.from("test_katalog_silinen")
+        .select("id,test_id,ad,grup,klon,kontrol,aciklama,es_adlar,silen_id,silindi_at,geri_yuklendi_at")
+        .order("silindi_at", { ascending: false }).limit(300);
+      if (error) throw error;
+      if (!kisiler) await kisileriYukle().catch(() => {});
+      return (data || []).map((x) => ({ ...x, silen: kisi(x.silen_id) || null }));
+    },
+    async testGeriYukle(silinenId) {
+      const { data, error } = await client.rpc("test_geri_yukle", { p_silinen: silinenId });
       if (error) throw error;
       return data;
     },
@@ -1604,6 +1693,10 @@
       }
 
       const kalemler = [];
+      // Kırmızı varsa HER satıra kromojen yazılır: toplu insert'te eksik alan
+      // NULL gider (varsayılan değil) → sütun NOT NULL. Hiç kırmızı yoksa
+      // alan gönderilmez (SQL öncesi veritabanında sütun yok).
+      const kromVar = testler.some((t) => t.kromojen === "kirmizi");
       bloklar.forEach((blok_no) => {
         testler.forEach((t) => {
           kalemler.push({
@@ -1612,6 +1705,7 @@
             test_id: t.test_id || null,
             ozel_test: t.ozel_test || null,
             grup: t.grup,
+            ...(kromVar ? { kromojen: t.kromojen === "kirmizi" ? "kirmizi" : "dab" } : {}),
           });
         });
       });

@@ -976,7 +976,9 @@ tbody tr.hiz-grup.kapali > td{opacity:.75}
   .yl-tablo tr.yl-not-satir td{padding:0 6pt 6pt;font-size:9pt;font-style:italic;font-weight:400;color:#222;border-top:none}
   .yl-not{overflow-wrap:anywhere}
   .yl-not + .yl-not{margin-top:1pt}
-  .yl-kontrol{display:inline-block;margin-left:2pt;font-size:8.5pt;font-weight:400;font-style:normal;color:#555;white-space:nowrap}
+  /* Kontrol: test adıyla aynı boyda, kalın, ince çerçeveli etiket "[K: Tonsil]" */
+  .yl-kontrol{display:inline-block;margin-left:4pt;padding:0 3pt;border:.6pt solid #000;border-radius:2pt;font-size:inherit;font-weight:700;font-style:normal;color:#000;line-height:1.25;white-space:nowrap}
+  .yl-krom{font-weight:800;color:#c00;letter-spacing:.02em}
 }
 
 /* ---------------- "Yazıyor…" (Presence) ---------------- */
@@ -1633,3 +1635,57 @@ th.sayi .ist-sira{text-align:right}
 .yz-not{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:13px;cursor:pointer;white-space:nowrap}
 .yz-not input{width:16px;height:16px;accent-color:var(--accent)}
 .yz-not.hidden, .yz-ayrac.hidden{display:none}
+
+/* ---------------- Yalnız katalog / kırmızı kromojen / stok (katalog_stok_kromojen_sema.sql) ---------------- */
+/* İstek Ver araması */
+.anti small.anti-grup{font-family:var(--sans);font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:0 4px}
+.anti.benzer{border-style:dashed}
+.anti-ayrac{display:block;width:100%;font-size:11px;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;margin:4px 0 -2px}
+.anti small.anti-stok{font-family:var(--sans);font-size:10px;font-weight:700;color:var(--kritik-i);border:1px solid currentColor;border-radius:5px;padding:0 4px;text-transform:uppercase;letter-spacing:.02em}
+.anti.stokyok{border-color:color-mix(in srgb, var(--kritik-i) 55%, var(--line));background:color-mix(in srgb, var(--kritik-i) 6%, var(--card))}
+.katalog-yok{display:flex;flex-direction:column;gap:8px;width:100%;font-size:12.5px;color:var(--ink-2);background:var(--paper);border:1px dashed var(--line);border-radius:9px;padding:10px 12px}
+.katalog-yok .ky-baslik b{color:var(--ink)}
+.katalog-yok .ky-btns{display:flex;flex-wrap:wrap;gap:8px}
+/* Kromojen: İHK çiplerinde ● (kırmızı = kırmızı nokta) + "hepsine" satırı */
+.krom-nokta{width:14px;height:14px;flex:0 0 14px;border-radius:50%;border:2px solid var(--ink-3);background:transparent;padding:0;cursor:pointer;margin-left:-2px}
+.krom-nokta.kirmizi{border-color:#c62828;background:#e53935}
+.anti.sel.krom-kirmizi{box-shadow:inset 3px 0 0 #e53935}
+.krom-satir{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0 2px;font-size:12px;color:var(--ink-2)}
+.krom-satir .ks-ad{font-weight:600}
+.ks-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.ks-seg button{border:0;background:var(--card);color:var(--ink-2);font:inherit;font-size:12px;padding:4px 10px;cursor:pointer}
+.ks-seg button + button{border-left:1px solid var(--line)}
+.ks-seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.ks-seg button[data-krom-tum="kirmizi"].on{background:#fdecea;color:#c62828}
+.krom-satir .ks-ipucu{color:var(--ink-3);font-size:11.5px}
+/* Satır / detay rozetleri */
+.krom-rozet{display:inline-block;margin-left:6px;padding:0 5px;border-radius:5px;background:#e53935;color:#fff;font-size:10px;font-weight:800;letter-spacing:.04em;line-height:16px;vertical-align:1px}
+.stok-rozet{display:inline-block;margin-left:6px;padding:0 5px;border-radius:5px;border:1px solid var(--kritik-i);color:var(--kritik-i);font-size:10px;font-weight:700;line-height:15px;vertical-align:1px;white-space:nowrap}
+.krom-sayi{color:#c62828;font-weight:700}
+html[data-mod="koyu"] .krom-sayi,html[data-mod="koyu"] .ks-seg button[data-krom-tum="kirmizi"].on{color:#ff8a80}
+html[data-mod="koyu"] .ks-seg button[data-krom-tum="kirmizi"].on{background:#3b1514}
+/* Form penceresi (talep, kataloğa ekle, stok açıklaması) */
+.fp-kutu .fp-alan{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-2)}
+.fp-kutu .fp-alan > span{font-weight:600}
+.fp-alan .fp-ipucu{color:var(--ink-3);font-size:11px}
+.fp-hata{color:var(--danger);font-size:12px;font-weight:600;margin:0}
+.onay-kutu .fp-alan{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-2)}
+/* Katalog sayfası */
+.kt-talep-say{display:inline-flex;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--accent);color:var(--on-accent);font-size:10px;font-weight:700;align-items:center;justify-content:center;margin-left:4px}
+.kt-talep-say:empty,.kt-talep-say[hidden]{display:none}
+.kt-tasi{display:inline-flex;gap:6px;align-items:center}
+.kt-tasi select.finput{width:auto;min-width:120px;padding:4px 8px;font-size:12.5px}
+.kt-tablo tr.stokyok td.kt-ad b{color:var(--kritik-i)}
+.kt-stok-not{margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--kritik-i);color:var(--kritik-i);font-size:12.5px;line-height:1.4}
+.kt-islemler{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.kt-islemler .m-label{width:100%;margin-bottom:0}
+.kt-islemler .kt-tukendi{color:var(--kritik-i);border-color:var(--kritik-i)}
+.kt-islemler .kt-sil{color:var(--danger)}
+.es-ust{display:flex;align-items:center;gap:10px;margin:0 0 10px;font-size:12.5px;color:var(--ink-2)}
+.es-ust .grow{flex:1}
+.es-tablo select.finput{min-width:200px;padding:4px 8px;font-size:12.5px}
+.es-adet b{font-size:14px}
+.es-guven{display:inline-block;padding:1px 6px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap}
+.es-guven.g-tam{background:color-mix(in srgb, #2e7d32 14%, var(--card));color:#2e7d32}
+.es-guven.g-es{background:var(--accent-soft);color:var(--accent)}
+.es-guven.g-benzer{background:color-mix(in srgb, #b26a00 16%, var(--card));color:#b26a00}

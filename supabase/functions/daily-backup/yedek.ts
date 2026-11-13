@@ -64,12 +64,13 @@ const SUTUN_DUZ = ["Zaman", "Patoloji No (güncel)", "Alan", "Eski", "Yeni", "Ka
 
 // "Düzeltildi" sütunu — uygulamadaki duzeltmeOzeti ile aynı biçim:
 // "Patoloji no: 17730/26 → 17703/26; Blok: A1 → A2" (eski = İLK girilen).
-const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", kons_no: "Konsültasyon no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
-const duzDeger = (alan: string, v: unknown) => String((alan === "oncelik" ? ONCELIK[String(v)] ?? v : v) || "—");
+const DUZ_ALAN: Record<string, string> = { patoloji_no: "Patoloji no", kons_no: "Konsültasyon no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik", kromojen: "Kromojen" };
+const duzDeger = (alan: string, v: unknown) => String((alan === "oncelik" ? ONCELIK[String(v)] ?? v
+  : alan === "kromojen" ? ({ kirmizi: "Kırmızı", dab: "DAB" } as Record<string, string>)[String(v)] ?? v : v) || "—");
 export function duzeltmeOzeti(r: Satir): string {
   const d = r.duzeltmeler as Record<string, { eski?: string }> | null | undefined;
   if (!d) return "";
-  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, kons_no: r.kons_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik };
+  const guncel: Record<string, unknown> = { patoloji_no: r.patoloji_no, kons_no: r.kons_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik, kromojen: r.kromojen };
   return Object.keys(DUZ_ALAN).filter((a) => d[a])
     .map((a) => `${DUZ_ALAN[a]}: ${duzDeger(a, d[a].eski)} → ${duzDeger(a, guncel[a])}`).join("; ");
 }

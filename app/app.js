@@ -35,6 +35,7 @@ const KUYRUK_EXPORT_COLS = [
   { label: "Blok", value: (r) => r.blok_no },
   { label: "Test", value: (r) => r.test_adi },
   { label: "Klon", value: (r) => r.klon || "" },
+  { label: "Kromojen", value: (r) => (r.kromojen === "kirmizi" ? "Kırmızı" : r.kromojen === "dab" ? "DAB" : "") },
   { label: "Kontrol", value: (r) => r.kontrol || "" },
   { label: "Tip", value: (r) => TIP[r.grup] || "Diğer" },
   { label: "İsteyen", value: (r) => r.isteyen_adi || "" },
@@ -724,8 +725,12 @@ async function initApp(user) {
     Api.getSonKullanilanTestler(user.id), Api.getSonKullanilanSetler(user.id), Api.getAyarlar(),
     Api.konsYokla(),
     typeof Api.yetkilerim === "function" ? Api.yetkilerim() : null,
+    typeof Api.katalogV3 === "function" ? Api.katalogV3() : false,
   ]);
-  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR, ayarR, , yetkiR] = results;
+  const [catR, setlerR, sablonR, uzmanlarR, cihazlarR, gruplarR, sonTestR, sonSetR, ayarR, , yetkiR, kv3R] = results;
+  KV3 = kv3R.status === "fulfilled" && kv3R.value === true;
+  TALEPLER = []; talepIlk = true;
+  if (KV3) talepSayisiTazele();
   yetkileriUygula(yetkiR.status === "fulfilled" ? yetkiR.value : null);
   applyRoleUI();
   AYARLAR = ayarR.status === "fulfilled" ? ayarR.value : {};
@@ -765,6 +770,10 @@ async function initApp(user) {
 // değişince yayın kanalından. CAT = seçicilerdeki aktif testler (gruba göre).
 let KATALOG = [];
 let KATALOG_YENI = false; // açıklama / eş ad / birleştirme sütunları var mı
+// katalog_stok_kromojen_sema.sql kurulu mu (katalog_talepleri tablosu var mı):
+// evet → serbest metin yok, "Kataloğa eklenmesini iste", kırmızı kromojen, stok.
+let KV3 = false;
+let TALEP_SAYI = 0; // bekleyen ekleme talebi (yalnız katalog düzenleyenler)
 async function katalogYukle() {
   let liste = null;
   try { if (typeof Api.getKatalog === "function") liste = await Api.getKatalog(); } catch (e) { liste = null; }
@@ -774,6 +783,7 @@ async function katalogYukle() {
     const out = {};
     liste.forEach((t) => { if (t.aktif !== false && !t.birlesti_id) (out[t.grup] ??= []).push(t); });
     CAT = out;
+    STOK_YOK = new Map(liste.filter((t) => t.stok === "yok").map((t) => [t.id, t]));
   } else {
     CAT = await Api.getTestKatalog();
     KATALOG = Object.values(CAT).flat().map((t) => ({ kontrol: "", aciklama: "", es_adlar: [], aktif: true, birlesti_id: null, ...t }));
@@ -786,9 +796,45 @@ function katalogCanli() {
   clearTimeout(katalogZaman);
   katalogZaman = setTimeout(async () => {
     if (!session) return;
+    const oncekiStok = [...STOK_YOK.keys()].sort().join();
     try { await katalogYukle(); } catch (e) { return; }
     if (currentPage === "test-katalogu") katalogListeCiz();
+    // Stok değiştiyse kuyruktaki "Stokta yok" uyarıları ve açık formun çipleri yenilensin.
+    if ([...STOK_YOK.keys()].sort().join() !== oncekiStok) {
+      if (currentPage === "kuyruk" && typeof renderTable === "function") renderTable();
+      if ($("#antis")) renderAntis($("#antiSearch")?.value || "");
+    }
   }, 1200);
+}
+
+// Kataloğa ekleme talepleri: yetkiliye menü rozeti (bekleyen sayısı); talep
+// edene sonuçlandığında ekranda bildirim (push ayrıca gider).
+let TALEPLER = [];
+let talepZaman = null, talepIlk = true;
+function talepSayisiTazele() {
+  clearTimeout(talepZaman);
+  talepZaman = setTimeout(async () => {
+    if (!session || !KV3) return;
+    let l;
+    try { l = await Api.katalogTalepleri(); } catch (e) { return; }
+    const eski = new Map(TALEPLER.map((t) => [t.id, t.durum]));
+    if (!talepIlk) {
+      l.filter((t) => t.talep_eden_id === session.id && t.durum !== "bekliyor" && eski.get(t.id) === "bekliyor")
+        .forEach((t) => toast(t.durum === "eklendi" ? `Talebiniz: “${t.ad}” kataloğa eklendi`
+          : t.durum === "var" ? `Talebiniz: “${t.ad}” katalogda var${t.cevap ? ` — ${t.cevap}` : ""}`
+          : `Talebiniz: “${t.ad}” kabul edilmedi${t.cevap ? ` — ${t.cevap}` : ""}`));
+    }
+    talepIlk = false;
+    TALEPLER = l;
+    TALEP_SAYI = yetki("katalog_duzenle") ? l.filter((t) => t.durum === "bekliyor").length : 0;
+    const rozet = $("#ktNavSay");
+    if (rozet) {
+      rozet.hidden = !TALEP_SAYI;
+      rozet.textContent = TALEP_SAYI > 99 ? "99+" : String(TALEP_SAYI);
+      rozet.title = TALEP_SAYI ? `${TALEP_SAYI} kataloğa ekleme talebi bekliyor` : "";
+    }
+    if (currentPage === "test-katalogu" && typeof katalogTalepRozeti === "function") katalogTalepRozeti();
+  }, 400);
 }
 
 // Gruplar: GROUPS (seçiciler, kapsam çipleri) yalnız AKTİF; TIP ve
@@ -1702,7 +1748,7 @@ function anaSatirDoldur(tr, r, { acik, showCaseSel, patRozet }) {
       <td class="c-durum">${durumAksiyon(r)}</td>
       <td class="c-pat"><span class="pat-bas">${caseSel}${patBasHTML(r.patoloji_no)}${duzRozet(r, "patoloji_no")}</span>${patEkHTML(patRozet, notIkonHTML(r), yazdirIkonu([r], "calisma"))}${patAltHTML(r.patoloji_no, r.kons_no)}${duzEski(r, "patoloji_no")}${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}</td>
       <td class="c-blok">${blokKisaHTML(r.blok_no)}${duzRozet(r, "blok_no")}${caprazRozet(r, acik)}${duzEski(r, "blok_no")}</td>
-      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${duyuruSatirIsaretiHTML(r)}${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
+      <td class="c-test"><span class="tf" data-tf="testTam" data-v="${esc(r.test_adi)}" title="Bu isteğe göre filtrele">${esc(r.test_adi)}</span>${kromRozet(r)}${stokRozet(r)}${duyuruSatirIsaretiHTML(r)}${duzRozet(r, "test")}${tekrarTag}${yeniKalemler.has(r.kalem_id) ? `<span class="badge-yeni">Yeni</span>` : ""}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td class="c-tip">${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma, "isteyenTam")}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, "uzmanTam", duzRozet(r, "uzman") + duzEski(r, "uzman"))}
@@ -2498,7 +2544,7 @@ function iliskiliSatirHTML(r, dahil = false) {
       <td class="c-durum">${dahil ? durumAksiyon(r, etiket) : `<div class="dacts">${etiket}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span></div>`}</td>
       <td class="c-pat"><span class="pat-bas">${patBasHTML(r.patoloji_no)}${duzRozet(r, "patoloji_no")}</span>${patEkHTML(oncelikRozeti(r.oncelik), notIkonHTML(r), dahil ? yazdirIkonu([r], "calisma") : "")}${patAltHTML(r.patoloji_no, r.kons_no)}${duzEski(r, "patoloji_no")}${dahil ? ciktiEskiHTML(ciktiEskimi(r, "calisma")) : ""}</td>
       <td class="c-blok">${blokKisaHTML(r.blok_no)}${duzRozet(r, "blok_no")}${duzEski(r, "blok_no")}</td>
-      <td class="c-test">${esc(r.test_adi)}${duzRozet(r, "test")}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
+      <td class="c-test">${esc(r.test_adi)}${kromRozet(r)}${duzRozet(r, "test")}${kesitRozeti(r)}${klonKontrolHTML(r)}${duzEski(r, "test")}</td>
       <td class="c-tip">${tipTag(r.grup)}</td>
       ${kisiTd(r.isteyen_adi, r.isteyen_kisaltma)}
       ${kisiTd(r.uzman_adi, r.uzman_kisaltma, null, duzRozet(r, "uzman") + duzEski(r, "uzman"))}
@@ -2689,15 +2735,21 @@ function gorunenKesitBloklari() {
 }
 
 // "2 boş lam İHK: CD3, CD20 · 1 boş lam HK: PAS · Derin kesit"
-function kesitOzeti(list) {
+// html true → çıktı için HTML (test adı + KIRMIZI + kontrol etiketi "[K: Tonsil]");
+// false → düz metin (ekran; kırmızıda "CD20 KIRMIZI").
+function kesitOzeti(list, html = false) {
   const k = new Map(), e = [];
+  const ad = (r) => (html
+    ? `<span class="yl-test">${esc(r.test_adi)}${r.kromojen === "kirmizi" ? ` <b class="yl-krom">KIRMIZI</b>` : ""}</span>${r.kontrol ? ` <span class="yl-kontrol">K: ${esc(r.kontrol)}</span>` : ""}`
+    : `${r.test_adi}${r.kromojen === "kirmizi" ? " KIRMIZI" : ""}`);
   list.forEach((r) => {
-    if (grupE(r.grup)) { e.push(r.test_adi); return; }
+    if (grupE(r.grup)) { e.push(ad(r)); return; }
     if (!k.has(r.grup)) k.set(r.grup, []);
-    k.get(r.grup).push(r.test_adi);
+    k.get(r.grup).push(ad(r));
   });
   const sira = (g) => GRUP_BILGI[g]?.sira ?? 999;
-  const parca = [...k].sort((a, b) => sira(a[0]) - sira(b[0])).map(([g, t]) => `${t.length} boş lam ${grupKisa(g)}: ${t.join(", ")}`);
+  const h = (x) => (html ? esc(x) : x);
+  const parca = [...k].sort((a, b) => sira(a[0]) - sira(b[0])).map(([g, t]) => `${h(`${t.length} boş lam ${grupKisa(g)}:`)} ${t.join(", ")}`);
   if (e.length) parca.push(e.join(", "));
   return parca.join(" · ");
 }
@@ -2804,7 +2856,7 @@ function showBlokDetay(b) {
       <div class="blok-ozet">${b.tur === "arsiv" ? `İHK için ${b.kalemler.filter((r) => ihkMi(r.grup)).length} · YK/HK için ${b.kalemler.filter((r) => !ihkMi(r.grup)).length}` : esc(kesitOzeti(b.kesilecek)) || "—"}</div>
       <div class="m-label" style="margin-top:16px">Bu bloktaki istekler</div>
       <div class="blok-kalemler">${kalemler.map((r) => `<a href="#" class="blok-kalem" data-goto="${r.kalem_id}">
-        <span class="bk-test">${esc(r.test_adi)}</span>${tipTag(r.grup)}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${kesitRozeti(r)}
+        <span class="bk-test">${esc(r.test_adi)}</span>${kromRozet(r)}${tipTag(r.grup)}<span class="pill ${PILL[r.durum][0]}">${PILL[r.durum][1]}</span>${kesitRozeti(r)}
       </a>`).join("")}</div>
       <div class="m-label" style="margin-top:16px">Notlar</div>
       <div class="notlar" id="blokNotlar">${notlar || (tamNot ? `<div class="not-bos">Not yok.</div>` : `<div class="not-bos">Notlar yükleniyor…</div>`)}</div>
@@ -2853,7 +2905,7 @@ async function kesitListesiYazdir(mod = "gorunen") {
           <td class="yl-kutu"><span class="kutu"></span></td>
           <td class="yl-id">${esc(b.pat)}${konsNot(blokKons(blokKalemleri(b)))}${duzNot(blokDuzKalem(blokKalemleri(b), "patoloji_no"), "patoloji_no")}</td>
           <td class="yl-id">${esc(b.blok || "—")}${duzNot(blokDuzKalem(blokKalemleri(b), "blok_no"), "blok_no")}</td>
-          <td>${esc(kesitOzeti(items))}${blokIliskilileri(b, items).length ? `<div class="yl-ilsk">ilişkili: ${esc(iliskiliOzet(blokIliskilileri(b, items)))}</div>` : ""}</td>
+          <td>${kesitOzeti(items, true)}${blokIliskilileri(b, items).length ? `<div class="yl-ilsk">ilişkili: ${esc(iliskiliOzet(blokIliskilileri(b, items)))}</div>` : ""}</td>
           <td>${onc}</td>
           <td>${esc(formatDT(enEski(items)))}</td>
         </tr>${notSatiri}`;
@@ -3131,9 +3183,10 @@ function geriAlBandi(metin, dugme, onGeriAl) {
 // notlarına yazılır. r.duzeltmeler: { alan: { eski (İLK girilen), yeni, kim,
 // kisaltma, zaman (son), adet } }
 // ================================================================
-const DUZ_ALAN = { patoloji_no: "Patoloji no", kons_no: "Konsültasyon no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik" };
+const DUZ_ALAN = { patoloji_no: "Patoloji no", kons_no: "Konsültasyon no", blok_no: "Blok", test: "Test", uzman: "Uzman adına", oncelik: "Öncelik", kromojen: "Kromojen" };
 const duzBilgi = (r, alan) => (r && r.duzeltmeler && r.duzeltmeler[alan]) || null;
-const duzDeger = (alan, v) => (alan === "oncelik" ? (PRIO[v] && PRIO[v][1]) || v || "—" : v || "—");
+const duzDeger = (alan, v) => (alan === "oncelik" ? (PRIO[v] && PRIO[v][1]) || v || "—"
+  : alan === "kromojen" ? ({ kirmizi: "Kırmızı", dab: "DAB" })[v] || v || "—" : v || "—");
 const canDuzelt = (r) => Boolean(session && (isAdmin() || (r.istem_yapan_id === session.id && yetki("duzeltme"))));
 function duzRozet(r, alan) {
   const d = duzBilgi(r, alan);
@@ -3142,12 +3195,20 @@ function duzRozet(r, alan) {
 }
 const duzEski = (r, alan) => { const d = duzBilgi(r, alan); return d ? `<div class="duz-eski">${esc(duzDeger(alan, d.eski))}</div>` : ""; };
 // Çıktıda: "(düzeltildi: eski 17730/26)"
-// Çıktıda test: "CD20 (L26) · K: Tonsil" — tek satır. Test adı + klon
-// bölünmez (yl-test); satır sığmazsa yalnız kontrol kısmı alt satıra kayar
-// (yl-kontrol bütün halde sarılır). Kontrol yoksa "· K:" hiç yazılmaz.
-// Yalnız yazdırma — ekrandaki listeler kendi gösterimini kullanır.
-const yazdirTestHTML = (r) => `<span class="yl-test">${esc(r.test_adi)}${r.klon ? ` <span class="yl-klon">(${esc(r.klon)})</span>` : ""}</span>`
-  + (r.kontrol ? ` <span class="yl-kontrol">· K: ${esc(r.kontrol)}</span>` : "");
+// Çıktıda test: "CD20 (L26) KIRMIZI  [K: Tonsil]" — tek satır. Test adı +
+// klon + KIRMIZI bölünmez (yl-test); kontrol test adıyla aynı boyda, kalın,
+// ince çerçeveli etiket; satır sığmazsa yalnız etiket bütün halde alt satıra
+// kayar. Kontrol yoksa etiket yok. Yalnız yazdırma.
+const yazdirTestHTML = (r) => `<span class="yl-test">${esc(r.test_adi)}${r.klon ? ` <span class="yl-klon">(${esc(r.klon)})</span>` : ""}${r.kromojen === "kirmizi" ? ` <b class="yl-krom">KIRMIZI</b>` : ""}</span>`
+  + (r.kontrol ? ` <span class="yl-kontrol">K: ${esc(r.kontrol)}</span>` : "");
+// Ekran: kırmızı kromojen rozeti; bekleyen kalemde stokta yok uyarısı.
+const kromRozet = (r) => (r && r.kromojen === "kirmizi" ? `<span class="krom-rozet" title="Kırmızı kromojen">KIRMIZI</span>` : "");
+let STOK_YOK = new Map(); // test_id → test (stok "yok")
+function stokRozet(r) {
+  if (!KV3 || !r || r.durum !== "bekleyen" || !r.test_id) return "";
+  const t = STOK_YOK.get(r.test_id);
+  return t ? `<span class="stok-rozet" title="${esc(`Stokta yok${t.stok_aciklama ? `: ${t.stok_aciklama}` : ""}`)}">⚠ Stokta yok</span>` : "";
+}
 const duzNot = (r, alan) => { const d = duzBilgi(r, alan); return d ? `<div class="yl-duz">(düzeltildi: eski ${esc(duzDeger(alan, d.eski))})</div>` : ""; };
 // Blok satırları (kesit / arşiv): bloğun düzeltilmiş ilk kalemi
 const blokDuzKalem = (items, alan) => items.find((r) => duzBilgi(r, alan)) || null;
@@ -3155,7 +3216,7 @@ const blokTumKalemler = (b) => (b.tur === "arsiv" ? b.kalemler : [...b.kesilecek
 // Excel / yedek: "Patoloji no: 17730/26 → 17703/26; Blok: A1 → A2"
 function duzeltmeOzeti(r) {
   if (!r.duzeltmeler) return "";
-  const guncel = { patoloji_no: r.patoloji_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik };
+  const guncel = { patoloji_no: r.patoloji_no, kons_no: r.kons_no, blok_no: r.blok_no, test: r.test_adi, uzman: r.uzman_adi, oncelik: r.oncelik, kromojen: r.kromojen };
   return Object.keys(DUZ_ALAN).filter((a) => r.duzeltmeler[a])
     .map((a) => `${DUZ_ALAN[a]}: ${duzDeger(a, r.duzeltmeler[a].eski)} → ${duzDeger(a, guncel[a])}`).join("; ");
 }
@@ -3234,6 +3295,8 @@ function duzeltmeFormu(r) {
       <div class="duz-uyari hidden" id="dzFaturaUyari">⚠ Bu istemin faturası girildi, düzeltme fatura özetini değiştirir. Kaydedilirse fatura işareti kaldırılır, sekreter Hizmetler'de yeniden görür.</div>
       <label class="m-label" for="dzUzman">Uzman adına</label>
       <select class="finput" id="dzUzman"><option value="">— seçilmedi —</option>${uzmanlar.map((u) => `<option value="${u.id}" ${u.id === r.uzman_id ? "selected" : ""}>${esc(u.ad_soyad)}</option>`).join("")}</select>
+      ${kromojenGrubu(r.grup) ? `<div class="m-label">Kromojen <span class="duz-ipucu">— yalnız bu kalem</span></div>
+      <div class="prios" id="dzKrom">${[["dab", "DAB"], ["kirmizi", "Kırmızı"]].map(([k, l]) => `<button type="button" data-k="${k}" class="${k === (r.kromojen || "dab") ? "on" : ""}">${l}</button>`).join("")}</div>` : ""}
       <div class="m-label">Öncelik</div>
       <div class="prios" id="dzPrio">${["rutin", "acil", "stat"].map((p) => `<button type="button" data-p="${p}" class="${p === r.oncelik ? "on" : ""}">${PRIO[p][1]}</button>`).join("")}</div>
     </div>`;
@@ -3256,6 +3319,12 @@ function duzeltmeFormu(r) {
     const b = e.target.closest("[data-p]"); if (!b) return;
     oncelik = b.dataset.p;
     $$("#dzPrio button").forEach((x) => x.classList.toggle("on", x === b));
+  };
+  let kromojen = r.kromojen || "dab";
+  if ($("#dzKrom")) $("#dzKrom").onclick = (e) => {
+    const b = e.target.closest("[data-k]"); if (!b) return;
+    kromojen = b.dataset.k;
+    $$("#dzKrom button").forEach((x) => x.classList.toggle("on", x === b));
   };
   $("#dzIptal").onclick = () => { duzeltmeAcik = false; showDetail(rows.find((x) => x.kalem_id === r.kalem_id) || r); };
   $("#dzKaydet").onclick = async () => {
@@ -3289,11 +3358,20 @@ function duzeltmeFormu(r) {
       satirlar.push(`Test: ${r.test_adi} → ${t ? t.ad : "?"}${t && t.grup !== r.grup ? ` (${grupAd(r.grup)} → ${grupAd(t.grup)} — kalem o grubun listesine geçer)` : ""}`);
       if (faturaGirildi) faturaNotu = "\n\n⚠ Bu istemin faturası girildi, düzeltme fatura özetini değiştirir. Fatura işareti kaldırılacak, sekreter Hizmetler'de yeniden görecek.";
     }
+    // Kromojen ayrı RPC (kalem_kromojen_duzelt); test İHK dışına geçiyorsa yok sayılır.
+    const yeniTestGrup = degisiklik.testler ? (testById.get(yeniTest) || {}).grup : r.grup;
+    const kromDegisti = Boolean($("#dzKrom")) && kromojen !== (r.kromojen || "dab") && kromojenGrubu(yeniTestGrup);
+    if (kromDegisti) satirlar.push(`Kromojen: ${r.kromojen === "kirmizi" ? "Kırmızı" : "DAB"} → ${kromojen === "kirmizi" ? "Kırmızı" : "DAB"}`);
     if (!satirlar.length) { toast("Değişiklik yok"); return; }
     if (!confirm(`Şu düzeltmeler kaydedilecek ve kayda geçecek (geri alınamaz, yalnız yeniden düzeltilebilir):\n\n${satirlar.join("\n")}${faturaNotu}\n\nDevam edilsin mi?`)) return;
     $("#dzKaydet").disabled = true;
     try {
-      const sonuc = await Api.istemDuzelt(r.istem_id, degisiklik);
+      let sonuc = null;
+      if (Object.keys(degisiklik).length) sonuc = await Api.istemDuzelt(r.istem_id, degisiklik);
+      if (kromDegisti) {
+        await Api.kromojenDuzelt(r.kalem_id, kromojen);
+        if (sonuc && sonuc.duzeltilen != null) sonuc.duzeltilen += 1;
+      }
       toast(`Düzeltildi — ${sonuc && sonuc.duzeltilen != null ? sonuc.duzeltilen : satirlar.length} değişiklik kayda geçti${sonuc && sonuc.fatura_kaldirildi ? " · fatura işareti kaldırıldı" : ""}`);
       duzeltmeAcik = false;
       await loadQueue(); // açık detayı da yeniler
@@ -4455,6 +4533,7 @@ function canliOlay(e) {
     case "kullanicilar": kullaniciCanli(e.id); return;
     case "rol_yetkileri": case "kullanici_yetkileri": case "ekip_gruplari": yetkiCanli(); return;
     case "test_katalog": katalogCanli(); return;
+    case "katalog_talepleri": talepSayisiTazele(); return;
     case "test_gruplari": gruplarCanli(); return;
     default: return;
   }
@@ -4794,7 +4873,7 @@ async function showDetail(r) {
       <div class="d-blok">${esc(r.blok_no)}${duzRozet(r, "blok_no")}</div>${duzEski(r, "blok_no")}
       ${ciktiEskiHTML(ciktiEskimi(r, "calisma"))}
     </div>
-    <div class="d-test"><div class="n">${esc(r.test_adi)}${duzRozet(r, "test")}</div>${duzEski(r, "test")}${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}${r.kontrol ? `<div class="c kontrol">Kontrol: ${esc(r.kontrol)}</div>` : ""}</div>
+    <div class="d-test"><div class="n">${esc(r.test_adi)}${kromRozet(r)}${stokRozet(r)}${duzRozet(r, "test")}</div>${duzEski(r, "test")}${r.klon ? `<div class="c">Klon ${esc(r.klon)}</div>` : ""}${r.kontrol ? `<div class="c kontrol">Kontrol: ${esc(r.kontrol)}</div>` : ""}</div>
     ${tekrarInfo}
     ${canTekrar ? `<div class="m-sec"><button class="btn-ghost btn-sm" id="tekrarBtn" style="width:100%">↻ Tekrar İste</button><div id="dTekrarUyari">${tekrarUyariHTML(r)}</div></div>` : ""}
     <div class="d-grid">
@@ -4980,15 +5059,44 @@ function pickerSectionsHTML({ withQuickFill }) {
 }
 // Sıra: Grup sekmeleri → Tek Tek Seç (en sık kullanılan) → Şablonlar → Hazır Setler.
 
+// Serbest metin (katalogda olmayan) öğe: SQL öncesi seçime girer; sonra
+// (KV3) yeni kayıtta kabul edilmez → atlanır, bir kez bildirilir.
+let serbestAtlanan = [];
+function serbestEkle(ad, grup) {
+  if (!ad) return false;
+  if (KV3) { serbestAtlanan.push(ad); return false; }
+  const c = customItems.find((x) => x.ad === ad);
+  if (c) c.sel = true; else customItems.push({ ad, sel: true, grup });
+  return true;
+}
+function serbestAtlananBildir() {
+  if (!serbestAtlanan.length) return;
+  const l = [...new Set(serbestAtlanan)];
+  serbestAtlanan = [];
+  toast(`Katalogda olmayan ${l.length === 1 ? `“${l[0]}”` : `${l.length} test (${l.join(", ")})`} seçilmedi — kataloğa eklenmesini isteyebilirsiniz`, true);
+}
+// Set / şablon düzenlerken eski serbest metin satırları görünür ama artık
+// kaydedilemez (KV3): kayıttan önce sorulur, onaylanırsa çıkarılır.
+async function serbestKayitOnayi() {
+  const l = customItems.filter((c) => c.sel);
+  if (!KV3 || !l.length) return true;
+  const ok = await onayPenceresi({
+    baslik: "Katalogda olmayan testler kaydedilmez",
+    aciklama: "Bunlar eski serbest metin kayıtları. Çıkarılıp kaydedilsin mi? (Katalog → Eşleşmemiş eski kayıtlar'dan bir teste bağlanabilirler.)",
+    liste: l.map((c) => c.ad), onayMetni: "Çıkar ve kaydet", tekSutun: true,
+  });
+  if (ok) { l.forEach((c) => { c.sel = false; }); renderPicked(); }
+  return ok;
+}
+
 function applySetTestler(testler) {
   testler.forEach((t) => {
-    if (t.custom) {
-      const existing = customItems.find((c) => c.ad === t.ad);
-      if (existing) existing.sel = true; else customItems.push({ ad: t.ad, sel: true, grup: t.grup });
-    } else {
-      selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
-    }
+    if (t.custom) serbestEkle(t.ad, t.grup);
+    else selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup, kromojen: "dab" });
   });
+  serbestAtlananBildir();
+  const yok = testler.filter((t) => !t.custom).map((t) => katalogTest(t.id)).filter(stokYok);
+  if (yok.length) toast(`Stokta yok: ${yok.map((t) => t.ad).join(", ")}`, true);
 }
 
 // Varsayılan (arama boş): kullanıcının bu grupta en son kullandığı setler
@@ -5059,41 +5167,125 @@ function aramaNorm(s) {
     .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
 }
 
+// ---------------- Test araması (eş ad, klon, benzer yazım) ----------------
+// Sıra: adın başı → adda geçen → eş ad → klon → benzer yazım ("≈", en sonda).
+// Benzer yazım: 4+ harfte 1, 8+ harfte 2 harf farkı (eksik/fazla/yanlış/yer
+// değiştirmiş) — "Grocot" → Grocott (GMS), "kalretinin" → Calretinin.
+function harfFarki(a, b, sinir) {
+  if (Math.abs(a.length - b.length) > sinir) return sinir + 1;
+  const m = a.length, n = b.length;
+  let d1 = new Array(n + 1), d2 = null;
+  for (let j = 0; j <= n; j++) d1[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const d = new Array(n + 1);
+    d[0] = i;
+    let enAz = d[0];
+    for (let j = 1; j <= n; j++) {
+      const c = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[j] = Math.min(d1[j] + 1, d[j - 1] + 1, d1[j - 1] + c);
+      if (d2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[j] = Math.min(d[j], d2[j - 2] + 1);
+      if (d[j] < enAz) enAz = d[j];
+    }
+    if (enAz > sinir) return sinir + 1;
+    d2 = d1; d1 = d;
+  }
+  return d1[n];
+}
+// Sorgu metnin başına (ya da bütününe) benzer mi?
+function benzerYazim(q, metin) {
+  if (q.length < 4 || !metin) return false;
+  const sinir = q.length >= 8 ? 2 : 1;
+  for (let k = Math.max(1, q.length - sinir); k <= Math.min(metin.length, q.length + sinir); k++) {
+    if (harfFarki(q, metin.slice(0, k), sinir) <= sinir) return true;
+  }
+  return false;
+}
+// liste: test nesneleri; dönen [{t, tur: "ad"|"es"|"klon"|"benzer", es}]
+function testAra(liste, query) {
+  if (!query) return [];
+  const out = [];
+  (liste || []).forEach((t) => {
+    const ad = aramaNorm(t.ad);
+    if (ad.startsWith(query)) { out.push({ t, tur: "ad", p: 0 }); return; }
+    if (ad.includes(query)) { out.push({ t, tur: "ad", p: 1 }); return; }
+    const es = esAdEslesen(t, query);
+    if (es !== null) { out.push({ t, tur: "es", es, p: 2 }); return; }
+    if (query.length >= 2 && t.klon && aramaNorm(t.klon).includes(query)) { out.push({ t, tur: "klon", p: 3 }); return; }
+    if (benzerYazim(query, ad)) { out.push({ t, tur: "benzer", p: 4 }); return; }
+    const esB = (t.es_adlar || []).find((x) => benzerYazim(query, aramaNorm(x)));
+    if (esB) out.push({ t, tur: "benzer", es: esB, p: 4 });
+  });
+  return out.sort((a, b) => a.p - b.p);
+}
+const stokYok = (t) => Boolean(KV3 && t && t.stok === "yok");
+const stokEtiketi = (t) => (stokYok(t) ? `<small class="anti-stok" title="${esc(t.stok_aciklama || "Stokta yok")}">Stokta yok</small>` : "");
+function aramaCipi(m, grupAdiGoster) {
+  const t = m.t;
+  const el = document.createElement("span");
+  el.className = "anti" + (stokYok(t) ? " stokyok" : "") + (m.tur === "benzer" ? " benzer" : "");
+  const ek = m.tur === "es" ? `<small class="anti-es">= ${esc(m.es)}</small>`
+    : m.tur === "benzer" ? `<small class="anti-es" title="Benzer yazım">≈ ${esc(m.es || t.ad)}</small>`
+    : "";
+  el.innerHTML = `${grupAdiGoster ? `<small class="anti-grup">${esc(TIP[t.grup] || t.grup)}</small>` : ""}${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${ek}${stokEtiketi(t)}${testDuyuruIsareti(t.id)}${testBilgiIkonu(t)}`;
+  el.onclick = async (e) => {
+    const bilgi = e.target.closest("[data-test-bilgi]");
+    if (bilgi) { e.stopPropagation(); testBilgiBalonu(bilgi); return; }
+    if (stokYok(t) && !(await stokOnayi([t]))) return;
+    selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup, kromojen: "dab" });
+    aramaTemizle();
+  };
+  return el;
+}
+// "Stokta yok, yine de istem verilsin mi?"
+function stokOnayi(testler) {
+  return onayPenceresi({
+    baslik: testler.length === 1 ? `${testler[0].ad} stokta yok` : `${testler.length} test stokta yok`,
+    aciklama: "Stokta yok, yine de istem verilsin mi?",
+    liste: testler.map((t) => `${t.ad}${t.stok_aciklama ? ` — ${t.stok_aciklama}` : ""}`),
+    onayMetni: "Yine de iste",
+    tekSutun: true,
+  });
+}
+
 function renderAntis(q = "") {
   const wrap = $("#antis");
   if (!wrap) return;
   const isDiger = grp === "diger";
-  $("#otherbox").classList.toggle("show", isDiger);
+  // Serbest metin yalnız SQL öncesi (katalog_talepleri yoksa) — sonra yalnız katalog.
+  $("#otherbox").classList.toggle("show", isDiger && !KV3);
   wrap.innerHTML = "";
   const query = aramaNorm(q);
 
   let catMatches;
   if (query) {
-    catMatches = (CAT[grp] || []).filter((t) => !selectedTests.has(t.id) && (aramaNorm(t.ad).includes(query) || esAdEslesen(t, query) !== null));
+    catMatches = testAra((CAT[grp] || []).filter((t) => !selectedTests.has(t.id)), query);
   } else {
     const recent = (RECENT_TESTS[grp] || []).filter((t) => !selectedTests.has(t.id));
-    catMatches = recent.length
+    catMatches = (recent.length
       ? recent.slice(0, RECENT_CAP)
-      : (CAT[grp] || []).filter((t) => !selectedTests.has(t.id)).slice(0, RECENT_CAP);
+      : (CAT[grp] || []).filter((t) => !selectedTests.has(t.id)).slice(0, RECENT_CAP))
+      .map((t) => ({ t: katalogTest(t.id) || t, tur: "ad" }));
   }
-  catMatches.forEach((t) => {
-    const el = document.createElement("span");
-    el.className = "anti";
-    const esAd = query && !aramaNorm(t.ad).includes(query) ? esAdEslesen(t, query) : null;
-    el.innerHTML = `${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${esAd ? `<small class="anti-es">= ${esc(esAd)}</small>` : ""}${testDuyuruIsareti(t.id)}${testBilgiIkonu(t)}`;
-    el.onclick = (e) => {
-      const bilgi = e.target.closest("[data-test-bilgi]");
-      if (bilgi) { e.stopPropagation(); testBilgiBalonu(bilgi); return; }
-      selectedTests.set(t.id, { ad: t.ad, klon: t.klon, grup: t.grup });
-      aramaTemizle();
-    };
-    wrap.appendChild(el);
-  });
+  catMatches.forEach((m) => wrap.appendChild(aramaCipi(m, false)));
 
-  // "Diğer" grubunun kendi serbest-metin (ozel_test, kataloğa yazılmayan)
-  // öğeleri — otherbox ile eklenir, burada da (henüz seçilmemişse) aranır.
+  // Diğer gruplarda eşleşenler (gruba göre etiketli) — "Grocot" İHK sekmesindeyken de GMS'i bulur.
+  let digerMatches = [];
+  if (query) {
+    const burada = new Set(catMatches.map((m) => m.t.id));
+    digerMatches = testAra(Object.entries(CAT).filter(([g]) => g !== grp).flatMap(([, l]) => l)
+      .filter((t) => !selectedTests.has(t.id) && !burada.has(t.id)), query).slice(0, 8);
+    if (digerMatches.length) {
+      const b = document.createElement("span");
+      b.className = "anti-ayrac";
+      b.textContent = catMatches.length ? "Diğer gruplarda" : `${TIP[grp] || "Bu grup"}ta yok — diğer gruplarda:`;
+      wrap.appendChild(b);
+      digerMatches.forEach((m) => wrap.appendChild(aramaCipi(m, true)));
+    }
+  }
+
+  // Eski davranış (SQL öncesi): "Diğer" grubunun serbest-metin öğeleri.
   let customMatches = [];
-  if (isDiger) {
+  if (isDiger && !KV3) {
     const unsel = customItems.filter((c) => !c.sel);
     customMatches = query ? unsel.filter((c) => aramaNorm(c.ad).includes(query)) : unsel;
     customMatches.forEach((c) => {
@@ -5105,12 +5297,18 @@ function renderAntis(q = "") {
     });
   }
 
-  // Hiçbir eşleşme yoksa: yazılanı gerçek bir test_katalog kaydı olarak
-  // ekleme seçeneği — bir dahaki sefere kataloğa kayıtlı çıkar. "Diğer"
-  // dahil tüm gruplarda çalışır; otherbox'ın tek-seferlik ozel_test akışını
-  // bozmaz, ona ek bir yol sunar.
-  if (query && catMatches.length === 0 && customMatches.length === 0) {
-    if (canKatalogEkle()) {
+  if (query && catMatches.length === 0 && customMatches.length === 0 && digerMatches.length === 0) {
+    if (KV3) {
+      // Yalnız katalog: talep (herkes) + yetkiliye doğrudan ekleme.
+      const kutu = document.createElement("div");
+      kutu.className = "katalog-yok";
+      kutu.innerHTML = `<div class="ky-baslik">Katalogda yok: <b>${esc(q.trim())}</b></div>
+        <div class="ky-btns"><button type="button" class="btn-ghost btn-sm" data-ky="iste">Kataloğa eklenmesini iste</button>${canKatalogEkle() ? `<button type="button" class="anti-add" data-ky="ekle">+ Kataloğa ekle</button>` : ""}</div>`;
+      kutu.querySelector('[data-ky="iste"]').onclick = () => katalogTalepFormu(q.trim());
+      const ek = kutu.querySelector('[data-ky="ekle"]');
+      if (ek) ek.onclick = () => formdanKatalogaEkle(q.trim());
+      wrap.appendChild(kutu);
+    } else if (canKatalogEkle()) {
       const addBtn = document.createElement("button");
       addBtn.type = "button";
       addBtn.className = "anti-add";
@@ -5118,7 +5316,6 @@ function renderAntis(q = "") {
       addBtn.onclick = () => addTestToKatalog(q.trim());
       wrap.appendChild(addBtn);
     } else {
-      // Kataloğa ekleme yetkisi yok: "Diğer" grubunda serbest metinle devam.
       const yok = document.createElement("span");
       yok.className = "anti-yok";
       yok.textContent = isDiger
@@ -5143,28 +5340,160 @@ function aramaTemizle() {
   if (odakta) input.focus();
 }
 
+// Kırmızı kromojen yalnız İHK grup kodunda (veritabanı da başka grupta reddeder).
+const kromojenGrubu = (g) => KV3 && g === "ihc";
 // Zaten seçilmiş tüm testler/serbest-metin öğeleri — TÜM gruplar (bir istem
 // birden fazla gruptan test içerebilir, bkz. collectPickedTestler), sabit bir
-// alanda. Tıklamak seçimi kaldırır (antis listesine geri döner).
+// alanda. Tıklamak seçimi kaldırır (antis listesine geri döner). İHK çiplerinde
+// ● düğmesi o testin kromojenini değiştirir (kırmızı = kırmızı nokta).
 function renderPicked() {
   const wrap = $("#pickedChips"), sec = $("#pickedSec");
   if (!wrap || !sec) return;
   const chips = [];
-  selectedTests.forEach((v, id) => chips.push({ kind: "cat", key: id, ad: v.ad, klon: v.klon }));
+  selectedTests.forEach((v, id) => chips.push({ kind: "cat", key: id, ad: v.ad, klon: v.klon, grup: v.grup, kromojen: v.kromojen || "dab" }));
   customItems.filter((c) => c.sel).forEach((c) => chips.push({ kind: "custom", key: c.ad, ad: c.ad, klon: "" }));
 
   sec.style.display = chips.length ? "" : "none";
-  wrap.innerHTML = chips.map((c) =>
-    `<span class="anti sel" data-kind="${c.kind}" data-key="${esc(c.key)}">${esc(c.ad)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}${c.kind === "cat" ? testDuyuruIsareti(c.key) : ""}</span>`
-  ).join("");
+  wrap.innerHTML = chips.map((c) => {
+    const t = c.kind === "cat" ? katalogTest(c.key) : null;
+    const krom = c.kind === "cat" && kromojenGrubu(c.grup)
+      ? `<button type="button" class="krom-nokta${c.kromojen === "kirmizi" ? " kirmizi" : ""}" data-krom="${esc(c.key)}" title="Kromojen: ${c.kromojen === "kirmizi" ? "Kırmızı" : "DAB"} — değiştirmek için dokunun" aria-label="${esc(c.ad)} kromojen: ${c.kromojen === "kirmizi" ? "Kırmızı" : "DAB"}"></button>`
+      : "";
+    const eski = c.kind === "custom" && KV3 ? `<small class="anti-stok" title="Katalogda yok — kaydedilmez">katalogda yok</small>` : "";
+    return `<span class="anti sel${c.kind === "cat" && c.kromojen === "kirmizi" && kromojenGrubu(c.grup) ? " krom-kirmizi" : ""}${t && stokYok(t) ? " stokyok" : ""}" data-kind="${c.kind}" data-key="${esc(c.key)}">${krom}${esc(c.ad)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}${t ? stokEtiketi(t) : ""}${eski}${c.kind === "cat" ? testDuyuruIsareti(c.key) : ""}</span>`;
+  }).join("");
+  // Kromojen satırı: seçili İHK testi varsa — hepsine birden DAB / Kırmızı.
+  let ks = $("#kromSatir");
+  const ihkSay = chips.filter((c) => c.kind === "cat" && kromojenGrubu(c.grup)).length;
+  if (!ks && ihkSay) {
+    ks = document.createElement("div");
+    ks.id = "kromSatir";
+    ks.className = "krom-satir";
+    wrap.after(ks);
+  }
+  if (ks) {
+    if (!ihkSay) ks.remove();
+    else {
+      const kirmizi = chips.filter((c) => c.kind === "cat" && kromojenGrubu(c.grup) && c.kromojen === "kirmizi").length;
+      ks.innerHTML = `<span class="ks-ad">Kromojen (İHK)</span><span class="seg ks-seg"><button type="button" data-krom-tum="dab" class="${kirmizi === 0 ? "on" : ""}">DAB</button><button type="button" data-krom-tum="kirmizi" class="${kirmizi === ihkSay ? "on" : ""}">Kırmızı</button></span><span class="ks-ipucu">${kirmizi && kirmizi < ihkSay ? `${kirmizi}/${ihkSay} test kırmızı · ` : ""}tek teste: çipteki ●</span>`;
+      ks.querySelectorAll("[data-krom-tum]").forEach((b) => (b.onclick = () => {
+        selectedTests.forEach((v) => { if (kromojenGrubu(v.grup)) v.kromojen = b.dataset.kromTum; });
+        renderPicked();
+      }));
+    }
+  }
   renderFormDuyurulari();
   wrap.querySelectorAll(".anti").forEach((el) => {
-    el.onclick = () => {
+    el.onclick = (e) => {
+      const kb = e.target.closest("[data-krom]");
+      if (kb) {
+        e.stopPropagation();
+        const v = selectedTests.get(kb.dataset.krom);
+        if (v) v.kromojen = v.kromojen === "kirmizi" ? "dab" : "kirmizi";
+        renderPicked();
+        return;
+      }
       if (el.dataset.kind === "cat") selectedTests.delete(el.dataset.key);
       else { const c = customItems.find((x) => x.ad === el.dataset.key); if (c) c.sel = false; }
       renderAntis($("#antiSearch")?.value || "");
     };
   });
+}
+
+// Basit form penceresi (onay penceresi görünümünde) — Promise<{alan: değer} | null>.
+// alanlar: [{ad, etiket, tip: "text"|"textarea"|"select", deger, secenekler: [[v, l]], zorunlu, ipucu}]
+function formPenceresi({ baslik, aciklama = "", alanlar = [], onayMetni = "Kaydet", iptalMetni = "Vazgeç", kontrol = null }) {
+  return new Promise((coz) => {
+    const ov = document.createElement("div");
+    ov.className = "onay-ov";
+    ov.innerHTML = `<form class="onay-kutu fp-kutu" role="dialog" aria-modal="true" aria-labelledby="fpBaslik">
+        <h3 id="fpBaslik">${esc(baslik)}</h3>
+        ${aciklama ? `<p class="onay-aciklama">${esc(aciklama)}</p>` : ""}
+        ${alanlar.map((a, i) => `<label class="fp-alan"><span>${esc(a.etiket)}${a.zorunlu ? " *" : ""}</span>${
+          a.tip === "textarea" ? `<textarea class="finput" data-fp="${i}" rows="3" ${a.yer ? `placeholder="${esc(a.yer)}"` : ""}>${esc(a.deger || "")}</textarea>`
+          : a.tip === "select" ? `<select class="finput" data-fp="${i}">${(a.secenekler || []).map(([v, l]) => `<option value="${esc(v)}"${v === a.deger ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`
+          : `<input class="finput" data-fp="${i}" value="${esc(a.deger || "")}" ${a.yer ? `placeholder="${esc(a.yer)}"` : ""} maxlength="${a.uzunluk || 200}">`
+        }${a.ipucu ? `<small class="fp-ipucu">${esc(a.ipucu)}</small>` : ""}</label>`).join("")}
+        <p class="fp-hata" hidden></p>
+        <div class="onay-btns"><button type="button" class="btn-ghost" data-fp-iptal>${esc(iptalMetni)}</button><button type="submit" class="btn-primary">${esc(onayMetni)}</button></div>
+      </form>`;
+    const form = ov.querySelector("form");
+    const bitir = (sonuc) => { document.removeEventListener("keydown", tus, true); ov.remove(); coz(sonuc); };
+    const tus = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); bitir(null); } };
+    ov.addEventListener("click", (e) => { if (e.target === ov || e.target.closest("[data-fp-iptal]")) bitir(null); });
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const v = {};
+      alanlar.forEach((a, i) => { v[a.ad] = form.querySelector(`[data-fp="${i}"]`).value.trim(); });
+      const eksik = alanlar.find((a) => a.zorunlu && !v[a.ad]);
+      const hataEl = form.querySelector(".fp-hata");
+      const hata = eksik ? `${eksik.etiket} gerekli` : kontrol ? await kontrol(v) : null;
+      if (hata) { hataEl.textContent = hata; hataEl.hidden = false; return; }
+      bitir(v);
+    });
+    document.addEventListener("keydown", tus, true);
+    document.body.appendChild(ov);
+    const ilk = form.querySelector("[data-fp]");
+    if (ilk) ilk.focus();
+  });
+}
+
+// "Kataloğa eklenmesini iste": test adı + kısa not → yetkililere bildirim.
+async function katalogTalepFormu(ad) {
+  const v = await formPenceresi({
+    baslik: "Kataloğa eklenmesini iste",
+    aciklama: "Katalog düzenleme yetkisi olanlara bildirim gider; eklenince ya da katalogda varsa size haber verilir.",
+    alanlar: [
+      { ad: "ad", etiket: "Test adı", deger: ad, zorunlu: true },
+      { ad: "notu", etiket: "Kısa not", tip: "textarea", yer: "ör. klon, hangi vaka için, eş adı…", uzunluk: 1000 },
+    ],
+    onayMetni: "Talep gönder",
+  });
+  if (!v) return;
+  try {
+    await Api.katalogTalepEkle({ ad: v.ad, notu: v.notu || null, grup: grp, talep_eden_id: session.id });
+    toast(`“${v.ad}” için talep gönderildi`);
+    aramaTemizle();
+    talepSayisiTazele();
+  } catch (e) {
+    toast(katalogHata(e, "Talep gönderilemedi"), true);
+  }
+}
+// Yetkili: formdan kataloğa ekleme — grup zorunlu, tekrar kontrolü veritabanında.
+async function formdanKatalogaEkle(ad, onDeger = {}) {
+  const gruplar = GROUPS.filter(([k]) => k !== "diger" || (CAT.diger || []).length);
+  const v = await formPenceresi({
+    baslik: "Kataloğa ekle",
+    alanlar: [
+      { ad: "ad", etiket: "Test adı", deger: ad, zorunlu: true },
+      { ad: "grup", etiket: "Grup", tip: "select", deger: onDeger.grup || (grp !== "diger" ? grp : "ihc"), secenekler: gruplar, zorunlu: true },
+      { ad: "klon", etiket: "Klon", deger: onDeger.klon || "" },
+      { ad: "kontrol", etiket: "Kontrol", deger: onDeger.kontrol || "" },
+      { ad: "es_adlar", etiket: "Eş adlar", deger: onDeger.es_adlar || "", ipucu: "Virgülle ayırın" },
+    ],
+    onayMetni: "Ekle",
+    kontrol: (x) => {
+      const a = testAnahtar(x.ad);
+      const ayni = KATALOG.find((t) => t.grup === x.grup && !t.birlesti_id && (testAnahtar(t.ad) === a || (t.es_adlar || []).some((e) => testAnahtar(e) === a)));
+      return ayni ? `Bu test zaten var: ${ayni.ad}${ayni.aktif === false ? " (gizli)" : ""}` : null;
+    },
+  });
+  if (!v) return null;
+  try {
+    const es = v.es_adlar ? v.es_adlar.split(",").map((x) => x.trim()).filter(Boolean) : [];
+    const row = await Api.katalogKaydet({ grup: v.grup, ad: v.ad, klon: v.klon, kontrol: v.kontrol, aciklama: null, es_adlar: es });
+    await katalogYukle();
+    const t = katalogTest(row.id) || { id: row.id, ad: v.ad, klon: v.klon, grup: v.grup };
+    if ($("#antis")) {
+      selectedTests.set(t.id, { ad: t.ad, klon: t.klon || "", grup: t.grup, kromojen: "dab" });
+      aramaTemizle();
+    }
+    toast(`“${v.ad}” kataloğa eklendi${$("#antis") ? " ve seçildi" : ""}`);
+    return t;
+  } catch (e) {
+    toast(katalogHata(e, "Eklenemedi"), true);
+    return null;
+  }
 }
 
 async function addTestToKatalog(ad) {
@@ -5279,9 +5608,10 @@ async function bulkPickSelect() {
     let matchedCount = 0;
     items.forEach((it) => {
       const a = testAnahtar(it.ad);
-      const found = catalog.find((t) => testAnahtar(t.ad) === a || (t.es_adlar || []).some((x) => testAnahtar(x) === a));
+      const esit = (t) => testAnahtar(t.ad) === a || (t.es_adlar || []).some((x) => testAnahtar(x) === a);
+      const found = catalog.find(esit) || Object.values(CAT).flat().find(esit);
       if (found) {
-        selectedTests.set(found.id, { ad: found.ad, klon: found.klon, grup: found.grup });
+        selectedTests.set(found.id, { ad: found.ad, klon: found.klon, grup: found.grup, kromojen: "dab" });
         matchedCount++;
       } else if (!toCreate.some((t) => t.ad.toLowerCase() === it.ad.toLowerCase())) {
         toCreate.push(it);
@@ -5291,7 +5621,8 @@ async function bulkPickSelect() {
       // Kataloğa ekleme yetkisi yok: bulunamayanlar kutuda kalır.
       $("#bulkPickText").value = toCreate.map((t) => t.ad).join("\n");
       renderAntis("");
-      toast(`${matchedCount} test seçildi; ${toCreate.length} satır katalogda yok — “Diğer” grubunda serbest metinle isteyebilirsiniz`, true);
+      toast(KV3 ? `${matchedCount} test seçildi; ${toCreate.length} satır katalogda yok — arama kutusundan “Kataloğa eklenmesini iste”`
+        : `${matchedCount} test seçildi; ${toCreate.length} satır katalogda yok — “Diğer” grubunda serbest metinle isteyebilirsiniz`, true);
       return;
     }
     if (toCreate.length) {
@@ -5314,7 +5645,7 @@ async function bulkPickSelect() {
 
 function collectPickedTestler() {
   const testler = [];
-  selectedTests.forEach((v, id) => testler.push({ test_id: id, grup: v.grup }));
+  selectedTests.forEach((v, id) => testler.push({ test_id: id, grup: v.grup, ...(kromojenGrubu(v.grup) && v.kromojen === "kirmizi" ? { kromojen: "kirmizi" } : {}) }));
   customItems.filter((c) => c.sel).forEach((c) => testler.push({ ozel_test: c.ad, grup: c.grup }));
   return testler;
 }
@@ -5501,12 +5832,12 @@ function sepetYaz(liste) {
 const sepetKalemSayisi = (v) => Math.max(1, (v.bloklar || []).length) * (v.testler || []).length;
 const sepetOzet = (liste) => ({ vaka: liste.length, test: liste.reduce((n, v) => n + sepetKalemSayisi(v), 0) });
 const sepetBlokTxt = (v) => (v.bloklar && v.bloklar.length ? v.bloklar.join(", ") : "—");
-const sepetTestTxt = (v) => v.testler.map((t) => t.ad).join(", ");
+const sepetTestTxt = (v) => v.testler.map((t) => `${t.ad}${t.kromojen === "kirmizi" ? " (Kırmızı)" : ""}`).join(", ");
 
 // Formdaki seçili testler, adlarıyla (sepet ve "önceki vakanın testleri" için).
 function secilenTestler() {
   const l = [];
-  selectedTests.forEach((v, id) => l.push({ test_id: id, ozel_test: null, grup: v.grup, ad: v.ad, klon: v.klon || "" }));
+  selectedTests.forEach((v, id) => l.push({ test_id: id, ozel_test: null, grup: v.grup, ad: v.ad, klon: v.klon || "", ...(kromojenGrubu(v.grup) && v.kromojen === "kirmizi" ? { kromojen: "kirmizi" } : {}) }));
   customItems.filter((c) => c.sel).forEach((c) => l.push({ test_id: null, ozel_test: c.ad, grup: c.grup, ad: c.ad, klon: "" }));
   return l;
 }
@@ -5687,9 +6018,10 @@ function sepetDuzenle(id) {
   formKonsYukle(v.kons_no || null);
   v.bloklar.forEach((b) => addBlockChip(b));
   v.testler.forEach((t) => {
-    if (t.test_id) selectedTests.set(t.test_id, { ad: t.ad, klon: t.klon || "", grup: t.grup });
-    else customItems.push({ ad: t.ozel_test || t.ad, sel: true, grup: t.grup });
+    if (t.test_id) selectedTests.set(t.test_id, { ad: t.ad, klon: t.klon || "", grup: t.grup, kromojen: t.kromojen || "dab" });
+    else serbestEkle(t.ozel_test || t.ad, t.grup);
   });
+  serbestAtlananBildir();
   renderAntis("");
   const uz = $("#mUzman");
   uz.value = uzmanSecenekleri().some((u) => u.id === v.uzman_id) ? v.uzman_id : "";
@@ -5763,7 +6095,7 @@ async function topluGonder() {
   try {
     const s = await Api.topluIstemOlustur(liste.map((v) => ({
       patoloji_no: v.patoloji_no, ...(v.kons_no ? { kons_no: v.kons_no } : {}), uzman_id: v.uzman_id, oncelik: v.oncelik, not_metni: v.not_metni,
-      bloklar: v.bloklar, testler: v.testler.map((t) => ({ test_id: t.test_id || null, ozel_test: t.ozel_test || null, grup: t.grup })),
+      bloklar: v.bloklar, testler: v.testler.map((t) => ({ test_id: t.test_id || null, ozel_test: t.ozel_test || null, grup: t.grup, ...(t.kromojen === "kirmizi" ? { kromojen: "kirmizi" } : {}) })),
     })));
     sonUzmanKaydet(liste[liste.length - 1].uzman_id);
     sepetAcik = false;
@@ -5811,11 +6143,8 @@ function oncekiTestleriSec() {
     if (t.test_id) {
       const k = katalog.get(t.test_id);
       if (!k) { atlanan++; return; }
-      selectedTests.set(t.test_id, { ad: k.ad, klon: k.klon || "", grup: k.grup });
-    } else {
-      const c = customItems.find((x) => x.ad === t.ozel_test);
-      if (c) c.sel = true; else customItems.push({ ad: t.ozel_test, sel: true, grup: t.grup });
-    }
+      selectedTests.set(t.test_id, { ad: k.ad, klon: k.klon || "", grup: k.grup, kromojen: kromojenGrubu(k.grup) && t.kromojen === "kirmizi" ? "kirmizi" : "dab" });
+    } else if (!serbestEkle(t.ozel_test, t.grup)) atlanan++;
   });
   renderAntis($("#antiSearch")?.value || "");
   yaziyorEtkilesim();
@@ -6128,6 +6457,7 @@ function showSetForm(existing) {
     const ad = $("#setAd").value.trim();
     if (!ad) { toast("Ad girin", true); return; }
     const uzmanlik = $("#setUzmanlik").value.trim();
+    if (!(await serbestKayitOnayi())) return;
     const testler = collectPickedTestler();
     if (!testler.length) { toast("En az bir test seçin", true); return; }
     $("#saveSet").disabled = true;
@@ -6245,6 +6575,7 @@ function showSablonForm(existing) {
   $("#saveSablon").onclick = async () => {
     const ad = $("#sablonAd").value.trim();
     if (!ad) { toast("Ad girin", true); return; }
+    if (!(await serbestKayitOnayi())) return;
     const testler = collectPickedTestler();
     if (!testler.length) { toast("En az bir test seçin", true); return; }
     $("#saveSablon").disabled = true;
@@ -7304,27 +7635,30 @@ async function kullaniciYetkiBolumu(u) {
 // ================================================================
 const TR_SADE = { "İ": "i", "I": "i", "ı": "i", "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g", "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c" };
 const parantezIcsiz = (s) => String(s || "").replace(/\([^)]*\)/g, " ");
-let ktGrup = "", ktAra = "", ktPasif = false;
-let ktSecili = [];   // birleştirme için seçilen en çok iki test
+let ktGrup = "", ktAra = "", ktPasif = false, ktStokYok = false;
+let ktSecili = [];   // seçilen testler: 2 → Birleştir; 1+ → Gruba taşı (KV3)
 const ktDuzenler = () => yetki("katalog_duzenle");
 const ktTest = (id) => KATALOG.find((t) => t.id === id) || null;
 const trSirala = (a, b) => String(a).localeCompare(String(b), "tr", { numeric: true, sensitivity: "base" });
 
 function renderTestKatalogPage() {
   const duz = ktDuzenler();
+  const v3 = duz && KV3;
   ktSecili = [];
   $("#mainView").innerHTML = `
     <div class="page-head">
       <h1>Test Kataloğu</h1>
       <div class="sub">Laboratuvarda çalışılan testler — klon, kontrol dokusu ve kullanım bilgisi.</div>
       <div class="spacer"></div>
+      ${v3 ? `<button class="btn-ghost btn-sm" id="ktTalepBtn">Ekleme talepleri <span class="kt-talep-say" id="ktTalepSay"></span></button><button class="btn-ghost btn-sm" id="ktEskiBtn">Eşleşmemiş eski kayıtlar</button><button class="btn-ghost btn-sm" id="ktSilinenBtn">Silinen testler</button>` : ""}
       ${duz && KATALOG_YENI ? `<button class="btn-ghost btn-sm" id="ktTekrarBtn">Olası tekrarlar</button><button class="btn-ghost btn-sm" id="ktIceBtn">Liste içe aktar</button>` : ""}
       ${duz ? `<button class="btn-primary btn-sm" id="ktYeniBtn">+ Yeni Test</button>` : ""}
     </div>
     ${duz && !KATALOG_YENI ? `<div class="kt-uyari">Açıklama, eş ad, geçmiş, birleştirme ve liste içe aktarma için <b>yetki_katalog_sema.sql</b> çalıştırılmalı.</div>` : ""}
     <div class="kt-arac">
       <input class="finput kt-ara" id="ktAra" type="search" autocomplete="off" placeholder="Test, eş ad, klon, kontrol ya da açıklamada ara…" value="${esc(ktAra)}" aria-label="Katalogda ara">
-      <label class="ilsk-anahtar"><input type="checkbox" id="ktPasif" ${ktPasif ? "checked" : ""}> Pasifleri göster</label>
+      <label class="ilsk-anahtar"><input type="checkbox" id="ktPasif" ${ktPasif ? "checked" : ""}> Gizlenenleri göster</label>
+      ${KV3 ? `<label class="ilsk-anahtar"><input type="checkbox" id="ktStokYok" ${ktStokYok ? "checked" : ""}> Stokta olmayanlar</label>` : ""}
       <span class="kt-say" id="ktSay"></span>
     </div>
     <div class="kt-gruplar"><div class="groups" id="ktGruplar"></div></div>
@@ -7332,6 +7666,7 @@ function renderTestKatalogPage() {
     <div class="kt-liste" id="ktListe"></div>`;
   $("#ktAra").addEventListener("input", (e) => { ktAra = e.target.value; katalogListeCiz(); });
   $("#ktPasif").addEventListener("change", (e) => { ktPasif = e.target.checked; katalogListeCiz(); });
+  if ($("#ktStokYok")) $("#ktStokYok").addEventListener("change", (e) => { ktStokYok = e.target.checked; katalogListeCiz(); });
   $("#ktGruplar").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     ktGrup = b.dataset.grup; katalogListeCiz();
@@ -7340,10 +7675,12 @@ function renderTestKatalogPage() {
     const sec = e.target.closest("[data-kt-sec]");
     if (sec) {
       const id = sec.dataset.ktSec;
-      if (sec.checked) { ktSecili.push(id); if (ktSecili.length > 2) ktSecili.shift(); }
-      else ktSecili = ktSecili.filter((x) => x !== id);
+      if (sec.checked) {
+        ktSecili.push(id);
+        if (!KV3 && ktSecili.length > 2) ktSecili.shift(); // SQL öncesi: yalnız birleştirme (iki test)
+      } else ktSecili = ktSecili.filter((x) => x !== id);
       $$("#ktListe [data-kt-sec]").forEach((c) => { c.checked = ktSecili.includes(c.dataset.ktSec); });
-      if ($("#rail .rail-head")) showEmpty(); // dar ekranda sağ panel birleştirme çubuğunu örtmesin
+      if ($("#rail .rail-head")) showEmpty(); // dar ekranda sağ panel çubuğu örtmesin
       ktBirBarCiz();
       return;
     }
@@ -7354,25 +7691,38 @@ function renderTestKatalogPage() {
   $("#ktBirBar").addEventListener("click", (e) => {
     if (e.target.closest("[data-kt-temizle]")) { ktSecili = []; katalogListeCiz(); return; }
     if (e.target.closest("[data-kt-birlestir]") && ktSecili.length === 2) birlestirPenceresi(ktSecili[0], ktSecili[1]);
+    if (e.target.closest("[data-kt-tasi]")) ktGrubaTasi(ktSecili.slice(), $("#ktTasiGrup").value);
   });
   if (duz) $("#ktYeniBtn").onclick = () => ktForm(null);
   if (duz && KATALOG_YENI) {
     $("#ktTekrarBtn").onclick = renderOlasiTekrarlar;
     $("#ktIceBtn").onclick = renderIceAktar;
   }
+  if (v3) {
+    $("#ktTalepBtn").onclick = renderTalepler;
+    $("#ktEskiBtn").onclick = renderEskiKayitlar;
+    $("#ktSilinenBtn").onclick = renderSilinenler;
+    katalogTalepRozeti();
+  }
   katalogListeCiz();
+}
+function katalogTalepRozeti() {
+  const el = $("#ktTalepSay");
+  if (el) { el.textContent = TALEP_SAYI ? String(TALEP_SAYI) : ""; el.hidden = !TALEP_SAYI; }
 }
 
 function ktSuzulmus() {
   const q = aramaNorm(ktAra);
   return KATALOG.filter((t) => (ktPasif || (t.aktif !== false && !t.birlesti_id))
     && (!ktGrup || t.grup === ktGrup)
+    && (!ktStokYok || t.stok === "yok")
     && (!q || [t.ad, t.klon, t.kontrol, t.aciklama].concat(t.es_adlar || []).some((x) => x && aramaNorm(x).includes(q))))
     .sort((a, b) => trSirala(a.ad, b.ad) || trSirala(a.klon || "", b.klon || ""));
 }
 function ktDurumHTML(t) {
   if (t.birlesti_id) return `<span class="status pasif">Birleştirildi</span>`;
-  return `<span class="status ${t.aktif !== false ? "aktif" : "pasif"}">${t.aktif !== false ? "Aktif" : "Pasif"}</span>`;
+  return `<span class="status ${t.aktif !== false ? "aktif" : "pasif"}">${t.aktif !== false ? "Aktif" : "Gizli"}</span>`
+    + (KV3 && t.stok === "yok" ? ` <span class="stok-rozet" title="${esc(t.stok_aciklama || "")}">Stokta yok</span>` : "");
 }
 function katalogListeCiz() {
   const wrap = $("#ktListe"); if (!wrap) return;
@@ -7390,9 +7740,9 @@ function katalogListeCiz() {
     ktBirBarCiz();
     return;
   }
-  wrap.innerHTML = `<table class="kt-tablo"><thead><tr>${duz ? `<th class="kt-sec" title="Birleştirmek için iki test seçin"></th>` : ""}<th>Test</th><th class="kt-g">Grup</th><th>Klon</th><th>Kontrol</th><th>Açıklama</th><th>Durum</th></tr></thead><tbody>`
-    + l.map((t) => `<tr data-id="${t.id}" class="${t.aktif === false || t.birlesti_id ? "pasif" : ""}" tabindex="0">
-        ${duz ? `<td class="kt-sec"><input type="checkbox" data-kt-sec="${t.id}" ${ktSecili.includes(t.id) ? "checked" : ""} ${t.birlesti_id ? "disabled" : ""} aria-label="${esc(t.ad)} — birleştirmek için seç"></td>` : ""}
+  wrap.innerHTML = `<table class="kt-tablo"><thead><tr>${duz ? `<th class="kt-sec" title="${KV3 ? "Seçin: iki test → Birleştir; bir ya da daha çok → Gruba taşı" : "Birleştirmek için iki test seçin"}"></th>` : ""}<th>Test</th><th class="kt-g">Grup</th><th>Klon</th><th>Kontrol</th><th>Açıklama</th><th>Durum</th></tr></thead><tbody>`
+    + l.map((t) => `<tr data-id="${t.id}" class="${t.aktif === false || t.birlesti_id ? "pasif" : ""}${KV3 && t.stok === "yok" ? " stokyok" : ""}" tabindex="0">
+        ${duz ? `<td class="kt-sec"><input type="checkbox" data-kt-sec="${t.id}" ${ktSecili.includes(t.id) ? "checked" : ""} ${t.birlesti_id ? "disabled" : ""} aria-label="${esc(t.ad)} — seç"></td>` : ""}
         <td class="kt-ad"><b>${esc(t.ad)}</b>${(t.es_adlar || []).length ? `<div class="kt-es">= ${esc(t.es_adlar.join(", "))}</div>` : ""}</td>
         <td class="kt-g">${esc(TIP[t.grup] || t.grup)}</td>
         <td class="kt-klon">${esc(t.klon || "")}</td>
@@ -7407,17 +7757,70 @@ function ktBirBarCiz() {
   bar.classList.toggle("hidden", !ktSecili.length);
   if (!ktSecili.length) return;
   const adlar = ktSecili.map((id) => (ktTest(id) || {}).ad).filter(Boolean);
-  bar.innerHTML = `<span><b>${adlar.map(esc).join("</b> + <b>")}</b>${ktSecili.length < 2 ? " — birleştirmek için bir test daha seçin" : ""}</span>
+  const ozet = adlar.length <= 3 ? `<b>${adlar.map(esc).join("</b> + <b>")}</b>` : `<b>${adlar.length} test</b> seçili`;
+  const gruplar = GROUPS.filter(([k]) => k !== "diger");
+  bar.innerHTML = `<span>${ozet}${!KV3 && ktSecili.length < 2 ? " — birleştirmek için bir test daha seçin" : ""}</span>
     <span class="grow"></span>
     <button type="button" class="btn-ghost btn-sm" data-kt-temizle>Seçimi temizle</button>
-    <button type="button" class="btn-primary btn-sm" data-kt-birlestir ${ktSecili.length === 2 ? "" : "disabled"}>Birleştir…</button>`;
+    ${KV3 ? `<span class="kt-tasi"><select class="finput" id="ktTasiGrup" aria-label="Taşınacak grup">${gruplar.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}</option>`).join("")}</select><button type="button" class="btn-ghost btn-sm" data-kt-tasi>Gruba taşı…</button></span>` : ""}
+    <button type="button" class="btn-primary btn-sm" data-kt-birlestir ${ktSecili.length === 2 ? "" : "disabled"} title="${ktSecili.length === 2 ? "" : "Birleştirmek için tam iki test seçin"}">Birleştir…</button>`;
+}
+
+// ---- Gruba taşı (bir ya da daha çok test; KV3) ----
+// Test grubu değişince o testin TÜM istem kalemleri (tamamlanmışlar dahil)
+// yeni gruba geçer (veritabanı tetikleyicisi) — ekip görünümleri ve
+// istatistik buna göre değişir; İHK dışına çıkan kırmızı kromojen DAB olur.
+async function ktGrubaTasi(ids, hedef) {
+  const testler = ids.map(ktTest).filter((t) => t && !t.birlesti_id && t.grup !== hedef);
+  if (!testler.length) { toast(`Seçili testler zaten ${TIP[hedef] || hedef} grubunda`, true); return; }
+  // Hedef grupta aynı ad/eş ad varsa taşınamaz → birleştirme önerilir.
+  const cakisan = testler.map((t) => ({ t, var_: ktAyniAdHedefte(t, hedef) })).filter((x) => x.var_);
+  if (cakisan.length) {
+    const c = cakisan[0];
+    const ok = await onayPenceresi({
+      baslik: "Hedef grupta aynı test var",
+      aciklama: `${TIP[hedef] || hedef} grubunda “${c.var_.ad}” zaten var. “${c.t.ad}” taşınamaz; ikisi aynı testse birleştirin.${cakisan.length > 1 ? ` (${cakisan.length} testte çakışma var.)` : ""}`,
+      onayMetni: "Birleştir…",
+    });
+    if (ok) birlestirPenceresi(c.var_.id, c.t.id, null, hedef);
+    return;
+  }
+  let kalem = 0;
+  try {
+    const say = await Promise.all(testler.map((t) => Api.testSil(t.id, true).then((o) => Number((o.kullanim || {}).istem_kalemleri) || 0).catch(() => 0)));
+    kalem = say.reduce((a, b) => a + b, 0);
+  } catch (e) { /* sayı yoksa da sorulur */ }
+  const ok = await onayPenceresi({
+    baslik: `${testler.length} test ${TIP[hedef] || hedef} grubuna taşınsın mı?`,
+    aciklama: `Bu testlerin TÜM istem kalemleri (${kalem} kalem, tamamlanmışlar dahil) yeni gruba geçer; ekip görünümleri ve istatistikler buna göre değişir.${hedef !== "ihc" ? " Kırmızı kromojenli kalemler DAB olur." : ""}`,
+    liste: testler.map((t) => `${t.ad} (${TIP[t.grup] || t.grup} → ${TIP[hedef] || hedef})`),
+    onayMetni: "Taşı", tekSutun: true,
+  });
+  if (!ok) return;
+  let basarili = 0;
+  for (const t of testler) {
+    try {
+      await Api.katalogKaydet({ ...t, grup: hedef, grupDegistir: true });
+      basarili++;
+    } catch (e) { toast(`${t.ad}: ${katalogHata(e, "taşınamadı")}`, true); }
+  }
+  ktSecili = [];
+  await katalogYukle();
+  if (currentPage === "test-katalogu") katalogListeCiz();
+  if (basarili) toast(`${basarili} test ${TIP[hedef] || hedef} grubuna taşındı · ${kalem} istem kalemi yeni grupta`);
+}
+// Hedef grupta aynı adlı (ya da eş adlı) başka bir test.
+function ktAyniAdHedefte(t, hedef) {
+  const adlar = [t.ad, ...(t.es_adlar || [])].map(testAnahtar);
+  return KATALOG.find((x) => x.id !== t.id && x.grup === hedef && !x.birlesti_id
+    && [x.ad, ...(x.es_adlar || [])].some((y) => adlar.includes(testAnahtar(y)))) || null;
 }
 
 // ---- Test bilgisi (herkes) + geçmiş ----
-const KT_ALAN = { eklendi: "Eklendi", ad: "Ad", klon: "Klon", kontrol: "Kontrol", aciklama: "Açıklama", es_adlar: "Eş adlar", aktif: "Durum", grup: "Grup", birlestirme: "Birleştirme" };
+const KT_ALAN = { eklendi: "Eklendi", ad: "Ad", klon: "Klon", kontrol: "Kontrol", aciklama: "Açıklama", es_adlar: "Eş adlar", aktif: "Durum", grup: "Grup", birlestirme: "Birleştirme", stok: "Stok", grup_kalem: "İstem kalemleri", eslestirme: "Eski kayıt eşleştirme", geri_yuklendi: "Geri yüklendi" };
 function ktLogDeger(alan, v) {
   if (v === null || v === undefined || v === "") return "boş";
-  if (alan === "aktif") return v === "true" || v === true ? "Aktif" : "Pasif";
+  if (alan === "aktif") return v === "true" || v === true ? "Aktif" : v === "false" || v === false ? "Gizli" : String(v);
   if (alan === "grup") return TIP[v] || v;
   if (alan === "es_adlar") return String(v).replace(/^\{|\}$/g, "").replace(/"/g, "").split(",").filter(Boolean).join(", ") || "boş";
   return String(v);
@@ -7427,6 +7830,7 @@ function ktLogSatir(x) {
   const zaman = `<span class="kt-gz">${x.created_at ? kisaTarih(x.created_at) : ""}${kim}</span>`;
   if (x.alan === "eklendi") return `<li><b>Eklendi</b> ${esc(x.yeni || "")}${zaman}</li>`;
   if (x.alan === "birlestirme") return `<li><b>Birleştirme</b> “${esc(x.eski || "")}” → “${esc(x.yeni || "")}”${zaman}</li>`;
+  if (x.alan === "grup_kalem" || x.alan === "eslestirme" || x.alan === "geri_yuklendi") return `<li><b>${esc(KT_ALAN[x.alan])}</b> ${esc(x.yeni || "")}${zaman}</li>`;
   return `<li><b>${esc(KT_ALAN[x.alan] || x.alan)}</b> <span class="kt-eski">${esc(ktLogDeger(x.alan, x.eski))}</span> → ${esc(ktLogDeger(x.alan, x.yeni))}${zaman}</li>`;
 }
 async function ktGecmisYukle(id) {
@@ -7443,59 +7847,149 @@ function ktDetay(id) {
   const duz = ktDuzenler();
   const satir = (b, v) => `<div class="m-sec"><p class="m-label">${b}</p><div class="kt-v${v ? "" : " bos"}">${v ? esc(v) : "—"}</div></div>`;
   const kalan = t.birlesti_id ? ktTest(t.birlesti_id) : null;
+  const stokYokMu = KV3 && t.stok === "yok";
   $("#rail").innerHTML = `
     <div class="rail-head"><h2>Test Bilgisi</h2><button class="rx" id="ktKapat" aria-label="Kapat">×</button></div>
     <div class="rail-body">
       <div class="m-sec"><div class="kt-baslik">${esc(t.ad)} ${ktDurumHTML(t)}</div><div class="kt-grupad">${esc(TIP[t.grup] || t.grup)}</div>
-        ${t.birlesti_id ? `<div class="kt-not">Bu test “${esc(kalan ? kalan.ad : "başka bir test")}” ile birleştirildi; adı onun eş adıdır.</div>` : ""}</div>
+        ${t.birlesti_id ? `<div class="kt-not">Bu test “${esc(kalan ? kalan.ad : "başka bir test")}” ile birleştirildi; adı onun eş adıdır.</div>` : ""}
+        ${stokYokMu ? `<div class="kt-stok-not">⚠ Stokta yok${t.stok_yok_baslangic ? ` — ${esc(kisaTarih(t.stok_yok_baslangic))}'den beri` : ""}${t.stok_aciklama ? `<br>${esc(t.stok_aciklama)}` : ""}</div>` : ""}</div>
       ${satir("Açıklama / kullanım", t.aciklama)}
       ${satir("Klon", t.klon)}
       ${satir("Kontrol", t.kontrol)}
       ${satir("Eş adlar", (t.es_adlar || []).join(", "))}
+      ${duz && KV3 && !t.birlesti_id ? `<div class="m-sec kt-islemler"><p class="m-label">Stok ve kayıt</p>
+        ${stokYokMu ? `<button type="button" class="btn-primary btn-sm" id="ktGeldiBtn">✓ Geldi — tekrar mevcut</button>`
+          : `<button type="button" class="btn-ghost btn-sm kt-tukendi" id="ktTukendiBtn">Tükendi / temin edilemiyor…</button>`}
+        <button type="button" class="btn-ghost btn-sm kt-sil" id="ktSilBtn">Sil…</button></div>` : ""}
       <div class="m-sec"><p class="m-label">Geçmiş</p><div class="kt-gecmis" id="ktGecmis" data-id="${t.id}">Yükleniyor…</div></div>
     </div>
     <div class="rail-foot">
       ${duz && !t.birlesti_id
-        ? `<button class="btn-danger" id="ktAktifBtn">${t.aktif !== false ? "Pasife al" : "Aktife al"}</button><button class="btn-primary" id="ktDuzBtn">Düzenle</button>`
+        ? `<button class="btn-danger" id="ktAktifBtn">${t.aktif !== false ? "Gizle" : "Geri getir"}</button><button class="btn-primary" id="ktDuzBtn">Düzenle</button>`
         : `<button class="btn-ghost" id="ktKapat2">Kapat</button>`}
     </div>`;
   $("#ktKapat").onclick = showEmpty;
   if ($("#ktKapat2")) $("#ktKapat2").onclick = showEmpty;
   if ($("#ktDuzBtn")) $("#ktDuzBtn").onclick = () => ktForm(t);
-  if ($("#ktAktifBtn")) $("#ktAktifBtn").onclick = async () => {
-    const yeni = t.aktif === false;
-    $("#ktAktifBtn").disabled = true;
-    try {
-      if (KATALOG_YENI) await Api.katalogAktif(t.id, yeni); else await Api.setTestKatalogAktif(t.id, yeni);
-      toast(yeni ? "Test aktife alındı" : "Test pasife alındı — yeni istemlerde görünmez, eski kayıtlar korunur");
-      await katalogYukle();
-      katalogListeCiz();
-      ktDetay(t.id);
-    } catch (e) {
-      toast(katalogHata(e, "Güncellenemedi"), true);
-      const b = $("#ktAktifBtn"); if (b) b.disabled = false;
-    }
-  };
+  if ($("#ktAktifBtn")) $("#ktAktifBtn").onclick = () => ktGizle(t, t.aktif === false);
+  if ($("#ktTukendiBtn")) $("#ktTukendiBtn").onclick = () => ktStok(t, true);
+  if ($("#ktGeldiBtn")) $("#ktGeldiBtn").onclick = () => ktStok(t, false);
+  if ($("#ktSilBtn")) $("#ktSilBtn").onclick = () => ktSil(t);
   ktGecmisYukle(t.id);
+}
+// Gizle (pasif) / geri getir — eski kayıtlar korunur.
+async function ktGizle(t, geriGetir) {
+  const b = $("#ktAktifBtn"); if (b) b.disabled = true;
+  try {
+    if (KATALOG_YENI) await Api.katalogAktif(t.id, geriGetir); else await Api.setTestKatalogAktif(t.id, geriGetir);
+    toast(geriGetir ? "Test geri getirildi" : "Test gizlendi — yeni istemlerde görünmez, eski kayıtlar korunur");
+    await katalogYukle();
+    if (currentPage === "test-katalogu") { katalogListeCiz(); ktDetay(t.id); }
+  } catch (e) {
+    toast(katalogHata(e, "Güncellenemedi"), true);
+    const b2 = $("#ktAktifBtn"); if (b2) b2.disabled = false;
+  }
+}
+// Stok: Tükendi → kısa açıklama sorulur, KRİTİK duyuru açılır (herkese
+// bildirim). Geldi → duyuru çözülür, "✓ X tekrar mevcut" bilgisi + bildirim.
+async function ktStok(t, yok) {
+  let aciklama = null;
+  if (yok) {
+    const v = await formPenceresi({
+      baslik: `${t.ad} — tükendi / temin edilemiyor`,
+      aciklama: "Herkese kritik duyuru gider: “⚠ " + t.ad + " tükendi — açıklama”. İstek Ver'de test “Stokta yok” görünür; seçen onay verir.",
+      alanlar: [{ ad: "aciklama", etiket: "Kısa açıklama", tip: "textarea", zorunlu: true, yer: "ör. firmadan bekleniyor, tahmini 2 hafta", uzunluk: 300 }],
+      onayMetni: "Tükendi olarak işaretle",
+    });
+    if (!v) return;
+    aciklama = v.aciklama;
+  } else {
+    const ok = await onayPenceresi({
+      baslik: `${t.ad} geldi mi?`,
+      aciklama: "Kritik duyuru çözülür; herkese “✓ " + t.ad + " tekrar mevcut” bildirimi gider. Bekleyen kalemi olanlara ayrıca haber verilir.",
+      onayMetni: "Geldi",
+    });
+    if (!ok) return;
+  }
+  try {
+    await Api.katalogStok(t.id, yok, aciklama);
+    toast(yok ? `${t.ad}: stokta yok — kritik duyuru yayınlandı` : `${t.ad}: tekrar mevcut — duyuru çözüldü`);
+    await katalogYukle();
+    if (typeof duyuruCanli === "function") duyuruCanli({ t: "duyurular" });
+    if (currentPage === "test-katalogu") { katalogListeCiz(); ktDetay(t.id); }
+  } catch (e) {
+    toast(katalogHata(e, "Stok güncellenemedi"), true);
+  }
+}
+// Sil: kullanılmamış → kalıcı silme (onay + kayıt, geri yüklenebilir);
+// kullanılmış → kullanım sayıları + "Başka testle birleştir" ya da "Gizle".
+async function ktSil(t) {
+  let o;
+  try { o = await Api.testSil(t.id, true); } catch (e) { toast(katalogHata(e, "Kullanım bilgisi alınamadı"), true); return; }
+  const k = o.kullanim || {};
+  if (o.silinebilir) {
+    const ok = await onayPenceresi({
+      baslik: `${t.ad} kalıcı olarak silinsin mi?`,
+      aciklama: `Bu test hiç kullanılmamış${Number(k.duyurular) ? ` (${k.duyurular} duyurudan bağı kalkar)` : ""}. Tüm alanları (ad, grup, klon, kontrol, açıklama, eş adlar) silinenler kaydında saklanır; “Silinen testler”den geri yüklenebilir.`,
+      onayMetni: "Sil",
+    });
+    if (!ok) return;
+    try {
+      await Api.testSil(t.id, false);
+      toast(`${t.ad} silindi — Silinen testler'den geri yüklenebilir`);
+      await katalogYukle();
+      showEmpty();
+      if (currentPage === "test-katalogu") katalogListeCiz();
+    } catch (e) { toast(katalogHata(e, "Silinemedi"), true); }
+    return;
+  }
+  const say = [["istem_kalemleri", "istem kalemi"], ["sablon_kalemleri", "şablon kalemi"], ["istek_seti_kalemleri", "set kalemi"], ["duyurular", "duyuru"]]
+    .filter(([a]) => Number(k[a])).map(([a, l]) => `${k[a]} ${l}`);
+  const ov = document.createElement("div");
+  ov.className = "onay-ov";
+  ov.innerHTML = `<div class="onay-kutu" role="dialog" aria-modal="true" aria-labelledby="silBaslik">
+      <h3 id="silBaslik">${esc(t.ad)} kullanılmış — silinemez</h3>
+      <p class="onay-aciklama">Kullanım: <b>${esc(say.join(", "))}</b>. Eski kayıtlar bozulmasın diye silinmez. Aynı testin başka bir kaydı varsa birleştirin; artık istenmeyecekse gizleyin (eski kayıtlar korunur, istendiğinde geri getirilir).</p>
+      <label class="fp-alan"><span>Birleştirilecek test</span><select class="finput" id="silHedef"><option value="">— seçin —</option>${KATALOG.filter((x) => x.id !== t.id && !x.birlesti_id).sort((a, b) => trSirala(a.ad, b.ad)).map((x) => `<option value="${x.id}">${esc(x.ad)}${x.klon ? ` (${esc(x.klon)})` : ""} — ${esc(TIP[x.grup] || x.grup)}</option>`).join("")}</select></label>
+      <div class="onay-btns"><button type="button" class="btn-ghost" data-sil="0">Vazgeç</button><button type="button" class="btn-ghost" data-sil="gizle">Gizle</button><button type="button" class="btn-primary" data-sil="bir">Başka testle birleştir…</button></div>
+    </div>`;
+  const kapat = () => { document.removeEventListener("keydown", tus, true); ov.remove(); };
+  const tus = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); kapat(); } };
+  ov.addEventListener("click", (e) => {
+    if (e.target === ov) { kapat(); return; }
+    const b = e.target.closest("[data-sil]"); if (!b) return;
+    if (b.dataset.sil === "0") { kapat(); return; }
+    if (b.dataset.sil === "gizle") { kapat(); ktGizle(t, false); return; }
+    const hedef = ov.querySelector("#silHedef").value;
+    if (!hedef) { toast("Birleştirilecek testi seçin", true); return; }
+    kapat();
+    birlestirPenceresi(hedef, t.id);
+  });
+  document.addEventListener("keydown", tus, true);
+  document.body.appendChild(ov);
 }
 
 // ---- Ekle / düzenle (katalog düzenle yetkisi) ----
-function ktForm(existing) {
+function ktForm(existing, onDeger = null, kaydedilince = null) {
   if (!ktDuzenler()) return;
   const ops = `<span style="text-transform:none;letter-spacing:0;color:var(--ink-3);font-weight:400">`;
-  const grup = existing ? existing.grup : (ktGrup || (GROUPS[0] && GROUPS[0][0]) || "");
+  const d = onDeger || {};
+  const grup = existing ? existing.grup : (d.grup || ktGrup || (GROUPS[0] && GROUPS[0][0]) || "");
+  const grupSecilir = !existing || KV3; // SQL sonrası grup değiştirilebilir (kalemler taşınır)
+  const gruplar = GROUPS.some(([k]) => k === grup) ? GROUPS : [...GROUPS, [grup, TIP[grup] || grup]];
   $("#rail").innerHTML = `
     <div class="rail-head"><h2>${existing ? "Testi Düzenle" : "Yeni Test"}</h2><button class="rx" id="ktFKapat" aria-label="Kapat">×</button></div>
     <div class="rail-body">
-      <div class="m-sec"><p class="m-label">Grup</p>${existing
+      <div class="m-sec"><p class="m-label">Grup${existing && KV3 ? ` ${ops}— değişirse bu testin tüm istem kalemleri yeni gruba taşınır</span>` : ""}</p>${!grupSecilir
         ? `<div class="v" style="font-size:13px">${esc(TIP[grup] || grup)}</div>`
-        : `<select class="finput" id="tkGrupSec">${GROUPS.map(([k, l]) => `<option value="${esc(k)}" ${k === grup ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`}</div>
-      <div class="m-sec"><p class="m-label">Ad ${ops}— farklı klon ayrı test ise parantezle: “Ki-67 (MIB-1)”</span></p><input class="finput" id="tkAd" value="${existing ? esc(existing.ad) : ""}" placeholder="ör. ER"></div>
-      <div class="m-sec"><p class="m-label">Klon ${ops}— opsiyonel</span></p><input class="finput" id="tkKlon" value="${existing && existing.klon ? esc(existing.klon) : ""}" placeholder="ör. SP1"></div>
-      <div class="m-sec"><p class="m-label">Kontrol ${ops}— opsiyonel, iş listesinde test adının altında görünür</span></p><input class="finput" id="tkKontrol" maxlength="120" value="${existing && existing.kontrol ? esc(existing.kontrol) : ""}" placeholder="ör. Tonsil"></div>
+        : `<select class="finput" id="tkGrupSec">${gruplar.map(([k, l]) => `<option value="${esc(k)}" ${k === grup ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`}</div>
+      <div class="m-sec"><p class="m-label">Ad ${ops}— farklı klon ayrı test ise parantezle: “Ki-67 (MIB-1)”</span></p><input class="finput" id="tkAd" value="${esc(existing ? existing.ad : d.ad || "")}" placeholder="ör. ER"></div>
+      <div class="m-sec"><p class="m-label">Klon ${ops}— opsiyonel</span></p><input class="finput" id="tkKlon" value="${esc(existing ? existing.klon || "" : d.klon || "")}" placeholder="ör. SP1"></div>
+      <div class="m-sec"><p class="m-label">Kontrol ${ops}— opsiyonel, iş listesinde test adının yanında görünür</span></p><input class="finput" id="tkKontrol" maxlength="120" value="${esc(existing ? existing.kontrol || "" : d.kontrol || "")}" placeholder="ör. Tonsil"></div>
       ${KATALOG_YENI ? `
-      <div class="m-sec"><p class="m-label">Açıklama / kullanım ${ops}— opsiyonel; katalogda ve İstek Ver'deki (i) balonunda görünür</span></p><textarea class="finput" id="tkAciklama" rows="3" maxlength="1000" placeholder="ör. Meme karsinomunda hormon reseptörü değerlendirmesi">${existing ? esc(existing.aciklama || "") : ""}</textarea></div>
-      <div class="m-sec"><p class="m-label">Eş adlar ${ops}— her satıra bir ad; aramada ve tekrar kontrolünde kullanılır</span></p><textarea class="finput" id="tkEsAd" rows="3" placeholder="ör. Östrojen reseptörü">${existing ? esc((existing.es_adlar || []).join("\n")) : ""}</textarea></div>` : ""}
+      <div class="m-sec"><p class="m-label">Açıklama / kullanım ${ops}— opsiyonel; katalogda ve İstek Ver'deki (i) balonunda görünür</span></p><textarea class="finput" id="tkAciklama" rows="3" maxlength="1000" placeholder="ör. Meme karsinomunda hormon reseptörü değerlendirmesi">${esc(existing ? existing.aciklama || "" : d.aciklama || "")}</textarea></div>
+      <div class="m-sec"><p class="m-label">Eş adlar ${ops}— her satıra bir ad; aramada ve tekrar kontrolünde kullanılır</span></p><textarea class="finput" id="tkEsAd" rows="3" placeholder="ör. Östrojen reseptörü">${esc(existing ? (existing.es_adlar || []).join("\n") : (d.es_adlar || []).join("\n"))}</textarea></div>` : ""}
       ${existing ? `<div class="m-sec"><p class="m-label">Sıra ${ops}— İstek Ver'deki varsayılan sıra</span></p><input class="finput" id="tkSira" type="number" value="${existing.sira ?? 0}"></div>` : ""}
     </div>
     <div class="rail-foot">
@@ -7508,30 +8002,235 @@ function ktForm(existing) {
   $("#saveTk").onclick = async () => {
     const ad = $("#tkAd").value.trim().replace(/\s+/g, " ");
     if (!ad) { toast("Ad girin", true); return; }
-    const g = existing ? existing.grup : $("#tkGrupSec").value;
+    const g = grupSecilir ? $("#tkGrupSec").value : existing.grup;
     if (!g) { toast("Grup seçin", true); return; }
     const klon = $("#tkKlon").value.trim();
     const kontrol = $("#tkKontrol").value.trim().replace(/\s+/g, " ");
     const sira = existing ? Number($("#tkSira").value) || 0 : undefined;
+    const grupDegisti = Boolean(existing && g !== existing.grup);
+    const es_adlar = KATALOG_YENI ? $("#tkEsAd").value.split("\n").map((x) => x.trim().replace(/\s+/g, " ")).filter(Boolean) : [];
+    if (grupDegisti) {
+      // Yeni grupta aynı test varsa: kaydetmek yerine birleştirme önerilir.
+      const ayni = ktAyniAdHedefte({ ...existing, ad, es_adlar }, g);
+      if (ayni) {
+        const ok = await onayPenceresi({ baslik: "Yeni grupta aynı test var", aciklama: `${TIP[g] || g} grubunda “${ayni.ad}” zaten var. İkisi aynı testse birleştirin.`, onayMetni: "Birleştir…" });
+        if (ok) birlestirPenceresi(ayni.id, existing.id, null, g);
+        return;
+      }
+      let n = 0;
+      try { n = Number(((await Api.testSil(existing.id, true)).kullanim || {}).istem_kalemleri) || 0; } catch (e) { /* sayı yok */ }
+      const ok = await onayPenceresi({
+        baslik: `Grup değişiyor: ${TIP[existing.grup] || existing.grup} → ${TIP[g] || g}`,
+        aciklama: `Bu testin ${n} istem kalemi (tamamlanmışlar dahil) yeni gruba taşınacak; ekip görünümleri ve istatistikler buna göre değişir.${g !== "ihc" ? " Kırmızı kromojenli kalemler DAB olur." : ""}`,
+        onayMetni: "Kaydet ve taşı",
+      });
+      if (!ok) return;
+    }
     $("#saveTk").disabled = true;
     try {
       let id = existing && existing.id;
       if (KATALOG_YENI) {
-        const es_adlar = $("#tkEsAd").value.split("\n").map((x) => x.trim().replace(/\s+/g, " ")).filter(Boolean);
-        const r = await Api.katalogKaydet({ id, grup: g, ad, klon, kontrol, aciklama: $("#tkAciklama").value.trim(), es_adlar, sira });
+        const r = await Api.katalogKaydet({ id, grup: g, ad, klon, kontrol, aciklama: $("#tkAciklama").value.trim(), es_adlar, sira, grupDegistir: grupDegisti });
         id = id || (r && r.id);
       } else if (existing) await Api.updateTestKatalogEntry(existing.id, { ad, klon, kontrol, sira });
       else await Api.createTestKatalogEntry({ grup: g, ad, klon, kontrol, sira: 0 });
-      toast(existing ? "Test güncellendi" : "Test eklendi");
+      toast(existing ? (grupDegisti ? `Test güncellendi — istem kalemleri ${TIP[g] || g} grubuna taşındı` : "Test güncellendi") : "Test eklendi");
       await katalogYukle();
+      if (kaydedilince) { await kaydedilince(id); return; }
       if (currentPage !== "test-katalogu") return;
       katalogListeCiz();
       if (id && ktTest(id)) ktDetay(id); else showEmpty();
     } catch (e) {
-      toast(katalogHata(e, "Kaydedilemedi"), true);
+      // Yeni grupta tekrar (23505): birleştirme öner.
+      const ayni = grupDegisti && e && e.code === "23505" ? ktAyniAdHedefte({ ...existing, ad, es_adlar }, g) : null;
+      if (ayni) {
+        if (await onayPenceresi({ baslik: "Yeni grupta aynı test var", aciklama: katalogHata(e, "Bu test zaten var"), onayMetni: "Birleştir…" })) birlestirPenceresi(ayni.id, existing.id, null, g);
+      } else toast(katalogHata(e, "Kaydedilemedi"), true);
     } finally {
       const btn = $("#saveTk"); if (btn) btn.disabled = false;
     }
+  };
+}
+
+// ================================================================
+// EKLEME TALEPLERİ (KV3) — İstek Ver'de "Kataloğa eklenmesini iste".
+// Yetkili: Ekle (form ön dolu) · Var: X (talep edilen ad X'in eş adı olur) ·
+// Reddet. Talep edene bildirim gider (push + ekranda).
+// ================================================================
+const TALEP_DURUM = { bekliyor: "Bekliyor", eklendi: "Eklendi", var: "Katalogda var", reddedildi: "Reddedildi" };
+async function renderTalepler() {
+  if (!ktDuzenler() || !KV3) return;
+  showEmpty();
+  $("#mainView").innerHTML = `
+    <div class="page-head"><button class="btn-ghost btn-sm" id="tlGeri">← Test Kataloğu</button><h1>Ekleme talepleri</h1><div class="spacer"></div></div>
+    <div class="kk-wrap" id="tlWrap"><div class="empty"><div class="t">Yükleniyor…</div></div></div>`;
+  $("#tlGeri").onclick = renderTestKatalogPage;
+  let l;
+  try { l = await Api.katalogTalepleri(); } catch (e) { $("#tlWrap").innerHTML = `<div class="empty"><div class="t">Talepler okunamadı</div></div>`; return; }
+  TALEPLER = l;
+  talepSayisiTazele();
+  const bek = l.filter((t) => t.durum === "bekliyor"), biten = l.filter((t) => t.durum !== "bekliyor").slice(0, 50);
+  const kisiAd = (u) => (u ? esc(u.kisaltma || u.ad || "") : "—");
+  const oneri = (t) => { const m = testAra(KATALOG.filter((x) => !x.birlesti_id), aramaNorm(t.ad))[0]; return m ? m.t : null; };
+  $("#tlWrap").innerHTML = `
+    <p class="kk-acik">İstek Ver'de katalogda bulunamayan testler için gönderilen talepler. <b>Ekle</b>: form ön dolu açılır; <b>Var</b>: talep edilen ad seçilen testin eş adı olur; <b>Reddet</b>: kısa gerekçe. Talep edene bildirim gider.</p>
+    ${bek.length ? `<div class="kk-kaydir"><table class="kk-tablo tl-tablo"><thead><tr><th>Test adı</th><th>Not</th><th>İsteyen</th><th>Tarih</th><th></th></tr></thead><tbody>
+      ${bek.map((t) => { const o = oneri(t); return `<tr data-talep="${t.id}"><td><b>${esc(t.ad)}</b>${t.grup ? `<div class="kt-es">${esc(TIP[t.grup] || t.grup)}</div>` : ""}</td><td>${esc(t.notu || "")}</td><td>${kisiAd(t.isteyen)}</td><td>${kisaTarih(t.created_at)}</td>
+        <td class="ot-aks"><button type="button" class="btn-primary btn-sm" data-tl="ekle">Ekle…</button><button type="button" class="btn-ghost btn-sm" data-tl="var" ${o ? `data-oneri="${o.id}"` : ""}>${o ? `Var: ${esc(o.ad)}` : "Var…"}</button><button type="button" class="btn-ghost btn-sm" data-tl="red">Reddet…</button></td></tr>`; }).join("")}
+      </tbody></table></div>` : `<div class="empty"><div class="t">Bekleyen talep yok</div></div>`}
+    ${biten.length ? `<p class="m-label" style="margin-top:20px">Sonuçlananlar</p><div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Test adı</th><th>Sonuç</th><th>İsteyen</th><th>Karar</th></tr></thead><tbody>
+      ${biten.map((t) => `<tr><td>${esc(t.ad)}</td><td>${esc(TALEP_DURUM[t.durum] || t.durum)}${t.sonuc_test_id && ktTest(t.sonuc_test_id) ? `: ${esc(ktTest(t.sonuc_test_id).ad)}` : ""}${t.cevap ? ` — ${esc(t.cevap)}` : ""}</td><td>${kisiAd(t.isteyen)}</td><td>${kisiAd(t.karar_veren)} · ${t.karar_at ? kisaTarih(t.karar_at) : ""}</td></tr>`).join("")}
+      </tbody></table></div>` : ""}`;
+  $("#tlWrap").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-tl]"); if (!b) return;
+    const t = l.find((x) => x.id === b.closest("tr").dataset.talep); if (!t) return;
+    const karar = async (k, testId, cevap) => {
+      try {
+        await Api.katalogTalepKarar(t.id, k, testId, cevap);
+        toast(k === "eklendi" ? `“${t.ad}” eklendi — talep edene bildirildi` : k === "var" ? "Eş ad eklendi — talep edene bildirildi" : "Talep reddedildi — talep edene bildirildi");
+        await katalogYukle();
+        renderTalepler();
+      } catch (x) { toast(katalogHata(x, "Kaydedilemedi"), true); }
+    };
+    if (b.dataset.tl === "ekle") {
+      ktForm(null, { ad: t.ad, grup: t.grup && t.grup !== "diger" ? t.grup : "", aciklama: "" }, async (id) => { if (id) await karar("eklendi", id, null); });
+    } else if (b.dataset.tl === "var") {
+      const v = await formPenceresi({
+        baslik: `“${t.ad}” katalogda var`,
+        aciklama: "Seçilen testin eş adı olarak eklenir; bundan sonra aramada bulunur.",
+        alanlar: [
+          { ad: "test", etiket: "Test", tip: "select", deger: b.dataset.oneri || "", zorunlu: true,
+            secenekler: [["", "— seçin —"], ...KATALOG.filter((x) => !x.birlesti_id && x.aktif !== false).sort((a, c) => trSirala(a.ad, c.ad)).map((x) => [x.id, `${x.ad}${x.klon ? ` (${x.klon})` : ""} — ${TIP[x.grup] || x.grup}`])] },
+          { ad: "cevap", etiket: "Not (opsiyonel)" },
+        ],
+        onayMetni: "Kaydet",
+      });
+      if (v) karar("var", v.test, v.cevap || null);
+    } else {
+      const v = await formPenceresi({ baslik: `“${t.ad}” talebi reddedilsin mi?`, alanlar: [{ ad: "cevap", etiket: "Kısa gerekçe", tip: "textarea", zorunlu: true }], onayMetni: "Reddet" });
+      if (v) karar("reddedildi", null, v.cevap);
+    }
+  });
+}
+
+// ================================================================
+// EŞLEŞMEMİŞ ESKİ KAYITLAR (KV3) — SQL öncesi serbest metinle girilmiş
+// istem / şablon / set kalemleri. Aynı metin (büyük/küçük harf, Türkçe harf,
+// boşluk farkı yok sayılarak) tek satır; en sık geçen en üstte. Öneri güveni:
+// tam eşleşme / eş ad / benzer yazım. Tam ve eş ad önerileri hazır seçili;
+// benzer yazım önerisi seçili gelmez (onay gerekir). Bağlanınca kalem test_id
+// alır, serbest metin (ozel_test) saklanır, grubu testin grubu olur.
+// ================================================================
+let eskiListe = [], eskiSecim = new Map(); // anahtar → test_id
+async function renderEskiKayitlar() {
+  if (!ktDuzenler() || !KV3) return;
+  showEmpty();
+  $("#mainView").innerHTML = `
+    <div class="page-head"><button class="btn-ghost btn-sm" id="esGeri">← Test Kataloğu</button><h1>Eşleşmemiş eski kayıtlar</h1><div class="spacer"></div></div>
+    <div class="kk-wrap" id="esWrap"><div class="empty"><div class="t">Yükleniyor…</div></div></div>`;
+  $("#esGeri").onclick = renderTestKatalogPage;
+  try { eskiListe = await Api.eskiSerbestListesi(); } catch (e) { $("#esWrap").innerHTML = `<div class="empty"><div class="t">${esc(katalogHata(e, "Liste okunamadı"))}</div></div>`; return; }
+  eskiSecim = new Map();
+  const aktifler = KATALOG.filter((t) => !t.birlesti_id);
+  eskiListe.forEach((x) => {
+    const a = testAnahtar(x.metin);
+    let t = aktifler.find((k) => testAnahtar(k.ad) === a), guven = "tam";
+    if (!t) { t = aktifler.find((k) => (k.es_adlar || []).some((e) => testAnahtar(e) === a)); guven = "es"; }
+    if (!t) { const m = testAra(aktifler, aramaNorm(x.metin)).find((m2) => m2.tur === "benzer" || m2.tur === "ad"); t = m ? m.t : null; guven = "benzer"; }
+    // Kelime kelime: "Grocot boyası" → "Grocot" ≈ Grocott (GMS'in eş adı). Her zaman onay ister.
+    if (!t) {
+      const kelimeler = String(x.metin).split(/\s+/).map(aramaNorm).filter((k) => k.length >= 3);
+      for (const k of kelimeler) {
+        const m = testAra(aktifler, k).find((m2) => m2.tur !== "klon" && (m2.tur === "benzer" || aramaNorm(m2.es || m2.t.ad).length <= k.length + 2));
+        if (m) { t = m.t; break; }
+      }
+      guven = "benzer";
+    }
+    x.oneri = t ? t.id : null;
+    x.guven = t ? guven : null;
+    if (t && guven !== "benzer") eskiSecim.set(x.anahtar, t.id);
+  });
+  eskiCiz();
+}
+const GUVEN = { tam: ["Tam eşleşme", "g-tam"], es: ["Eş ad", "g-es"], benzer: ["Benzer yazım — onay gerekir", "g-benzer"] };
+function eskiCiz() {
+  const w = $("#esWrap"); if (!w) return;
+  const secenek = (sec) => `<option value="">— test seçin —</option>` + KATALOG.filter((t) => !t.birlesti_id).sort((a, b) => trSirala(a.ad, b.ad))
+    .map((t) => `<option value="${t.id}" ${t.id === sec ? "selected" : ""}>${esc(t.ad)}${t.klon ? ` (${esc(t.klon)})` : ""} — ${esc(TIP[t.grup] || t.grup)}${t.aktif === false ? " · gizli" : ""}</option>`).join("");
+  const toplam = (x) => Number(x.istem || 0) + Number(x.sablon || 0) + Number(x.set || 0);
+  w.innerHTML = `
+    <p class="kk-acik">Katalog dışı (serbest metin) girilmiş eski kalemler — en sık geçen en üstte. Bir teste bağlayın ya da yeni test olarak ekleyin. <b>Tam eşleşme</b> ve <b>eş ad</b> önerileri seçili gelir; <b>benzer yazım</b> önerisi seçili gelmez, kontrol edip işaretleyin. Bağlanan kalemin grubu testin grubu olur; yazılan metin saklanır.</p>
+    ${eskiListe.length ? `<div class="es-ust"><span>${eskiListe.length} farklı metin · ${eskiListe.reduce((n, x) => n + toplam(x), 0)} kalem</span><span class="grow"></span><button type="button" class="btn-primary btn-sm" id="esBagla" disabled>Seçilenleri bağla</button></div>
+    <div class="kk-kaydir"><table class="kk-tablo es-tablo"><thead><tr><th class="kt-sec"></th><th>Yazılan metin</th><th>Adet</th><th>Öneri</th><th>Bağlanacak test</th><th></th></tr></thead><tbody>
+      ${eskiListe.map((x) => `<tr data-es="${esc(x.anahtar)}">
+        <td class="kt-sec"><input type="checkbox" data-es-sec ${eskiSecim.has(x.anahtar) ? "checked" : ""} aria-label="${esc(x.metin)} — bağla"></td>
+        <td><b>${esc(x.metin)}</b>${(x.gruplar || []).length ? `<div class="kt-es">${esc(x.gruplar.map((g) => TIP[g] || g).join(", "))}</div>` : ""}</td>
+        <td class="es-adet"><b>${toplam(x)}</b><div class="kt-es">${[x.istem ? `${x.istem} istem` : "", x.sablon ? `${x.sablon} şablon` : "", x.set ? `${x.set} set` : ""].filter(Boolean).join(" · ")}</div></td>
+        <td>${x.guven ? `<span class="es-guven ${GUVEN[x.guven][1]}">${GUVEN[x.guven][0]}</span>` : `<span class="kt-es">öneri yok</span>`}</td>
+        <td><select class="finput" data-es-test>${secenek(eskiSecim.get(x.anahtar) || x.oneri)}</select></td>
+        <td><button type="button" class="btn-ghost btn-sm" data-es-yeni>Yeni test olarak ekle…</button></td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty"><div class="t">Eşleşmemiş eski kayıt yok</div><div class="d">Tüm kalemler katalog testlerine bağlı.</div></div>`}`;
+  const btnGuncelle = () => { const b = $("#esBagla"); if (b) { b.disabled = !eskiSecim.size; b.textContent = eskiSecim.size ? `Seçilenleri bağla (${eskiSecim.size})` : "Seçilenleri bağla"; } };
+  btnGuncelle();
+  w.onchange = (e) => {
+    const tr = e.target.closest("tr[data-es]"); if (!tr) return;
+    const an = tr.dataset.es, sel = tr.querySelector("[data-es-test]"), cb = tr.querySelector("[data-es-sec]");
+    if (e.target.matches("[data-es-test]")) { cb.checked = Boolean(sel.value); }
+    if (cb.checked && sel.value) eskiSecim.set(an, sel.value);
+    else { eskiSecim.delete(an); if (cb.checked && !sel.value) { cb.checked = false; toast("Önce bağlanacak testi seçin", true); } }
+    btnGuncelle();
+  };
+  w.onclick = async (e) => {
+    if (e.target.closest("#esBagla")) { eskiBagla(); return; }
+    const y = e.target.closest("[data-es-yeni]"); if (!y) return;
+    const x = eskiListe.find((z) => z.anahtar === y.closest("tr").dataset.es); if (!x) return;
+    const g = (x.gruplar || []).find((k) => k !== "diger") || "";
+    ktForm(null, { ad: x.metin, grup: g }, async (id) => {
+      if (!id) return;
+      eskiSecim = new Map([[x.anahtar, id]]);
+      await eskiBagla(true);
+    });
+  };
+}
+async function eskiBagla(sorma = false) {
+  const l = [...eskiSecim].map(([anahtar, test_id]) => ({ anahtar, test_id }));
+  if (!l.length) return;
+  const satir = l.map(({ anahtar, test_id }) => { const x = eskiListe.find((z) => z.anahtar === anahtar) || {}; const t = ktTest(test_id) || {}; return `“${x.metin}” → ${t.ad || "?"} (${TIP[t.grup] || t.grup || ""})`; });
+  if (!sorma && !(await onayPenceresi({ baslik: `${l.length} metin bağlansın mı?`, aciklama: "İstem kalemleri, şablon ve set satırları seçilen teste bağlanır; kalemin grubu testin grubu olur, yazılan metin saklanır.", liste: satir, onayMetni: "Bağla", tekSutun: true }))) return;
+  try {
+    const o = await Api.eskiSerbestBagla(l);
+    toast(`Bağlandı: ${o.istem || 0} istem kalemi, ${o.sablon || 0} şablon, ${o.set || 0} set satırı`);
+    renderEskiKayitlar();
+  } catch (e) { toast(katalogHata(e, "Bağlanamadı"), true); }
+}
+
+// ================================================================
+// SİLİNEN TESTLER (KV3) — kalıcı silinen (kullanılmamış) testlerin tüm
+// alanları saklanır; geri yüklenebilir.
+// ================================================================
+async function renderSilinenler() {
+  if (!ktDuzenler() || !KV3) return;
+  showEmpty();
+  $("#mainView").innerHTML = `
+    <div class="page-head"><button class="btn-ghost btn-sm" id="slGeri">← Test Kataloğu</button><h1>Silinen testler</h1><div class="spacer"></div></div>
+    <div class="kk-wrap" id="slWrap"><div class="empty"><div class="t">Yükleniyor…</div></div></div>`;
+  $("#slGeri").onclick = renderTestKatalogPage;
+  let l;
+  try { l = await Api.silinenTestler(); } catch (e) { $("#slWrap").innerHTML = `<div class="empty"><div class="t">${esc(katalogHata(e, "Liste okunamadı"))}</div></div>`; return; }
+  $("#slWrap").innerHTML = l.length ? `<div class="kk-kaydir"><table class="kk-tablo"><thead><tr><th>Test</th><th>Grup</th><th>Klon</th><th>Kontrol</th><th>Açıklama</th><th>Silen</th><th></th></tr></thead><tbody>
+    ${l.map((x) => `<tr data-sl="${x.id}"><td><b>${esc(x.ad)}</b>${(x.es_adlar || []).length ? `<div class="kt-es">= ${esc(x.es_adlar.join(", "))}</div>` : ""}</td><td>${esc(TIP[x.grup] || x.grup || "")}</td><td>${esc(x.klon || "")}</td><td>${esc(x.kontrol || "")}</td><td class="kt-acik">${esc(x.aciklama || "")}</td>
+      <td>${esc(x.silen ? x.silen.kisaltma || x.silen.ad : "—")} · ${kisaTarih(x.silindi_at)}</td>
+      <td>${x.geri_yuklendi_at ? `<span class="kt-es">geri yüklendi ${kisaTarih(x.geri_yuklendi_at)}</span>` : `<button type="button" class="btn-ghost btn-sm" data-sl-geri>Geri yükle</button>`}</td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty"><div class="t">Silinen test yok</div></div>`;
+  $("#slWrap").onclick = async (e) => {
+    const b = e.target.closest("[data-sl-geri]"); if (!b) return;
+    b.disabled = true;
+    try {
+      await Api.testGeriYukle(b.closest("tr").dataset.sl);
+      toast("Test geri yüklendi");
+      await katalogYukle();
+      renderSilinenler();
+    } catch (x) { toast(katalogHata(x, "Geri yüklenemedi"), true); b.disabled = false; }
   };
 }
 
@@ -7555,11 +8254,16 @@ function parseBulkLines(text) {
 // set taşınacak) ve işlem tek RPC: test_birlestir (tek transaction).
 // ================================================================
 const BIR_TABLO = { istem_kalemleri: "istem kalemi", sablon_kalemleri: "şablon kalemi", istek_seti_kalemleri: "istek seti kalemi", duyurular: "duyuru" };
-function birlestirPenceresi(aId, bId, bitince) {
+// grupOneri: kalacak grup (gruba taşıma / grup değişikliğinden gelince).
+// SQL sonrası (KV3) farklı gruplardaki testler de birleşir; kalacak grup seçilir.
+function birlestirPenceresi(aId, bId, bitince, grupOneri = null) {
   const a = ktTest(aId), b = ktTest(bId);
   if (!a || !b) return;
-  if (a.grup !== b.grup) { toast("Yalnız aynı gruptaki testler birleştirilebilir", true); return; }
+  if (a.grup !== b.grup && !KV3) { toast("Yalnız aynı gruptaki testler birleştirilebilir", true); return; }
   let kalan = a.aktif === false && b.aktif !== false ? b.id : a.id;
+  const grupSecimi = KV3 && (a.grup !== b.grup || (grupOneri && grupOneri !== a.grup));
+  let hedefGrup = grupOneri || (kalan === a.id ? a.grup : b.grup);
+  const grupSecenek = [...new Set([grupOneri, a.grup, b.grup].filter(Boolean))];
   let sira = 0;
   const ov = document.createElement("div");
   ov.className = "onay-ov";
@@ -7567,7 +8271,8 @@ function birlestirPenceresi(aId, bId, bitince) {
   ov.innerHTML = `<div class="onay-kutu bir-kutu" role="dialog" aria-modal="true" aria-labelledby="birBaslik">
       <h3 id="birBaslik">Testleri birleştir</h3>
       <p class="onay-aciklama">Hangi test <b>kalacak</b>? Diğeri pasife alınır, adı kalanın eş adı olur; tüm istem kalemleri, şablonlar ve setler kalan teste taşınır.</p>
-      <div class="bir-sec">${[a, b].map((t) => `<label><input type="radio" name="birKalan" value="${t.id}" ${t.id === kalan ? "checked" : ""}> ${etiket(t)}</label>`).join("")}</div>
+      <div class="bir-sec">${[a, b].map((t) => `<label><input type="radio" name="birKalan" value="${t.id}" ${t.id === kalan ? "checked" : ""}> ${etiket(t)}${grupSecimi ? ` <span class="kt-es">${esc(TIP[t.grup] || t.grup)}</span>` : ""}</label>`).join("")}</div>
+      ${grupSecimi ? `<label class="fp-alan"><span>Kalacak grup</span><select class="finput" id="birGrup">${grupSecenek.map((g) => `<option value="${esc(g)}" ${g === hedefGrup ? "selected" : ""}>${esc(TIP[g] || g)}</option>`).join("")}</select></label>` : ""}
       <div class="bir-onizleme" id="birOnizleme" aria-live="polite">Önizleme hazırlanıyor…</div>
       <div class="onay-btns"><button type="button" class="btn-ghost" data-bir="0">Vazgeç</button><button type="button" class="btn-primary" data-bir="1" disabled>Birleştir</button></div>
     </div>`;
@@ -7580,7 +8285,7 @@ function birlestirPenceresi(aId, bId, bitince) {
     el.textContent = "Önizleme hazırlanıyor…";
     const giden = kalan === a.id ? b.id : a.id;
     try {
-      const o = await Api.testBirlestir(kalan, giden, true);
+      const o = await Api.testBirlestir(kalan, giden, true, grupSecimi ? hedefGrup : null);
       if (benim !== sira) return;
       const say = Object.entries(o.sayilar || {}).filter(([, n]) => n > 0).map(([t, n]) => `<li><b>${n}</b> ${esc(BIR_TABLO[t] || t)}</li>`);
       const dol = Object.entries(o.doldurulacak || {}).map(([k, v]) => `${esc(KT_ALAN[k] || k)}: ${esc(v)}`);
@@ -7588,6 +8293,8 @@ function birlestirPenceresi(aId, bId, bitince) {
         ${say.length ? `<p>Kalan teste taşınacak:</p><ul>${say.join("")}</ul>` : `<p>Taşınacak kayıt yok (giden test hiç kullanılmamış).</p>`}
         ${(o.eklenecek_es_adlar || []).length ? `<p>Eklenecek eş adlar: <b>${esc(o.eklenecek_es_adlar.join(", "))}</b></p>` : ""}
         ${dol.length ? `<p>Kalanda boş olup gidenden doldurulacak: ${dol.join(" · ")}</p>` : ""}
+        ${o.grup && o.grup !== o.kalan.grup ? `<p>Kalan test <b>${esc(TIP[o.grup] || o.grup)}</b> grubuna geçer.</p>` : ""}
+        ${Number(o.grup_degisecek) ? `<p><b>${o.grup_degisecek}</b> istem kaleminin grubu ${esc(TIP[o.grup] || o.grup)} olur (tamamlanmışlar dahil; ekip görünümleri ve istatistik buna göre değişir${o.grup !== "ihc" ? "; kırmızı kromojen DAB olur" : ""}).</p>` : ""}
         <p class="bir-not">Giden test silinmez; pasife alınır ve “birleştirildi” olarak işaretlenir. İşlem geçmişe yazılır.</p>`;
       btn.disabled = false;
     } catch (e) {
@@ -7595,7 +8302,14 @@ function birlestirPenceresi(aId, bId, bitince) {
       el.innerHTML = `<p class="bir-hata">${esc(katalogHata(e, "Önizleme alınamadı"))}</p>`;
     }
   };
-  ov.addEventListener("change", (e) => { if (e.target.name === "birKalan") { kalan = e.target.value; onizle(); } });
+  ov.addEventListener("change", (e) => {
+    if (e.target.name === "birKalan") {
+      kalan = e.target.value;
+      if (grupSecimi && !grupOneri) { hedefGrup = (kalan === a.id ? a : b).grup; const gs = ov.querySelector("#birGrup"); if (gs) gs.value = hedefGrup; }
+      onizle();
+    }
+    if (e.target.id === "birGrup") { hedefGrup = e.target.value; onizle(); }
+  });
   ov.addEventListener("click", async (e) => {
     if (e.target === ov) { kapat(); return; }
     const b2 = e.target.closest("[data-bir]"); if (!b2) return;
@@ -7603,7 +8317,7 @@ function birlestirPenceresi(aId, bId, bitince) {
     b2.disabled = true;
     const giden = kalan === a.id ? b.id : a.id;
     try {
-      const o = await Api.testBirlestir(kalan, giden, false);
+      const o = await Api.testBirlestir(kalan, giden, false, grupSecimi ? hedefGrup : null);
       kapat();
       toast(`“${o.giden.ad}”, “${o.kalan.ad}” ile birleştirildi`);
       ktSecili = [];
@@ -8719,6 +9433,7 @@ function istatistikV2HTML(s) {
       ${kart("Tamamlanan", istN(o.tamamlanan), "aralıkta tamamlanan; bir kısmı önceki dönemde istenmiş olabilir", istDegisim(o.tamamlanan, on.tamamlanan))}
       ${kart("Ort. tamamlanma", fmtSure(o.ort_saat), o.medyan_saat != null ? `medyan ${fmtSure(o.medyan_saat)} · istem → tamamlama` : "istem → tamamlama", istDegisim(o.ort_saat, on.ort_saat, true))}
       ${kart("Şu an açık", istN(o.acik), "Bekleyen + İşlemde (bugün)")}
+      ${o.kirmizi != null ? kart("Kırmızı kromojen", istN(o.kirmizi), `İHK kalemi${o.kalem ? ` · kalemlerin %${(Math.round((Number(o.kirmizi) / Number(o.kalem)) * 1000) / 10).toLocaleString("tr-TR")}` : ""}`, istDegisim(o.kirmizi, on.kirmizi)) : ""}
     </div>
     <div class="ist-kartlar ist-teslim-kartlar">
       ${kart("Tamamlanma → teslim", fmtSure(sTum.teslim?.ort), `${sTum.teslim?.med != null ? `medyan ${fmtSure(sTum.teslim.med)} · ` : ""}${istN(sTum.teslim?.n)} teslim (aralıkta, yalnız teslim alınanlar)<br><b>Teslim alma oranı: ${istOran(tsl.oran)}</b> — aralıkta tamamlananların kaçı teslim alındı (${istN(tsl.aralik_alinan)} / ${istN(Number(tsl.aralik_alinan || 0) + Number(tsl.aralik_kayit_yok || 0))}${tsl.aralik_sonucsuz ? `; ${istN(tsl.aralik_sonucsuz)} kalemin ${tsl.kayit_yok_gun} günü dolmadı, sayılmadı` : ""})`)}
@@ -8825,6 +9540,7 @@ function istTestlerHTML() {
         { k: "med", l: "Medyan", sayi: true, deger: (r) => r.sure?.med ?? null, html: (r) => fmtSure(r.sure?.med) },
         { k: "tekrar", l: "Tekrar", sayi: true, html: (r) => istN(r.tekrar) },
         { k: "tekrar_oran", l: "Tekrar %", sayi: true, deger: (r) => (r.kalem ? Math.round((r.tekrar / r.kalem) * 100) : null), html: (r) => (r.kalem ? istOran(Math.round((r.tekrar / r.kalem) * 100)) : "—") },
+        ...((s.testler || []).some((t) => t.kirmizi != null) ? [{ k: "kirmizi", l: "Kırmızı", sayi: true, ipucu: "Kırmızı kromojenle istenen kalem", html: (r) => (r.kirmizi ? `<span class="krom-sayi">${istN(r.kirmizi)}</span>` : `<span class="sifir">0</span>`) }] : []),
       ] })}`;
 }
 

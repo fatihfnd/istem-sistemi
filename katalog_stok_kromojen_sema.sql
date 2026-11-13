@@ -208,6 +208,12 @@ begin
     select coalesce(k.kromojen, 'dab') into new.kromojen from istem_kalemleri k where k.id = new.tekrar_kaynagi_id;
     new.kromojen := coalesce(new.kromojen, 'dab');
   end if;
+  -- Test düzeltmesiyle kalem İHK dışına geçerse kırmızı DAB'a döner (açıkça
+  -- İHK dışı kaleme kırmızı yazmak ise reddedilir).
+  if tg_op = 'UPDATE' and new.grup is distinct from old.grup and new.grup is distinct from 'ihc'
+     and new.kromojen = 'kirmizi' and old.kromojen = 'kirmizi' then
+    new.kromojen := 'dab';
+  end if;
   if new.kromojen = 'kirmizi' and new.grup is distinct from 'ihc' then
     raise exception 'Kırmızı kromojen yalnız İHK testlerinde seçilebilir' using errcode = '22023';
   end if;

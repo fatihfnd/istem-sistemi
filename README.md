@@ -124,7 +124,7 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 `arsiv_yazdirma_sema.sql`'den sonra, **kod deploy edilmeden önce** çalıştırın (idempotent; teslimde 2 parça). Yeniden çalıştırılırsa kuyruk görünümünü geri almaz — son hali `duzeltme_sema.sql`'dedir.
 
 - `test_katalog.kontrol` (opsiyonel, ≤ 200 karakter): Test Kataloğu formunda tek tek düzenlenir; kuyruğa katalogdan **canlı** gelir (değişince eski istemlerde de güncel).
-- Görünüm: ayrı sütun yok — test adının altında, klonla aynı satırda "L26 · *K: Tonsil*" (küçük + italik, renge dayanmaz). İş Kuyruğu ve detay panelinde böyle. **Çıktıda** (Çalışma Listesi) aynı satırda: "CD20 (L26) · K: Tonsil" — klon test adının yanında parantez içinde, kontrol "· K:" önekiyle küçük ve gri; satır sığmazsa yalnız kontrol kısmı alt satıra kayar, test adı bölünmez; kontrolü olmayan testte "· K:" yazılmaz (Kesit / Arşiv / Hizmetler çıktıları blok / istem özeti basar, kontrol içermez).
+- Görünüm: ayrı sütun yok — test adının altında, klonla aynı satırda "L26 · *K: Tonsil*" (küçük + italik, renge dayanmaz). İş Kuyruğu ve detay panelinde böyle. **Çıktıda** (Çalışma Listesi ve Kesit Listesi) aynı satırda: "CD20 (L26) [K: Tonsil]" — klon test adının yanında parantez içinde, kontrol test adıyla aynı boyda, kalın, ince çerçeveli etiket; satır sığmazsa yalnız etiket alt satıra kayar, test adı bölünmez; kontrolü olmayan testte etiket yok (bkz. 1v).
 - **Çıktıda notlar** (yalnız Çalışma Listesi ve Kesit Listesi; Arşiv ve Hizmetler değişmez): istem notları istemin ilk satırının altında bir kez, kalite notu ilgili satırın altında — tam genişlikte, küçük italik: "Not: HD: Derin kesit istenir · ÖEP: Dekal blok" (yazar kısaltması + metin, tarih yok; eskiden yeniye). Notlar yazdırma anında tek istekte çekilir (çok uzun listelerde 150 kalemlik paralel parçalar); alınamazsa çıktı notsuz basılır ve kısa uyarı çıkar. Yazdır menüsünde **"Notları yazdır"** kutusu (varsayılan açık, tercih bu tarayıcıda). Excel'e Aktar'da ayrı "Kontrol" sütunu. Boşsa hiç görünmez.
 - *(1t ile değişti: "Kontrol listesi yükle" artık Test Kataloğu > **Liste içe aktar** içindedir.)* **Kontrol listesi yükle** (Test Kataloğu, yönetici): Excel'den yapıştırılan "Antikor ⇥ Kontrol" satırları. İlk satırda "antikor"/"kontrol" geçiyorsa başlık sayılır; kontrol "X" ise boş; TAB'sız satır okunamayan sayılıp atlanır.
 - Eşleştirme anahtarı: Türkçe harfler sadeleşir (İ/I/ı→i, ş→s …), aksanlar atılır, küçük harf; boşluk, tire, nokta, parantez yok sayılır ("Bcl-2" = "BCL2", "/" korunur). İmmün ekibinin gruplarındaki testlerle eşleşir; aynı ada birden çok test düşerse aktif olan, yine birden çoksa "birden çok aday". Tam eşleşme yoksa parantez içi atılarak tekrar denenir ("Ki-67 (MIB-1)" → "Ki-67", işaretli).
@@ -291,6 +291,41 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 **Düğmeler**
 - İstemi düzeltirken alt çubukta yalnız **Vazgeç** ve **Değişiklikleri kaydet** (durum düğmeleri — "Tamamla" — form kapanınca geri gelir). "Tamamla" yalnız kalemi Tamamlandı'ya alan işlemdedir.
 - Simge düğmelere metin: **✎ Düzenle**, **↻ Yenile**, satırlardaki **Geri Al**, notlarda **Sil** (çok dar ekranda yalnız metin).
+
+## 1v) Yalnız katalog, kırmızı kromojen, stok, grup taşıma, test silme (`katalog_stok_kromojen_sema.sql`, `push-gonder` + `daily-backup` yeniden deploy)
+**Sıra: 1) uygulama (Netlify), 2) SQL, 3) `push-gonder`, 4) `daily-backup`.** SQL `yetki_katalog_sema.sql` ve `istatistik_teslim_sema.sql`'den sonra çalışır (idempotent, 3 parça, her parça tek işlem). Uygulama SQL'i `katalog_talepleri` tablosunun varlığından anlar: tablo yokken İstek Ver bugünkü gibi serbest metne izin verir; SQL çalışınca (açık sekmeler bir kez yenilendiğinde) serbest metin kalkar. Böylece deploy ile SQL arasında kimse takılmaz.
+
+**Yedek ve geri alma**
+- SQL toplu güncellemelerden önce şema içi kopyalar alır: `yedek_20261113_istem_kalemleri`, `_test_katalog`, `_sablon_kalemleri`, `_istek_seti_kalemleri` (varsa atlar; RLS açık, uygulamadan okunmaz).
+- `katalog_stok_kromojen_geri_al.sql`: yeni kuralları kapatır (katalog zorunluluğu, grup taşıma, "Diğer"i pasife alma), `katalog_talepleri`'ni yeniden adlandırır (uygulama serbest metne döner) ve test kataloğu, kalemlerin test/grup bağı, şablon/set satırlarını yedekteki haline getirir. Yedekten sonra eklenenlere dokunmaz; kromojen/stok sütunları kalır. İdempotent.
+
+**Serbest metin kalktı — yalnız katalog**
+- Veritabanı yeni kalemde katalog testi ister (`test_id` dolu, test aktif ve birleştirilmemiş); eski kalemler olduğu gibi kalır. Set ve şablonlara da yalnız katalog testi eklenir. "Diğer" grubunda aktif test kalmayınca grup pasife düşer (testleri başka gruba taşınabilir).
+- İstek Ver araması: büyük/küçük harf, Türkçe harf, tire/boşluk farkı yok sayılır; eş ad, klon ve **benzer yazım** (4+ harfte 1, 8+ harfte 2 harf farkı, "≈" ile, sonda) eşleşir — "Grocot" → GMS (eş ad Grocott, SQL ekler), "erb" → c-erb-B2. Seçili grupta yoksa **diğer gruplardaki** eşleşmeler grup etiketiyle gösterilir.
+- Hiç yoksa **"Katalogda yok"** kutusu: herkes **"Kataloğa eklenmesini iste"** (test adı + kısa not) → katalog düzenleme yetkisi olanlara bildirim; yetkililer ayrıca **"+ Kataloğa ekle"** (grup zorunlu, tekrar kontrolü).
+- Eski set/şablon/sepetteki serbest metin öğeleri istem formunda seçilmez (bildirilir); set/şablon düzenlerken görünür, kaydederken çıkarılması sorulur.
+
+**Katalog sayfası (katalog düzenle yetkisi)**
+- **Ekleme talepleri (N)** — menü rozetinde bekleyen sayısı. **Ekle** (form talep edilen adla açılır), **Var: X** (önerilen ya da seçilen test; talep edilen ad onun eş adı olur), **Reddet** (gerekçe). Talep edene bildirim gider (telefona + uygulama açıksa ekranda).
+- **Eşleşmemiş eski kayıtlar** — eski serbest metinli istem/şablon/set kalemleri; aynı metin (harf/boşluk farkı yok sayılarak) tek satır, **en sık geçen en üstte**. Öneri güveni: **Tam eşleşme** ve **Eş ad** hazır seçili; **Benzer yazım** seçili gelmez, onay gerekir. Toplu bağlama; ya da "Yeni test olarak ekle". Bağlanan kalem `test_id` alır, yazılan metin saklanır, grubu testin grubu olur; test geçmişine yazılır.
+- **Stok:** test bilgisinde **Tükendi / temin edilemiyor…** (kısa açıklama zorunlu) → herkese KRİTİK duyuru "⚠ X tükendi — açıklama", teste bağlı. İstek Ver'de test "Stokta yok" etiketiyle görünür, seçince "Stokta yok, yine de istem verilsin mi?" sorulur; İş Kuyruğu'nda o testin **bekleyen** kalemlerinde "⚠ Stokta yok". **Geldi** → kritik duyuru çözülür, "✓ X tekrar mevcut" bilgi duyurusu ve bildirim; o testin bekleyen kalemi olanlara "— bekleyen N kaleminiz var". Filtre: **Stokta olmayanlar**. Değişiklikler test geçmişinde.
+- **Grup değiştirme:** düzenleme formunda grup seçilebilir. Değişince o testin **tüm istem kalemleri (tamamlanmışlar dahil)** yeni gruba taşınır — ekip görünümleri, iş listeleri ve istatistikler buna göre değişir; İHK dışına çıkan kırmızı kromojen DAB olur. Onayda kalem sayısı gösterilir; yeni grupta aynı ad/eş ad varsa kayıt yerine **Birleştir** önerilir. Çoklu seçim (sınırsız) → **Gruba taşı**.
+- **Gruplar arası birleştirme:** iki test seçip **Birleştir…** — gruplar farklıysa **kalacak grup** seçilir; önizlemede kaç kalemin grubunun değişeceği yazar.
+- **Sil…:** hiç kullanılmamış test kalıcı silinir (onay); tüm alanları (ad, grup, klon, kontrol, açıklama, eş adlar) ve geçmişi **Silinen testler**'de saklanır, **Geri yükle** ile döner. Kullanılmışsa kullanım sayıları gösterilir: **Başka testle birleştir…** ya da **Gizle**. "Pasife al" artık **Gizle** / **Geri getir**; liste filtresi **Gizlenenleri göster**.
+
+**Kırmızı kromojen (yalnız İHK grup kodu `ihc`)**
+- `istem_kalemleri.kromojen` = `dab` (varsayılan) | `kirmizi`. Veritabanı İHK dışı kalemde kırmızıyı reddeder (Histokimya, Yeni Kesit vb. — immün ekibinin ana sayfasındakiler dahil — seçenek görmez). "Tekrar İste" kaynağın kromojenini taşır.
+- İstek Ver ve sepet: seçili İHK testi varsa **Kromojen (İHK): DAB | Kırmızı** (tüm İHK testlerine) ve her İHK çipinde ● (tek teste; kırmızı = kırmızı nokta).
+- Listeler ve detay: kırmızı **KIRMIZI** rozeti. Çalışma Listesi ve Kesit Listesi çıktısında test adının yanında kalın kırmızı **KIRMIZI**.
+- Düzeltme (yalnız İHK kalemi): **Kromojen** seçeneği; iz ve not ("CD20: kromojen DAB → Kırmızı olarak düzeltildi").
+- İstatistik: "Kırmızı kromojen" kartı ve test tablosunda "Kırmızı" sütunu. Excel'e Aktar ve günlük yedekte "Kromojen" sütunu.
+
+**Çıktıda kontrol daha belirgin**
+- Çalışma Listesi ve **Kesit Listesi** (artık test başına kontrol basar): "CD20 (L26) KIRMIZI **[K: Tonsil]**" — kontrol test adıyla aynı boyda, kalın, siyah, ince çerçeveli etiket; satır sığmazsa yalnız etiket bütün halde alt satıra kayar.
+
+**Edge Functions**
+- `push-gonder`: `stok_geldi` duyuru olayı ve kataloğa ekleme talebi / sonucu (`talep_id`). Panelden tek dosya olarak yeniden deploy.
+- `daily-backup`: İstem Kalemleri sayfasına "Kromojen" sütunu, düzeltmelerde "Kromojen" alanı. Panelden tek dosya (index.ts + yedek.ts birleşik) olarak yeniden deploy.
 
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):
