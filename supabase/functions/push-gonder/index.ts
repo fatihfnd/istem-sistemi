@@ -16,6 +16,12 @@
 //                         "CD3 duyurusu çözüldü"
 //                         stok_geldi (katalog_stok_kromojen_sema.sql) → herkese "✓ X tekrar
 //                         mevcut"; o testin BEKLEYEN kalemi olan isteyenlere "— bekleyen N kaleminiz var"
+//                         yeni (duyuru_bildirim_sema.sql) → bilgi / uyarı duyurusu: yazan hariç
+//                         herkese "Bilgi" / "Duyuru" — "Test · başlık"
+//                         kritik_guncelleme → aktif kritik duyuruya güncelleme: herkese (yazan hariç)
+//                         Duyuru tercihi (duyuru_bildirim_tercihi): "tumu" (kayıt yoksa) / "kritik" /
+//                         "kapali" — kritik ve kritik güncellemesi HER ZAMAN gider; bilgi, uyarı,
+//                         yeni test, stok geldi ve uyarı/bilgi çözülmesi yalnız "tumu" seçenlere.
 //  {"talep_id": "...", "olay": "katalog_talep" | "katalog_talep_sonuc"}
 //                         kataloğa ekleme talebi → katalog düzenleme yetkililerine;
 //                         sonuç (eklendi / var / reddedildi) → talep edene
@@ -285,9 +291,20 @@ async function topluBildir(db: Db, topluId: string) {
   return await topluGonder(db, vapid, isler);
 }
 
+// Duyuru tercihi: "kritik" ya da "kapali" seçenler kritik olmayan duyuru
+// bildirimi almaz. Tablo yoksa (SQL çalışmadıysa) süzülmez.
+async function tercihSuz(db: Db, adaylar: string[], kritikMi: boolean): Promise<string[]> {
+  if (kritikMi || !adaylar.length) return adaylar;
+  const { data, error } = await db.from("duyuru_bildirim_tercihi").select("kullanici_id,secim").in("kullanici_id", adaylar).neq("secim", "tumu");
+  if (error) return adaylar;
+  const haric = new Set((data ?? []).map((t: { kullanici_id: string }) => t.kullanici_id));
+  return adaylar.filter((id) => !haric.has(id));
+}
+const duyuruGovde = (testAd: string, baslik: string) => (testAd ? `${testAd} · ${baslik}` : baslik);
+
 // Duyuru (duyuru_sema.sql). Gönderim anında durum yeniden okunur: bu arada
 // çözülen / önemi düşürülen kritik duyuru için bildirim gitmez.
-async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
+async function duyuruBildir(db: Db, duyuruId: string, olay: string, guncellemeId = "") {
   const bos = { gonderilen: 0, silinen: 0, hatalar: [] as string[] };
   const { data: d, error: e1 } = await db.from("duyurular")
     .select("id,baslik,onem,test_id,yazan_id,cozen_id,cozuldu_at,bitis_at").eq("id", duyuruId).maybeSingle();
@@ -308,8 +325,31 @@ async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
     const { data: herkes, error: e2 } = await db.from("kullanicilar").select("id").eq("aktif", true);
     if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
     adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== d.yazan_id);
-    yuk = { title: "Kritik duyuru", body: testAd ? `${testAd} · ${d.baslik}` : d.baslik, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
+    yuk = { title: "Kritik duyuru", body: duyuruGovde(testAd, d.baslik), tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
     acil = true;
+  } else if (olay === "kritik_guncelleme") {
+    // Aktif kritik duyuruya güncelleme: herkese (güncellemeyi yazan hariç), yüksek öncelik.
+    const aktifMi = !d.cozuldu_at && (!d.bitis_at || new Date(d.bitis_at).getTime() > Date.now());
+    if (d.onem !== "kritik" || !aktifMi) return bos;
+    let gMetin = "", gYazan = "";
+    if (guncellemeId) {
+      const { data: g } = await db.from("duyuru_guncellemeleri").select("metin,yazan_id").eq("id", guncellemeId).maybeSingle();
+      gMetin = g?.metin || ""; gYazan = g?.yazan_id || "";
+    }
+    const { data: herkes, error: e2 } = await db.from("kullanicilar").select("id").eq("aktif", true);
+    if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
+    adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== (gYazan || d.yazan_id));
+    const govde = `${duyuruGovde(testAd, d.baslik)}${gMetin ? ` — ${gMetin}` : ""}`;
+    yuk = { title: "Kritik duyuru · güncelleme", body: govde.length > 240 ? `${govde.slice(0, 239)}…` : govde, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
+    acil = true;
+  } else if (olay === "yeni") {
+    // Bilgi / uyarı duyurusu açıldı: yazan hariç herkese (tercihi "tumu" olanlara).
+    const aktifMi = !d.cozuldu_at && (!d.bitis_at || new Date(d.bitis_at).getTime() > Date.now());
+    if (!aktifMi || (d.onem !== "bilgi" && d.onem !== "uyari")) return bos;
+    const { data: herkes, error: e2 } = await db.from("kullanicilar").select("id").eq("aktif", true);
+    if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
+    adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== d.yazan_id);
+    yuk = { title: d.onem === "uyari" ? "Duyuru" : "Bilgi", body: duyuruGovde(testAd, d.baslik), tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
   } else if (olay === "cozuldu") {
     if (!d.cozuldu_at || !d.test_id) return bos;
     // Son 7 günde bu testi içeren istem açmış kişiler
@@ -340,6 +380,7 @@ async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
     if (e2) throw new Error(`kullanıcılar okunamadı: ${e2.message}`);
     adaylar = (herkes ?? []).map((u: { id: string }) => u.id).filter((id: string) => id !== d.yazan_id);
     yuk = { title: "Test tekrar mevcut", body: d.baslik, tag: `duyuru-${d.id}`, url: "./", duyuru_id: d.id };
+    adaylar = await tercihSuz(db, adaylar, false);
     if (d.test_id) {
       const { data: bekleyen } = await db.from("istem_kalemleri").select("istem_id").eq("test_id", d.test_id).eq("durum", "bekleyen");
       const istemIdler = [...new Set((bekleyen ?? []).map((k: { istem_id: string }) => k.istem_id))];
@@ -364,6 +405,7 @@ async function duyuruBildir(db: Db, duyuruId: string, olay: string) {
   } else {
     return { ...bos, hatalar: [`bilinmeyen olay: ${olay}`] };
   }
+  adaylar = await tercihSuz(db, adaylar, olay === "kritik" || olay === "kritik_guncelleme" || (olay === "cozuldu" && d.onem === "kritik"));
   if (!adaylar.length) return bos;
 
   const { data: abonelikler, error: e4 } = await db.from("push_abonelikleri").select("id,kullanici_id,endpoint,keys").in("kullanici_id", adaylar);
@@ -470,7 +512,8 @@ Deno.serve(async (req: Request) => {
     // ---- trigger: duyuru (kritik açıldı / çözüldü) ----
     if (govde.duyuru_id) {
       if (!servisMi) return json({ ok: false, hata: "yetkisiz" }, 403);
-      const r = await duyuruBildir(db, String(govde.duyuru_id), String(govde.olay || ""));
+      const r = await duyuruBildir(db, String(govde.duyuru_id), String(govde.olay || ""), String(govde.guncelleme_id || ""));
+      console.log(`[push-gonder] duyuru ${govde.duyuru_id} ${govde.olay} gonderilen=${r.gonderilen} silinen=${r.silinen} hata=${r.hatalar.length}`);
       if (r.hatalar.length) console.error("[push-gonder] duyuru", govde.duyuru_id, govde.olay, r.hatalar);
       return json({ ok: true, ...r });
     }

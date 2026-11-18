@@ -555,7 +555,11 @@
       };
       let liste, yeni = true, stoklu = true;
       const kolonYok = (e) => e && (e.code === "42703" || /column .* does not exist/i.test(String(e.message || "")));
-      try { liste = await oku("id,grup,ad,klon,kontrol,aciklama,es_adlar,aktif,sira,birlesti_id,stok,stok_yok_baslangic,stok_aciklama,stok_duyuru_id"); }
+      const STOK_KOL = "id,grup,ad,klon,kontrol,aciklama,es_adlar,aktif,sira,birlesti_id,stok,stok_yok_baslangic,stok_aciklama,stok_duyuru_id";
+      try {
+        try { liste = await oku(STOK_KOL + ",created_at"); }
+        catch (eT) { if (!kolonYok(eT)) throw eT; liste = await oku(STOK_KOL); }
+      }
       catch (e0) {
         if (!kolonYok(e0)) throw e0;
         stoklu = false;
@@ -567,7 +571,7 @@
         }
       }
       liste = liste.map((t) => ({ ...t, klon: t.klon || "", kontrol: t.kontrol || "", aciklama: t.aciklama || "", es_adlar: t.es_adlar || [],
-        stok: t.stok || "var", stok_yok_baslangic: t.stok_yok_baslangic || null, stok_aciklama: t.stok_aciklama || "", stok_duyuru_id: t.stok_duyuru_id || null }));
+        created_at: t.created_at || null, stok: t.stok || "var", stok_yok_baslangic: t.stok_yok_baslangic || null, stok_aciklama: t.stok_aciklama || "", stok_duyuru_id: t.stok_duyuru_id || null }));
       liste.yeniAlanlar = yeni;
       liste.stokAlanlari = stoklu;
       return liste;
@@ -691,8 +695,12 @@
       return data;
     },
     // Liste içe aktarma: [{islem:"ekle"|"guncelle"|"es_ad", ...}] — tek işlem.
-    async katalogIceAktar(islemler, duyuru = false) {
-      const { data, error } = await client.rpc("katalog_ice_aktar", { p_islemler: islemler, p_duyuru: Boolean(duyuru) });
+    // yeni true → eklenen testler "YENİ" görünür (katalog_yeni_sema.sql); yalnız
+    // işaretliyken gönderilir (eski iki parametreli fonksiyon da çalışsın).
+    async katalogIceAktar(islemler, duyuru = false, yeni = false) {
+      const args = { p_islemler: islemler, p_duyuru: Boolean(duyuru) };
+      if (yeni) args.p_yeni = true;
+      const { data, error } = await client.rpc("katalog_ice_aktar", args);
       if (error) throw error;
       return data;
     },
@@ -1844,6 +1852,33 @@
       if (acik) return this.bildirimTercihleriEkle(kullaniciId, [grup]);
       const { error } = await client.from("bildirim_tercihleri").delete().eq("kullanici_id", kullaniciId).eq("grup_kod", grup);
       if (error) throw error;
+    },
+    // Duyuru bildirim tercihi (duyuru_bildirim_sema.sql): "tumu" | "kritik" | "kapali".
+    // Kayıt yoksa "tumu"; tablo yoksa null (bölüm gösterilmez).
+    async getDuyuruTercihi(kullaniciId) {
+      const { data, error } = await client.from("duyuru_bildirim_tercihi").select("secim").eq("kullanici_id", kullaniciId).maybeSingle();
+      if (error) {
+        if (error.code === "PGRST205" || error.code === "42P01" || /could not find the table|does not exist/i.test(String(error.message || ""))) return null;
+        throw error;
+      }
+      return (data && data.secim) || "tumu";
+    },
+    async setDuyuruTercihi(kullaniciId, secim) {
+      const { error } = await client.from("duyuru_bildirim_tercihi")
+        .upsert({ kullanici_id: kullaniciId, secim, updated_at: new Date().toISOString() }, { onConflict: "kullanici_id" });
+      if (error) throw error;
+    },
+    // Kullanıcının (herhangi bir cihazda) push aboneliği sayısı — RLS: yalnız kendi.
+    async pushAbonelikSayisi(kullaniciId) {
+      const { count, error } = await client.from("push_abonelikleri").select("id", { count: "exact", head: true }).eq("kullanici_id", kullaniciId);
+      if (error) throw error;
+      return count || 0;
+    },
+    // Yönetim > Kullanıcılar: kimin kaç cihazı abone (yalnız yönetici; fonksiyon yoksa null).
+    async pushAboneKullanicilar() {
+      const { data, error } = await client.rpc("push_abone_kullanicilar");
+      if (error) { if (fonksiyonYok(error)) return null; throw error; }
+      return new Map((data || []).map((x) => [x.kullanici_id, x.cihaz]));
     },
     // Kendi cihazlarına deneme bildirimi (push-gonder, kullanıcının oturumuyla).
     // Dönen: { gonderilen, silinen, hatalar } ya da { ok:false, hata }.

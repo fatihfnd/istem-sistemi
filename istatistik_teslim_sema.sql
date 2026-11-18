@@ -51,7 +51,7 @@ begin;
 -- ------------------------------------------------------------
 alter table sistem_ayarlari drop constraint if exists sistem_ayarlari_anahtar_chk;
 alter table sistem_ayarlari add constraint sistem_ayarlari_anahtar_chk
-  check (anahtar in ('teslim_gecikme_saat', 'teslim_takip_baslangic', 'eski_acik_gun', 'teslim_kayit_yok_gun'));
+  check (anahtar in ('teslim_gecikme_saat', 'teslim_takip_baslangic', 'eski_acik_gun', 'teslim_kayit_yok_gun', 'katalog_yeni_gun'));  -- katalog_yeni_gun: katalog_yeni_sema.sql
 
 create or replace function public.sistem_ayarlari_kontrol() returns trigger
 language plpgsql set search_path = public as $$

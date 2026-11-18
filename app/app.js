@@ -758,6 +758,8 @@ async function initApp(user) {
   canliBaslat(); // TEK canlı kanal: kuyruk, Hizmetler, duyurular, setler, cihazlar, ayarlar, kullanıcılar
   duyuruArayuzuBagla();
   duyuruBaslat(); // şerit, Duyurular menüsü, bağlamsal işaretler (tablo yoksa hiçbiri)
+  const ptEski = $("#pushTesvik"); if (ptEski) ptEski.remove();
+  setTimeout(pushTesvikKontrol, 1500); // aboneliği yoksa günde bir kez "Bildirimleri açın" şeridi
 
   // Varsayılan kapsam rol/ekibe göre (bkz. varsayilanKapsam); sekreter
   // girişte Hizmetler'de açılır.
@@ -5218,6 +5220,10 @@ function testAra(liste, query) {
   return out.sort((a, b) => a.p - b.p);
 }
 const stokYok = (t) => Boolean(KV3 && t && t.stok === "yok");
+// YENİ: eklenme tarihinden (katalog_yeni_sema.sql) bu yana katalog_yeni_gun (30) gün.
+const katalogYeniGun = () => { const n = Number(AYARLAR.katalog_yeni_gun); return Number.isInteger(n) && n >= 1 ? n : 30; };
+const testYeniMi = (t) => Boolean(t && t.created_at && Date.now() - new Date(t.created_at).getTime() < katalogYeniGun() * 86400000);
+const yeniRozet = (t) => (testYeniMi(t) ? `<span class="yeni-rozet" title="Son ${katalogYeniGun()} günde kataloğa eklendi">YENİ</span>` : "");
 const stokEtiketi = (t) => (stokYok(t) ? `<small class="anti-stok" title="${esc(t.stok_aciklama || "Stokta yok")}">Stokta yok</small>` : "");
 function aramaCipi(m, grupAdiGoster) {
   const t = m.t;
@@ -5226,7 +5232,7 @@ function aramaCipi(m, grupAdiGoster) {
   const ek = m.tur === "es" ? `<small class="anti-es">= ${esc(m.es)}</small>`
     : m.tur === "benzer" ? `<small class="anti-es" title="Benzer yazım">≈ ${esc(m.es || t.ad)}</small>`
     : "";
-  el.innerHTML = `${grupAdiGoster ? `<small class="anti-grup">${esc(TIP[t.grup] || t.grup)}</small>` : ""}${esc(t.ad)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${ek}${stokEtiketi(t)}${testDuyuruIsareti(t.id)}${testBilgiIkonu(t)}`;
+  el.innerHTML = `${grupAdiGoster ? `<small class="anti-grup">${esc(TIP[t.grup] || t.grup)}</small>` : ""}${esc(t.ad)}${yeniRozet(t)}${t.klon ? `<small>${esc(t.klon)}</small>` : ""}${ek}${stokEtiketi(t)}${testDuyuruIsareti(t.id)}${testBilgiIkonu(t)}`;
   el.onclick = async (e) => {
     const bilgi = e.target.closest("[data-test-bilgi]");
     if (bilgi) { e.stopPropagation(); testBilgiBalonu(bilgi); return; }
@@ -5360,7 +5366,7 @@ function renderPicked() {
       ? `<button type="button" class="krom-nokta${c.kromojen === "kirmizi" ? " kirmizi" : ""}" data-krom="${esc(c.key)}" title="Kromojen: ${c.kromojen === "kirmizi" ? "Kırmızı" : "DAB"} — değiştirmek için dokunun" aria-label="${esc(c.ad)} kromojen: ${c.kromojen === "kirmizi" ? "Kırmızı" : "DAB"}"></button>`
       : "";
     const eski = c.kind === "custom" && KV3 ? `<small class="anti-stok" title="Katalogda yok — kaydedilmez">katalogda yok</small>` : "";
-    return `<span class="anti sel${c.kind === "cat" && c.kromojen === "kirmizi" && kromojenGrubu(c.grup) ? " krom-kirmizi" : ""}${t && stokYok(t) ? " stokyok" : ""}" data-kind="${c.kind}" data-key="${esc(c.key)}">${krom}${esc(c.ad)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}${t ? stokEtiketi(t) : ""}${eski}${c.kind === "cat" ? testDuyuruIsareti(c.key) : ""}</span>`;
+    return `<span class="anti sel${c.kind === "cat" && c.kromojen === "kirmizi" && kromojenGrubu(c.grup) ? " krom-kirmizi" : ""}${t && stokYok(t) ? " stokyok" : ""}" data-kind="${c.kind}" data-key="${esc(c.key)}">${krom}${esc(c.ad)}${yeniRozet(t)}${c.klon ? `<small>${esc(c.klon)}</small>` : ""}${t ? stokEtiketi(t) : ""}${eski}${c.kind === "cat" ? testDuyuruIsareti(c.key) : ""}</span>`;
   }).join("");
   // Kromojen satırı: seçili İHK testi varsa — hepsine birden DAB / Kırmızı.
   let ks = $("#kromSatir");
@@ -7310,9 +7316,13 @@ function renderKullanicilarPage() {
   loadKullanicilar();
 }
 
+let PUSH_ABONE = null; // kullanici_id → cihaz sayısı (yalnız yönetici; fonksiyon yoksa null)
 async function loadKullanicilar() {
   try {
-    KULLANICILAR_LIST = await Api.getAllKullanicilar();
+    const [liste, abone] = await Promise.all([Api.getAllKullanicilar(),
+      typeof Api.pushAboneKullanicilar === "function" ? Api.pushAboneKullanicilar().catch(() => null) : null]);
+    KULLANICILAR_LIST = liste;
+    PUSH_ABONE = abone;
   } catch (e) {
     toast("Kullanıcılar yüklenemedi", true);
     KULLANICILAR_LIST = [];
@@ -7336,10 +7346,11 @@ function renderKullaniciList() {
   wrap.innerHTML = KULLANICILAR_LIST.map((u) => `
     <div class="devrow" data-id="${u.id}">
       ${avatarHTML({ id: u.id, ad: u.ad_soyad }, "av-sm av-md")}
-      <div><div class="nm">${esc(u.ad_soyad)}${u.kisaltma ? ` <span class="kisa-chip">${esc(u.kisaltma)}</span>` : ""}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${u.ekip ? ` · ${esc(EKIP_AD[u.ekip] || u.ekip)}` : ""}${u.is_admin ? " · Yönetici" : ""}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
+      <div><div class="nm">${esc(u.ad_soyad)}${u.kisaltma ? ` <span class="kisa-chip">${esc(u.kisaltma)}</span>` : ""}${PUSH_ABONE && PUSH_ABONE.get(u.id) ? ` <span class="abone-ikon" title="Bildirimler açık — ${PUSH_ABONE.get(u.id)} cihaz" aria-label="Bildirimler açık, ${PUSH_ABONE.get(u.id)} cihaz">🔔</span>` : ""}</div><div class="tip">${esc(ROL_LABEL[u.rol] || u.rol)}${u.ekip ? ` · ${esc(EKIP_AD[u.ekip] || u.ekip)}` : ""}${u.is_admin ? " · Yönetici" : ""}${!u.auth_user_id ? " · Auth hesabı yok" : ""}</div></div>
       <div class="grow"></div>
       <span class="status ${u.aktif ? "aktif" : "pasif"}">${u.aktif ? "Aktif" : "Pasif"}</span>
-    </div>`).join("");
+    </div>`).join("")
+    + (PUSH_ABONE ? `<div class="ayar-not abone-ozet">🔔 Bildirim aboneliği: ${KULLANICILAR_LIST.filter((u) => u.aktif && PUSH_ABONE.get(u.id)).length} / ${KULLANICILAR_LIST.filter((u) => u.aktif).length} aktif kullanıcı</div>` : "");
   wrap.querySelectorAll(".devrow").forEach((row) => {
     row.onclick = () => showKullaniciForm(KULLANICILAR_LIST.find((u) => u.id === row.dataset.id));
   });
@@ -7636,6 +7647,9 @@ async function kullaniciYetkiBolumu(u) {
 const TR_SADE = { "İ": "i", "I": "i", "ı": "i", "Ş": "s", "ş": "s", "Ğ": "g", "ğ": "g", "Ü": "u", "ü": "u", "Ö": "o", "ö": "o", "Ç": "c", "ç": "c" };
 const parantezIcsiz = (s) => String(s || "").replace(/\([^)]*\)/g, " ");
 let ktGrup = "", ktAra = "", ktPasif = false, ktStokYok = false;
+// Sıralama: "yeni" (Yeni → eski, varsayılan) | "az" (A → Z) | "grup" (Gruba göre) — tarayıcıda hatırlanır.
+const KT_SIRA_KEY = "istem_katalog_sira";
+let ktSira = (() => { try { const v = localStorage.getItem(KT_SIRA_KEY); return ["yeni", "az", "grup"].includes(v) ? v : "yeni"; } catch (e) { return "yeni"; } })();
 let ktSecili = [];   // seçilen testler: 2 → Birleştir; 1+ → Gruba taşı (KV3)
 const ktDuzenler = () => yetki("katalog_duzenle");
 const ktTest = (id) => KATALOG.find((t) => t.id === id) || null;
@@ -7657,6 +7671,7 @@ function renderTestKatalogPage() {
     ${duz && !KATALOG_YENI ? `<div class="kt-uyari">Açıklama, eş ad, geçmiş, birleştirme ve liste içe aktarma için <b>yetki_katalog_sema.sql</b> çalıştırılmalı.</div>` : ""}
     <div class="kt-arac">
       <input class="finput kt-ara" id="ktAra" type="search" autocomplete="off" placeholder="Test, eş ad, klon, kontrol ya da açıklamada ara…" value="${esc(ktAra)}" aria-label="Katalogda ara">
+      <select class="finput kt-sira" id="ktSira" aria-label="Sıralama">${[["yeni", "Yeni → eski"], ["az", "A → Z"], ["grup", "Gruba göre"]].map(([v, l]) => `<option value="${v}" ${v === ktSira ? "selected" : ""}>${l}</option>`).join("")}</select>
       <label class="ilsk-anahtar"><input type="checkbox" id="ktPasif" ${ktPasif ? "checked" : ""}> Gizlenenleri göster</label>
       ${KV3 ? `<label class="ilsk-anahtar"><input type="checkbox" id="ktStokYok" ${ktStokYok ? "checked" : ""}> Stokta olmayanlar</label>` : ""}
       <span class="kt-say" id="ktSay"></span>
@@ -7666,6 +7681,11 @@ function renderTestKatalogPage() {
     <div class="kt-liste" id="ktListe"></div>`;
   $("#ktAra").addEventListener("input", (e) => { ktAra = e.target.value; katalogListeCiz(); });
   $("#ktPasif").addEventListener("change", (e) => { ktPasif = e.target.checked; katalogListeCiz(); });
+  $("#ktSira").addEventListener("change", (e) => {
+    ktSira = e.target.value;
+    try { localStorage.setItem(KT_SIRA_KEY, ktSira); } catch (x) { /* yalnız bu oturum */ }
+    katalogListeCiz();
+  });
   if ($("#ktStokYok")) $("#ktStokYok").addEventListener("change", (e) => { ktStokYok = e.target.checked; katalogListeCiz(); });
   $("#ktGruplar").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
@@ -7717,7 +7737,19 @@ function ktSuzulmus() {
     && (!ktGrup || t.grup === ktGrup)
     && (!ktStokYok || t.stok === "yok")
     && (!q || [t.ad, t.klon, t.kontrol, t.aciklama].concat(t.es_adlar || []).some((x) => x && aramaNorm(x).includes(q))))
-    .sort((a, b) => trSirala(a.ad, b.ad) || trSirala(a.klon || "", b.klon || ""));
+    .sort(ktSiralayici());
+}
+function ktSiralayici() {
+  const ad = (a, b) => trSirala(a.ad, b.ad) || trSirala(a.klon || "", b.klon || "");
+  if (ktSira === "grup") {
+    const sira = (g) => { const i = GROUPS.findIndex(([k]) => k === g); return i < 0 ? 999 : i; };
+    return (a, b) => sira(a.grup) - sira(b.grup) || trSirala(TIP[a.grup] || a.grup, TIP[b.grup] || b.grup) || ad(a, b);
+  }
+  if (ktSira === "yeni") {
+    const z = (t) => (t.created_at ? new Date(t.created_at).getTime() : 0);
+    return (a, b) => z(b) - z(a) || ad(a, b);
+  }
+  return ad;
 }
 function ktDurumHTML(t) {
   if (t.birlesti_id) return `<span class="status pasif">Birleştirildi</span>`;
@@ -7743,7 +7775,7 @@ function katalogListeCiz() {
   wrap.innerHTML = `<table class="kt-tablo"><thead><tr>${duz ? `<th class="kt-sec" title="${KV3 ? "Seçin: iki test → Birleştir; bir ya da daha çok → Gruba taşı" : "Birleştirmek için iki test seçin"}"></th>` : ""}<th>Test</th><th class="kt-g">Grup</th><th>Klon</th><th>Kontrol</th><th>Açıklama</th><th>Durum</th></tr></thead><tbody>`
     + l.map((t) => `<tr data-id="${t.id}" class="${t.aktif === false || t.birlesti_id ? "pasif" : ""}${KV3 && t.stok === "yok" ? " stokyok" : ""}" tabindex="0">
         ${duz ? `<td class="kt-sec"><input type="checkbox" data-kt-sec="${t.id}" ${ktSecili.includes(t.id) ? "checked" : ""} ${t.birlesti_id ? "disabled" : ""} aria-label="${esc(t.ad)} — seç"></td>` : ""}
-        <td class="kt-ad"><b>${esc(t.ad)}</b>${(t.es_adlar || []).length ? `<div class="kt-es">= ${esc(t.es_adlar.join(", "))}</div>` : ""}</td>
+        <td class="kt-ad"><b>${esc(t.ad)}</b>${yeniRozet(t)}${(t.es_adlar || []).length ? `<div class="kt-es">= ${esc(t.es_adlar.join(", "))}</div>` : ""}</td>
         <td class="kt-g">${esc(TIP[t.grup] || t.grup)}</td>
         <td class="kt-klon">${esc(t.klon || "")}</td>
         <td>${esc(t.kontrol || "")}</td>
@@ -7851,13 +7883,14 @@ function ktDetay(id) {
   $("#rail").innerHTML = `
     <div class="rail-head"><h2>Test Bilgisi</h2><button class="rx" id="ktKapat" aria-label="Kapat">×</button></div>
     <div class="rail-body">
-      <div class="m-sec"><div class="kt-baslik">${esc(t.ad)} ${ktDurumHTML(t)}</div><div class="kt-grupad">${esc(TIP[t.grup] || t.grup)}</div>
+      <div class="m-sec"><div class="kt-baslik">${esc(t.ad)} ${yeniRozet(t)}${ktDurumHTML(t)}</div><div class="kt-grupad">${esc(TIP[t.grup] || t.grup)}</div>
         ${t.birlesti_id ? `<div class="kt-not">Bu test “${esc(kalan ? kalan.ad : "başka bir test")}” ile birleştirildi; adı onun eş adıdır.</div>` : ""}
         ${stokYokMu ? `<div class="kt-stok-not">⚠ Stokta yok${t.stok_yok_baslangic ? ` — ${esc(kisaTarih(t.stok_yok_baslangic))}'den beri` : ""}${t.stok_aciklama ? `<br>${esc(t.stok_aciklama)}` : ""}</div>` : ""}</div>
       ${satir("Açıklama / kullanım", t.aciklama)}
       ${satir("Klon", t.klon)}
       ${satir("Kontrol", t.kontrol)}
       ${satir("Eş adlar", (t.es_adlar || []).join(", "))}
+      ${t.created_at ? satir("Kataloğa eklendi", new Date(t.created_at).getTime() <= Date.parse("2026-01-01T00:00:00+03:00") ? "Başlangıç kataloğu" : formatDateFull(t.created_at)) : ""}
       ${duz && KV3 && !t.birlesti_id ? `<div class="m-sec kt-islemler"><p class="m-label">Stok ve kayıt</p>
         ${stokYokMu ? `<button type="button" class="btn-primary btn-sm" id="ktGeldiBtn">✓ Geldi — tekrar mevcut</button>`
           : `<button type="button" class="btn-ghost btn-sm kt-tukendi" id="ktTukendiBtn">Tükendi / temin edilemiyor…</button>`}
@@ -8426,7 +8459,7 @@ function renderOlasiTekrarlar() {
 // "Kontrol listesi yükle" bunun içindedir.)
 // ================================================================
 const IA_ALANLAR = [["ad", "Ad"], ["grup", "Grup"], ["klon", "Klon"], ["kontrol", "Kontrol"], ["aciklama", "Açıklama"], ["", "Yoksay"]];
-let iaMetin = "", iaTablo = [], iaBaslikVar = false, iaEsleme = [], iaGrup = "", iaDuyuru = false;
+let iaMetin = "", iaTablo = [], iaBaslikVar = false, iaEsleme = [], iaGrup = "", iaDuyuru = false, iaYeni = false;
 let iaSatirlar = [], iaYok = [];
 
 function renderIceAktar() {
@@ -8601,6 +8634,7 @@ function renderIaOnizleme() {
       </div>
       <div class="kk-bar-aks">
         <label class="ilsk-anahtar" title="Açıkken eklenen yeni testler için tek bir özet duyuru yayınlanır ve bildirim gider. İlk büyük yüklemede kapalı bırakın."><input type="checkbox" id="iaDuyuru" ${iaDuyuru ? "checked" : ""}> Duyuru oluştur</label>
+        ${KATALOG.some((t) => t.created_at) ? `<label class="ilsk-anahtar" title="Açıkken eklenen testler katalogda ve İstek Ver'de ${katalogYeniGun()} gün “YENİ” etiketiyle görünür. Kapalıysa eski test sayılır."><input type="checkbox" id="iaYeni" ${iaYeni ? "checked" : ""}> YENİ olarak işaretle</label>` : ""}
         <button class="btn-ghost" id="iaIptal">Geri</button>
         <button class="btn-primary" id="iaUygula" ${ops.length ? "" : "disabled"}>Uygula (${ops.length})</button>
       </div>
@@ -8640,6 +8674,7 @@ function renderIaOnizleme() {
   wrap.onchange = (e) => {
     const t = e.target;
     if (t.id === "iaDuyuru") { iaDuyuru = t.checked; return; }
+    if (t.id === "iaYeni") { iaYeni = t.checked; return; }
     if (t.id === "iaBaslik") { iaBaslikVar = t.checked; iaSinifla(); renderIaOnizleme(); return; }
     if (t.matches("[data-ia-kol]")) {
       const i = Number(t.dataset.iaKol);
@@ -8663,14 +8698,14 @@ function renderIaOnizleme() {
     const kalan = iaSatirlar.filter((s) => s.tur === "olasi" && !s.karar).length;
     if (!(await onayPenceresi({
       baslik: "Liste kataloğa uygulansın mı?",
-      aciklama: (kalan ? `${kalan} olası tekrar için karar verilmedi — bunlar atlanacak. ` : "") + (iaDuyuru && say.ekle ? "Yeni testler için duyuru yayınlanacak ve bildirim gidecek." : "Duyuru oluşturulmayacak."),
+      aciklama: (kalan ? `${kalan} olası tekrar için karar verilmedi — bunlar atlanacak. ` : "") + (iaDuyuru && say.ekle ? "Yeni testler için duyuru yayınlanacak ve bildirim gidecek." : "Duyuru oluşturulmayacak.") + (say.ekle ? (iaYeni ? " Eklenenler YENİ etiketiyle görünecek." : " Eklenenler YENİ olarak işaretlenmeyecek.") : ""),
       liste: [`${say.ekle} yeni test`, `${say.guncelle} test güncellenecek`, `${say.es} eş ad eklenecek`], tekSutun: true, onayMetni: "Uygula",
     }))) return;
     const btn = $("#iaUygula"); if (btn) btn.disabled = true;
     try {
-      const r = await Api.katalogIceAktar(islemler, iaDuyuru && say.ekle > 0);
+      const r = await Api.katalogIceAktar(islemler, iaDuyuru && say.ekle > 0, iaYeni && say.ekle > 0);
       toast(`${r.eklenen || 0} test eklendi, ${r.guncellenen || 0} güncellendi, ${r.es_ad || 0} eş ad eklendi`);
-      iaMetin = ""; iaTablo = []; iaSatirlar = []; iaYok = []; iaDuyuru = false;
+      iaMetin = ""; iaTablo = []; iaSatirlar = []; iaYok = []; iaDuyuru = false; iaYeni = false;
       await katalogYukle();
       if (currentPage === "test-katalogu") renderTestKatalogPage();
     } catch (e) {
@@ -8889,6 +8924,9 @@ function sistemAyarlariHTML() {
       ${"teslim_kayit_yok_gun" in AYARLAR ? `<label class="ayar-satir" for="ayarKayitYok">Teslim kaydı yok eşiği
         <span class="ayar-giris"><input class="finput" id="ayarKayitYok" type="number" inputmode="numeric" min="1" max="365" step="1" value="${teslimKayitYokGun()}"> gün</span></label>
       <div class="ayar-not">Tamamlanalı bu kadar gün geçmiş, teslim alınmamış kalemler "Teslim bekliyor"a sayılmaz; ayrı "Teslim kaydı yok" olarak gösterilir (yine teslim alınabilir).</div>` : ""}
+      ${"katalog_yeni_gun" in AYARLAR ? `<label class="ayar-satir" for="ayarYeniGun">Katalogda “YENİ” etiketi
+        <span class="ayar-giris"><input class="finput" id="ayarYeniGun" type="number" inputmode="numeric" min="1" max="365" step="1" value="${katalogYeniGun()}"> gün</span></label>
+      <div class="ayar-not">Kataloğa eklenen test bu kadar gün katalogda ve İstek Ver'de “YENİ” etiketiyle görünür.</div>` : ""}
       <div class="err" id="ayarErr" role="alert"></div>
       <div class="btnrow"><button type="submit" class="btn-primary btn-sm" id="ayarKaydet">Kaydet</button></div>
     </form></div>`;
@@ -8907,6 +8945,9 @@ async function handleAyarSubmit() {
   const kayitYokEl = $("#ayarKayitYok");
   const kayitYok = kayitYokEl ? Number(kayitYokEl.value) : null;
   if (kayitYokEl && (!Number.isInteger(kayitYok) || kayitYok < 1 || kayitYok > 365)) return hata("Teslim kaydı yok eşiği 1–365 arası tam gün olmalı");
+  const yeniGunEl = $("#ayarYeniGun");
+  const yeniGun = yeniGunEl ? Number(yeniGunEl.value) : null;
+  if (yeniGunEl && (!Number.isInteger(yeniGun) || yeniGun < 1 || yeniGun > 365)) return hata("YENİ etiketi süresi 1–365 arası tam gün olmalı");
   const eskiBas = AYARLAR.teslim_takip_baslangic ? yerelTarihSaat(AYARLAR.teslim_takip_baslangic) : "";
   $("#ayarKaydet").disabled = true;
   try {
@@ -8914,6 +8955,7 @@ async function handleAyarSubmit() {
     if (basStr !== eskiBas) await Api.setAyar("teslim_takip_baslangic", bas.toISOString());
     if (eskiAcikEl && eskiAcik !== eskiAcikGun()) await Api.setAyar("eski_acik_gun", eskiAcik);
     if (kayitYokEl && kayitYok !== teslimKayitYokGun()) await Api.setAyar("teslim_kayit_yok_gun", kayitYok);
+    if (yeniGunEl && yeniGun !== katalogYeniGun()) await Api.setAyar("katalog_yeni_gun", yeniGun);
     AYARLAR = await Api.getAyarlar();
     toast("Sistem ayarları kaydedildi");
     renderPrefs();
@@ -9038,6 +9080,7 @@ function wireStaticUI() {
   });
   $("#prefsPanel").addEventListener("change", (e) => {
     if (e.target.dataset.pushGrup) { pushGrupDegis(e.target.dataset.pushGrup, e.target.checked); return; }
+    if (e.target.dataset.duyuruTercih) { duyuruTercihDegis(e.target.dataset.duyuruTercih); return; }
     if (e.target.id === "avatarFile") handleAvatarFile(e.target.files && e.target.files[0]);
   });
   $("#prefsPanel").addEventListener("submit", (e) => {
@@ -10105,7 +10148,7 @@ function zilCal() {
 // supabase/functions/push-gonder). İzin YALNIZ "Bildirimleri aç" butonunda
 // istenir (iOS şartı). Ekran içi banner + ses (yukarıda) aynen sürer.
 // ================================================================
-let pushDurum = { yuklendi: false, abone: false, tercihler: new Set(), mesgul: false };
+let pushDurum = { yuklendi: false, abone: false, tercihler: new Set(), mesgul: false, duyuruTercih: null };
 const pushDestek = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 const iosMu = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const anaEkrandaMi = () => Boolean(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
@@ -10128,7 +10171,9 @@ async function pushAbonelik() {
 async function pushDurumYenile() {
   if (!session) return;
   try {
-    const [sub, tercihler] = await Promise.all([pushAbonelik().catch(() => null), Api.getBildirimTercihleri(session.id).catch(() => [])]);
+    const [sub, tercihler, dt] = await Promise.all([pushAbonelik().catch(() => null), Api.getBildirimTercihleri(session.id).catch(() => []),
+      typeof Api.getDuyuruTercihi === "function" ? Api.getDuyuruTercihi(session.id).catch(() => null) : null]);
+    pushDurum.duyuruTercih = dt;
     const sunucuda = sub && Notification.permission === "granted" ? await Api.pushAbonelikVarMi(sub.endpoint).catch(() => false) : false;
     pushDurum.abone = Boolean(sunucuda);
     pushDurum.tercihler = new Set(tercihler);
@@ -10157,7 +10202,66 @@ function bildirimBolumuHTML() {
       ${pushDurum.tercihler.size ? "" : `<div class="pb-not">Hiç grup seçili değil — bildirim gelmez.</div>`}
       <div class="pb-btn"><button type="button" class="btn-ghost btn-sm" data-push="deneme" ${pushDurum.mesgul ? "disabled" : ""}>Deneme bildirimi</button><button type="button" class="linkbtn" data-push="kapat">Bu cihazda kapat</button></div>`;
   }
-  return `<div class="m-sec"><p class="m-label">Bildirimler (telefon / bilgisayar)</p>${govde}</div>`;
+  return `<div class="m-sec"><p class="m-label">Bildirimler (telefon / bilgisayar)</p>${govde}</div>${duyuruTercihHTML()}`;
+}
+// Duyuru bildirimleri: Tümü (varsayılan) / Sadece kritik / Kapalı — tablo yoksa gösterilmez.
+const DUYURU_TERCIH = [["tumu", "Tümü", "Bilgi, uyarı ve kritik duyurular; yeni test, stok geldi"], ["kritik", "Sadece kritik", ""], ["kapali", "Kapalı", "Kritik duyurular her zaman gönderilir"]];
+function duyuruTercihHTML() {
+  if (!session || pushDurum.duyuruTercih == null) return "";
+  return `<div class="m-sec"><p class="m-label">Duyurular</p><div class="pb-secim" role="radiogroup" aria-label="Duyuru bildirimleri">
+    ${DUYURU_TERCIH.map(([v, l, n]) => `<label class="pb-secenek"><input type="radio" name="duyuruTercih" data-duyuru-tercih="${v}" ${pushDurum.duyuruTercih === v ? "checked" : ""}> <span>${l}${n ? `<small>${n}</small>` : ""}</span></label>`).join("")}
+  </div>${pushDurum.abone ? "" : `<div class="pb-not">Bu cihazda bildirimler kapalı — tercih, bildirimleri açtığınız cihazlarda geçerli.</div>`}</div>`;
+}
+async function duyuruTercihDegis(secim) {
+  const eski = pushDurum.duyuruTercih;
+  pushDurum.duyuruTercih = secim;
+  try { await Api.setDuyuruTercihi(session.id, secim); toast(secim === "tumu" ? "Tüm duyurular bildirilecek" : secim === "kritik" ? "Yalnız kritik duyurular bildirilecek" : "Duyuru bildirimleri kapalı — kritikler yine gelir"); }
+  catch (e) { pushDurum.duyuruTercih = eski; toast("Tercih kaydedilemedi", true); }
+  renderPrefs();
+}
+
+// ---------------- Bildirim teşviki ----------------
+// Hiç push aboneliği olmayan kullanıcıya, günde en fazla bir kez, kapatılabilir
+// şerit. iOS'ta ana ekrana eklenmemişse önce "Ana ekrana ekle" talimatı (iOS
+// bildirimleri yalnız ana ekrandaki uygulamada çalışır). İzin engellenmişse,
+// tarayıcı desteklemiyorsa (iOS dışı) ya da bugün kapatıldıysa gösterilmez.
+const tesvikKey = () => `istem_push_tesvik:${session ? session.id : ""}`;
+const bugunStr = () => new Date().toLocaleDateString("sv-SE");
+async function pushTesvikKontrol() {
+  if (!session) return;
+  const iosEksik = iosMu() && !anaEkrandaMi();
+  if (!iosEksik && (!pushDestek() || Notification.permission === "denied")) return;
+  try { if (localStorage.getItem(tesvikKey()) === bugunStr()) return; } catch (e) { /* depolama yoksa yine göster */ }
+  let n;
+  try { n = await Api.pushAbonelikSayisi(session.id); } catch (e) { return; }
+  if (n > 0 || !session) return;
+  pushTesvikGoster(iosEksik);
+}
+function pushTesvikKapat() {
+  try { localStorage.setItem(tesvikKey(), bugunStr()); } catch (e) { /* yalnız bu oturum */ }
+  const el = $("#pushTesvik"); if (el) el.remove();
+}
+function pushTesvikGoster(iosEksik) {
+  let el = $("#pushTesvik");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "pushTesvik";
+    el.className = "push-tesvik";
+    el.setAttribute("role", "region");
+    el.setAttribute("aria-label", "Bildirimleri açın");
+    const serit = $("#duyuruSerit");
+    if (serit) serit.after(el); else $("#appRoot").prepend(el);
+  }
+  el.innerHTML = iosEksik
+    ? `<span class="pt-ikon" aria-hidden="true">🔔</span><span class="pt-metin">iPhone/iPad'de bildirimler yalnız ana ekrandaki uygulamada çalışır: Safari'de <b>Paylaş → Ana Ekrana Ekle</b>, sonra uygulamayı ana ekrandaki simgesinden açıp bildirimleri açın.</span><button type="button" class="pt-x" data-tesvik-kapat aria-label="Kapat">×</button>`
+    : `<span class="pt-ikon" aria-hidden="true">🔔</span><span class="pt-metin">Kritik duyuruları ve istem bildirimlerini kaçırmamak için bildirimleri açın</span><button type="button" class="btn-primary btn-sm" data-tesvik-ac>Aç</button><button type="button" class="pt-x" data-tesvik-kapat aria-label="Kapat">×</button>`;
+  el.onclick = async (e) => {
+    if (e.target.closest("[data-tesvik-kapat]")) { pushTesvikKapat(); return; }
+    if (e.target.closest("[data-tesvik-ac]")) {
+      await bildirimleriAc();
+      if (pushDurum.abone) pushTesvikKapat();
+    }
+  };
 }
 
 function pushAksiyon(ne) {
@@ -10192,6 +10296,7 @@ async function bildirimleriAc() {
     }
     pushDurum.abone = true;
     pushDurum.tercihler = new Set(tercihler);
+    const pt = $("#pushTesvik"); if (pt) pt.remove();
     toast("Bildirimler bu cihazda açıldı");
   } catch (e) {
     toast(e && e.kurulumYok ? "Bildirim sunucusu henüz kurulmamış (yönetici kurulum adımı)" : `Bildirimler açılamadı — ${pushHataAciklama(e)}`, true);
