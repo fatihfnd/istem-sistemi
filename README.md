@@ -327,6 +327,23 @@ Uygulama kapalıyken de yeni istekler telefona/bilgisayara sistem bildirimi olar
 - `push-gonder`: `stok_geldi` duyuru olayı ve kataloğa ekleme talebi / sonucu (`talep_id`). Panelden tek dosya olarak yeniden deploy.
 - `daily-backup`: İstem Kalemleri sayfasına "Kromojen" sütunu, düzeltmelerde "Kromojen" alanı. Panelden tek dosya (index.ts + yedek.ts birleşik) olarak yeniden deploy.
 
+## 1w) Katalog "YENİ" etiketi ve sıralama (`katalog_yeni_sema.sql`)
+- `test_katalog.created_at` (varsayılan `now()`). Mevcut testlere `test_katalog_log`'daki ilk "eklendi" tarihi, kaydı olmayanlara 2026-01-01 yazıldı; eski testler "yeni" görünmez.
+- **YENİ rozeti:** eklendikten sonra `katalog_yeni_gun` gün (varsayılan 30; Görünüm ayarları > Sistem ayarları, yönetici) katalog listesinde, test bilgisinde ve İstek Ver çiplerinde küçük "YENİ". Test bilgisinde "Kataloğa eklendi" tarihi (başlangıç kataloğu ayrıca belirtilir).
+- **Sıralama seçici** (Test Kataloğu): **Yeni → eski** (varsayılan) / **A → Z** (Türkçe alfabetik) / **Gruba göre**; seçim tarayıcıda hatırlanır.
+- **Liste içe aktar:** "YENİ olarak işaretle" (varsayılan kapalı). Kapalıyken eklenen testler 2026-01-01 tarihli sayılır.
+- Gizlenenden geri alma, birleştirme, stok "Geldi" tarihi değiştirmez; silinip geri yüklenen test eski tarihini korur (`test_geri_yukle`).
+- `sistem_ayarlari` anahtar listesi `katalog_yeni_gun` ile genişledi (`istatistik_teslim_sema.sql`'deki liste de güncellendi; o dosya yeniden çalıştırılırsa ayar kaybolmaz).
+
+## 1x) Tüm duyurular bildirim gönderir (`duyuru_bildirim_sema.sql`, `push-gonder` yeniden deploy)
+- **Yeni duyuru** (bilgi / uyarı / kritik) açılınca yazan hariç herkese bildirim. Başlık: "Kritik duyuru" / "Duyuru" (uyarı) / "Bilgi"; gövde: başlık (teste bağlıysa "Test · başlık").
+- **Kritik:** bugünkü gibi yüksek öncelik; çözülünce bildirim. Aktif kritik duyuruya **güncelleme** eklenince "Kritik duyuru · güncelleme" (uyarı/bilgi güncellemelerinde bildirim yok).
+- Otomatik katalog duyuruları (yeni test, stok yok / geldi) kendi bildirimleriyle sürer; aynı olay için çift bildirim gitmez (`istem.duyuru_otomatik`). Toplu işlemlerde `istem.push_sessiz` aynen çalışır.
+- **Tercih** (Ayarlar > Bildirimler > Duyurular): **Tümü** (varsayılan, kayıt yoksa) / **Sadece kritik** / **Kapalı**. Kritik duyurular ve güncellemeleri her durumda gider. Bilgi, uyarı, yeni test, stok geldi ("bekleyen N kaleminiz var" dahil) yalnız "Tümü" seçenlere. Tablo: `duyuru_bildirim_tercihi`.
+- **Bildirim teşviki:** hiç push aboneliği olmayan kullanıcıya, günde en fazla bir kez, kapatılabilir şerit: "Kritik duyuruları ve istem bildirimlerini kaçırmamak için bildirimleri açın — Aç". iPhone/iPad'de uygulama ana ekrana eklenmemişse önce "Paylaş → Ana Ekrana Ekle" talimatı. İzin engellenmişse ya da tarayıcı desteklemiyorsa gösterilmez.
+- **Yönetim > Kullanıcılar:** aboneliği olanların yanında 🔔 (cihaz sayısı ipucunda) ve "Bildirim aboneliği: N / M aktif kullanıcı" özeti (`push_abone_kullanicilar()`, yalnız yönetici).
+- `push-gonder` her duyuru gönderiminde `[push-gonder] duyuru <id> <olay> gonderilen=… silinen=…` loglar (Edge Function logları).
+
 ## 2) Yerel önizleme
 `app/` klasörünü herhangi bir statik sunucuyla açın (dosya:// ile açmayın, service worker ve modül gibi bazı özellikler çalışmaz):
 ```
